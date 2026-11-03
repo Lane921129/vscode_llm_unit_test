@@ -1,0 +1,248 @@
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
+
+const hash = (code: string) => createHash('sha256').update(code).digest('hex');
+const seed = 'import unittest\nfrom sample import target\n# fixture bytes remain owned by the host\n'
+    + 'class Cases(unittest.TestCase):\n    def test_seed(self):\n'
+    + '        token = make_token()\n        self.assertIsNotNone(token)\n        self.assertTrue(target())\n';
+const fixed = 'class Cases:\n    def test_seed(self):\n        import sample\n'
+    + '        self.assertIsNotNone(sample.TOKEN)\n        self.assertTrue(target())\n';
+const unusedSeed = seed.slice(0, seed.indexOf('    def test_seed')).replace('import unittest\n', 'import unittest\nimport types\n')
+    + '    def test_seed(self):\n        token = types.SimpleNamespace()\n        spare = make_token()\n'
+    + '        self.assertIsNotNone(token)\n        self.assertTrue(target())\n';
+const unusedKnownSeed = seed.slice(0, seed.indexOf('    def test_seed'))
+    + '    def test_seed(self):\n        spare = object()\n        self.assertTrue(target())\n';
+const effectSource = 'class Sink:\n    def publish(self, *, resource):\n        return resource\n'
+    + 'def build_resource():\n    return object()\nRESOURCE = build_resource()\nSINK = Sink()\n'
+    + 'def target():\n    SINK.publish(resource=RESOURCE)\n';
+const effectSeed = seed.slice(0, seed.indexOf('    def test_seed')) + '    def test_seed(self):\n'
+    + '        resource = build_resource()\n        SINK.publish(resource=resource)\n        self.assertIsNone(target())\n';
+const effectFixed = 'class Cases:\n    def test_seed(self):\n        import sample\n        from unittest.mock import patch\n'
+    + '        with patch.object(sample.SINK, "publish") as publish:\n'
+    + '            self.assertIsNone(target())\n            publish.assert_called_once_with(resource=sample.RESOURCE)\n';
+const httpSource = 'import urllib.request as transport\nCLIENT = transport.build_opener()\n'
+    + 'def target():\n    return CLIENT.open("https://unit.invalid/item").read()\n';
+const httpSeed = seed.slice(0, seed.indexOf('    def test_seed')) + '    def test_seed(self):\n'
+    + '        client = build_opener()\n        self.assertIsNotNone(client)\n        self.assertEqual(target(), b"payload")\n';
+const httpFixed = 'class Cases:\n    def test_seed(self):\n        import sample\n        from unittest.mock import patch\n'
+    + '        with patch.object(sample.CLIENT, "open") as request:\n'
+    + '            request.return_value.read.return_value = b"payload"\n'
+    + '            self.assertEqual(target(), b"payload")\n'
+    + '            request.assert_called_once_with("https://unit.invalid/item")\n';
+
+test('full and execution repair the current Checker candidate locally; rejected edits never trigger a whole-file request', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'binding-flow-'));
+    const file = path.join(root, 'sample.py');
+    const source = 'def make_token():\n    return object()\nTOKEN = make_token()\n'
+        + 'def target():\n    return TOKEN is not None\n';
+    fs.writeFileSync(file, source);
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
+    const handlers = new Map<string, (...args: any[]) => any>();
+    const messages: any[] = [];
+    let scenario = 'success', writers = 0, edits = 0, reviews = 0, wholeRevisions = 0;
+    let activeSeed = seed;
+    let reviewCode = '';
+    const vscode = {
+        ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
+        window: { registerWebviewViewProvider: (_: string, provider: any) => {
+            provider.webview = { postMessage: async (message: any) => { messages.push(message); return true; } };
+            return { dispose() {} };
+        }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
+        workspace: { workspaceFolders: [{ uri: { fsPath: root } }], openTextDocument: async () => ({}),
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'language' ? 'en' : fallback }) },
+        commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
+            handlers.set(name, handler); return { dispose() {} };
+        } }
+    };
+    Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
+    globalThis.fetch = async (url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'neutral-fixture', contextLength: 65536 });
+        if (metadata) { return metadata; }
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        let response: string;
+        if (request.roleInstructions.includes('dependency_behaviors')) {
+            response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real target with source-supported inputs and verify its returned boolean."}}';
+        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+            reviews++;
+            assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
+            const block = request.prompt.match(/<TEST_FILE>\n([\s\S]*?)\n<\/TEST_FILE>/);
+            assert.ok(block);
+            reviewCode = block[1].split('\n').map((line: string) => line.replace(/^\[L\d+\] /, '')).join('\n');
+            assert.match(reviewCode, /import sample/);
+            assert.doesNotMatch(reviewCode, /token = make_token\(\)/);
+            response = '{"findings":[]}';
+        } else if (request.roleInstructions.includes('performing WRITER_METHOD_EDIT_V1')) {
+            edits++;
+            assert.equal(writers, 1);
+            assert.match(request.prompt, /CURRENT TEST FILE \(read-only baseline\):\n```python\n/);
+            assert.ok(request.prompt.includes(activeSeed), 'repair retains the rejected candidate, never an empty or retained baseline');
+            const plan = JSON.parse(request.prompt.match(/WRITER_METHOD_EDIT_V1\n([^\n]+)/)![1]);
+            assert.equal(plan.baselineHash, hash(activeSeed.trim()));
+            assert.deepEqual(plan.methodIds, ['Cases.test_seed']);
+            assert.doesNotMatch(request.roleInstructions, /complete unittest|WRITER_SEED_V1|Import unittest/);
+            assert.doesNotMatch(request.prompt, /Revise the complete current unittest file|Write one complete unittest file/);
+            assert.match(request.roleInstructions, /A test-local assignment does not rebind a module global/);
+            if (request.prompt.includes('writer-revision-context-v2')) {
+                assert.match(request.prompt, /READ-ONLY REVISION EVIDENCE/);
+                assert.match(request.prompt, /READ-ONLY MODULE BINDING DECLARATION, not test setup/);
+                assert.match(request.prompt, /"lookupExpression":"sample\.(?:TOKEN|RESOURCE|CLIENT)"/);
+            }
+            if (scenario === 'side-effect') {
+                assert.match(request.prompt, /Call setup SINK\.publish: resource: sample\.RESOURCE/);
+                assert.match(request.prompt, /An assertIsNone alone does not verify those effects/);
+            }
+            if (scenario === 'http-client') {
+                assert.match(request.prompt, /DEPENDENCY_FIXTURE_PLAN_V1/);
+                assert.match(request.prompt, /HTTP CLIENT MOCKING/);
+                assert.match(request.prompt, /urllib.request.build_opener/);
+                assert.match(request.prompt, /"lookupExpression":"sample.CLIENT.open"/);
+            }
+            if (scenario === 'unused-setup') {
+                assert.match(request.prompt, /SOURCE_UNUSED_SETUP_GUIDANCE_V1/);
+                assert.match(request.prompt, /unused dependency result assigned to 'spare'/);
+                assert.match(request.prompt, /adding an import alone does not make this local value used/);
+                assert.match(request.prompt, /TOKEN = make_token\(\)/, 'complete initializer evidence is preserved');
+            }
+            response = '```python\n' + (scenario === 'scope' ? seed.replace('token = make_token()', 'token = None')
+                : scenario === 'unchanged' ? 'class Cases:\n' + seed.slice(seed.indexOf('    def test_seed')) : fixed) + '\n```';
+            if (scenario === 'syntax' || scenario === 'syntax-recover' && edits < 3) { response = '```python\nclass Cases:\n    def test_seed(self):\n        token = (\n```'; }
+            if (scenario === 'ambiguous') { response += '\nAnother option:\n```python\n' + fixed + '\n```'; }
+            if (scenario === 'side-effect') { response = '```python\n' + effectFixed + '\n```'; }
+            if (scenario === 'http-client') { response = '```python\n' + httpFixed + '\n```'; }
+        } else if (scenario === 'unused-known-names'
+            && /WRITER_REVISION_REQUEST_V2|ACTUAL VALIDATION FAILURE/.test(request.prompt)) {
+            wholeRevisions++;
+            assert.ok(wholeRevisions <= 2, 'whole-file retries share the configured three-failure limit');
+            assert.match(request.prompt, /SOURCE_UNUSED_SETUP_GUIDANCE_V1/);
+            assert.match(request.prompt, /unused dependency result assigned to 'spare'/);
+            response = '```python\n' + activeSeed + '\n```';
+        } else {
+            writers++;
+            assert.equal(writers, 1, 'scoped rejection cannot fall back to a complete-file Writer');
+            assert.match(request.roleInstructions, /module target has no input parameters/);
+            assert.doesNotMatch(request.roleInstructions, /SimpleNamespace|parameter.member/);
+            response = '```python\n' + activeSeed + '\n```';
+        }
+        return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
+    };
+    try {
+        require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
+            globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
+        for (const mode of ['full', 'execution']) {
+            for (const variant of ['success', 'unused-setup', 'unused-known-names', 'scope', 'unchanged', 'syntax', 'syntax-recover', 'ambiguous', ...(mode === 'execution' ? ['side-effect', 'http-client'] : [])]) {
+                await t.test(`${mode}/${variant}`, async () => {
+                    scenario = variant; writers = 0; edits = 0; reviews = 0; wholeRevisions = 0; reviewCode = ''; messages.length = 0;
+                    activeSeed = variant === 'side-effect' ? effectSeed : variant === 'http-client' ? httpSeed
+                        : variant === 'unused-setup' ? unusedSeed : variant === 'unused-known-names' ? unusedKnownSeed : seed;
+                    const activeSource = variant === 'side-effect' ? effectSource : variant === 'http-client' ? httpSource : source;
+                    fs.writeFileSync(file, activeSource);
+                    const output = path.join(root, `${mode}-${variant}`);
+                    await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-fixture',
+                        stopPolicy: { failureLimit: variant === 'syntax-recover' ? 4 : 3 },
+                        maxLoops: 1, timeoutSeconds: 60, targetTimeoutSeconds: 300, promptStrategy: 'tier1',
+                        requireRoleQualification: false, validationMode: mode, mutationEngine: 'builtin',
+                        filePath: file, funcName: 'target', outputPath: output });
+                    assert.ok(fs.existsSync(output), JSON.stringify(messages));
+                    const files = fs.readdirSync(output, { recursive: true }).map(String);
+                    const knowledgePath = files.find(name => path.basename(name) === 'function_knowledge.json');
+                    assert.ok(knowledgePath, JSON.stringify(messages));
+                    const directory = path.dirname(path.join(output, knowledgePath));
+                    const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
+                    const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+                    assert.equal(writers, 1, JSON.stringify({ failure: knowledge.lastFailure,
+                        stages: events.filter(event => event.stage !== 'model-request').map(event => [event.stage, event.status, event.detail]) }));
+                    const planned = events.find(event => event.stage === 'writer-method-edit' && event.status === 'planned');
+                    if (variant === 'unused-known-names') {
+                        assert.equal(edits, 0);
+                        assert.equal(planned, undefined);
+                        assert.equal(wholeRevisions, 2);
+                        assert.equal(reviews, 0);
+                        assert.equal(knowledge.terminalStatus, 'failed');
+                        assert.equal(fs.existsSync(path.join(directory, 'executable_baseline.json')), false);
+                        assert.equal(fs.existsSync(path.join(directory, 'execution_baseline.json')), false);
+                        assert.ok(events.some(event => event.detail?.reasonCode === 'writer-unused-dependency-setup'
+                            || event.stage === 'structure' && event.status === 'rejected'
+                                && event.detail?.reason?.includes('SOURCE_UNUSED_SETUP_GUIDANCE_V1')), JSON.stringify(events.slice(-8)));
+                        assert.equal(fs.readFileSync(file, 'utf8'), activeSource);
+                        return;
+                    }
+                    assert.equal(edits, variant === 'syntax-recover' ? 3 : ['syntax', 'ambiguous', 'unchanged'].includes(variant) ? 2 : 1, JSON.stringify(knowledge.lastFailure));
+                    if (['syntax', 'ambiguous', 'unchanged'].includes(variant)) {
+                        assert.equal(knowledge.failureCount, 3);
+                        assert.equal(knowledge.stopReason, 'failure-limit');
+                    }
+                    if (variant === 'syntax-recover') { assert.equal(knowledge.failureCount, 3); }
+                    assert.ok(planned, JSON.stringify(events.slice(-4)));
+                    if (variant === 'unused-setup') {
+                        assert.equal(planned.detail.precedingStructureReasonCode, 'writer-unused-dependency-setup');
+                    }
+                    if (variant === 'success' || variant === 'syntax-recover' || variant === 'unused-setup' || variant === 'side-effect' || variant === 'http-client') {
+                        assert.ok(events.some(event => event.stage === 'writer-method-edit' && event.status === 'applied'));
+                        const baseline = JSON.parse(fs.readFileSync(path.join(directory,
+                            mode === 'full' ? 'executable_baseline.json' : 'execution_baseline.json'), 'utf8'));
+                        const testFiles = files.filter(name => path.basename(name) === baseline.testFile);
+                        assert.equal(testFiles.length, 1);
+                        const code = fs.readFileSync(path.join(output, testFiles[0]), 'utf8');
+                        assert.equal(code.slice(0, code.indexOf('    def test_seed')), activeSeed.slice(0, activeSeed.indexOf('    def test_seed')));
+                        assert.match(code, variant === 'side-effect' ? /publish.assert_called_once_with\(resource=sample.RESOURCE\)/
+                            : variant === 'http-client' ? /request.assert_called_once_with/ : /self.assertTrue\(target\(\)\)/);
+                        assert.equal(hash(code), baseline.codeHash || baseline.testHash);
+                        if (mode === 'full') {
+                            assert.equal(reviews, 1, JSON.stringify(knowledge.lastFailure));
+                            assert.equal(hash(reviewCode), hash(code), 'the Reviewer must approve the composed and executed candidate');
+                            assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify(knowledge.lastFailure));
+                        } else { assert.equal(knowledge.terminalStatus, 'execution-passed', JSON.stringify(knowledge.lastFailure)); }
+                        if (variant === 'side-effect') {
+                            // A missing side effect must fail even though both implementations return None.
+                            fs.writeFileSync(file, activeSource.replace('    SINK.publish(resource=RESOURCE)', '    pass'));
+                            try {
+                                const testPath = path.join(output, testFiles[0]);
+                                const mutated = spawnSync(python, ['-B', '-m', 'unittest', path.basename(testPath, '.py')], {
+                                    cwd: path.dirname(testPath), encoding: 'utf8', timeout: 10000,
+                                    env: { ...process.env, PYTHONPATH: root, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' } });
+                                assert.equal(mutated.status, 1, mutated.stderr);
+                                assert.match(mutated.stderr, /Expected 'publish' to be called once/);
+                            } finally { fs.writeFileSync(file, activeSource); }
+                        }
+                    } else {
+                        assert.equal(reviews, 0);
+                        assert.equal(knowledge.terminalStatus, 'failed');
+                        assert.equal(fs.existsSync(path.join(directory, 'executable_baseline.json')), false);
+                        assert.ok(events.some(event => event.stage === 'writer-method-edit' && event.status === 'rejected'));
+                        if (variant === 'syntax' || variant === 'ambiguous') {
+                            const diagnostic = events.find(event => event.stage === 'model-request' && event.status === 'format-rejected');
+                            assert.ok(diagnostic, JSON.stringify(events.slice(-5)));
+                            assert.equal(diagnostic.detail.outputScope, 'method-edit');
+                            assert.equal(diagnostic.detail.baselineHash, planned.detail.baselineHash);
+                            assert.equal(diagnostic.detail.planHash, planned.detail.planHash);
+                            assert.equal(diagnostic.detail.syntax.kind, 'SyntaxError');
+                            assert.equal(diagnostic.detail.syntax.line, variant === 'syntax' ? 3 : 1);
+                            assert.equal(diagnostic.detail.previewScope, 'extracted-python');
+                            const preview = diagnostic.detail.responsePreview;
+                            assert.equal(preview.executable, false);
+                            assert.equal(preview.complete, false);
+                            assert.ok(preview.samples.length <= 6);
+                            assert.ok(preview.samples.reduce((sum: number, sample: any) => sum + sample.text.length, 0) < preview.responseCharacters);
+                            const report = fs.readFileSync(path.join(directory, 'workflow_report.md'), 'utf8');
+                            assert.match(report, /response-python-syntax/);
+                            assert.match(report, /Extracted Python syntax/);
+                        }
+                    }
+                    assert.equal(fs.readFileSync(file, 'utf8'), activeSource);
+                });
+            }
+        }
+    } finally {
+        Module._load = originalLoad; globalThis.fetch = originalFetch;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

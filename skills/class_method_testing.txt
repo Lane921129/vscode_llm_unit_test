@@ -1,0 +1,5 @@
+INSTANCE / PROPERTY TESTING:
+  - Build an instance only with AST constructor defaults or verified caller literals; do not guess required constructor dependencies.
+  - Call method via instance: result = self.obj.method_name(...)
+  - Read a property as self.obj.property_name without parentheses.
+  - Do NOT call an instance method or property as a standalone function.

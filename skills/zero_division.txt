@@ -1,0 +1,4 @@
+ZERO DIVISION:
+  - Treat zero as a boundary candidate only for the operand used as a denominator in the source.
+  - Use assertRaises only for an explicit source raise or exact verified behavior observation; a division expression alone is not permission to invent an exception contract.
+  - If the source guards zero, assert the observable guarded behavior from that branch.

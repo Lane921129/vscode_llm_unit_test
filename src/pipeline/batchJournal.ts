@@ -1,0 +1,462 @@
+import { resultDataDirectory, resultArtifactPath } from './resultLayout';
+import { localize, t } from '../i18n/core';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { evidenceHash } from './analysisJournal';
+import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
+import { evaluateQuality, validateQualityPolicy } from './qualityPolicy';
+import { describeImportIssue } from '../environment/importDiagnostics';
+import { verifyExecutionEvidence } from './executionEvidence';
+import { VerificationMode } from './verificationMode';
+import { SOURCE_VERSIONS_VERSION, validSourceVersions, sourceVersionsCurrent } from './sourceVersions';
+import { conciseReason, isReportExcluded, reportCell, reportLink, summarizeTarget, TargetReportSummary } from './targetReport';
+import { BatchScopeSelection, canonicalScopeRoot, createBatchScopeSelection } from './batchScope';
+import { AI_WORKFLOW_VERSION, requireReviewApproval } from './aiWorkflow';
+import type { BatchPreflightBlockedTarget } from './batchPreflightPartition';
+import { measuredOutputRateMilli, mergeModelCapabilitySummaries, ModelCapabilitySummary, summarizeModelCapability } from '../llm/modelCapabilitySummary';
+import { normalizeStopPolicy, StopPolicySettings } from './stopPolicy';
+
+interface BatchTarget {
+    id: number; file: string; target: string;
+    state: 'pending' | 'running' | 'finished';
+    terminalStatus?: string; category?: string; stage?: string; reportDirectory?: string;
+    modelRequests?: number; qualificationRequests?: number; formalRequests?: number; transportAttempts?: number; environment?: EnvironmentIssue;
+    capabilitySummary?: ModelCapabilitySummary;
+    failureCount?: number; failureLimit?: number; stopReason?: string | null;
+    effectiveSettings?: StopPolicySettings;
+    preflightReason?: BatchPreflightBlockedTarget['reason']; preflightReport?: string;
+}
+interface EnvironmentIssue {
+    kind: 'missing-dependency' | 'import-side-effect' | 'dependency-api' | 'module-resolution' | 'other';
+    issue?: string; advice?: string;
+    missingModule?: string; operation?: string; origin?: { file: string; line: number };
+}
+
+/** Recompute a new report from its fixed policy and immutable candidate. The
+ * displayed score and the persisted "passed" flag are never sufficient. */
+function verifyQualityPass(directory: string, sourcePath: string, target: string,
+    manifest: any, knowledge: any): void {
+    const invalid = () => { throw Error('incomplete-quality-provenance'); };
+    if ([manifest, knowledge].some(item => item.workflowVersion !== undefined
+        && ![AI_WORKFLOW_VERSION, 'seed-expand-v1'].includes(item.workflowVersion))) { return invalid(); }
+    const validated = validateQualityPolicy(manifest.qualityPolicy);
+    if (!validated.ok || !['standard', 'strict100'].includes(validated.policy.mode)
+        || manifest.qualityContractVersion !== 'quality-policy-v1'
+        || knowledge.qualityContractVersion !== 'quality-policy-v1'
+        || !isDeepStrictEqual(manifest.qualityPolicy, knowledge.qualityPolicy)
+        || knowledge.evidenceValid === false) { return invalid(); }
+    const snapshot = JSON.parse(fs.readFileSync(path.join(directory, 'quality_baseline.json'), 'utf8'));
+    if (snapshot.dependencyEvidenceVersion !== SOURCE_VERSIONS_VERSION
+        || knowledge.dependencyEvidenceVersion !== SOURCE_VERSIONS_VERSION
+        || !validSourceVersions(snapshot.dependencyVersions)
+        || !isDeepStrictEqual(snapshot.dependencyVersions, knowledge.dependencyVersions)) {
+        throw Error('incomplete-dependency-provenance');
+    }
+    if (!sourceVersionsCurrent(snapshot.dependencyVersions)) { throw Error('source-changed'); }
+    const test = knowledge.acceptedTest;
+    const immutableTest = snapshot.testFile;
+    if (snapshot.schemaVersion !== 'quality-baseline-v1'
+        || snapshot.sourceHash !== knowledge.sourceHash || snapshot.target !== target
+        || !isDeepStrictEqual(snapshot.qualityPolicy, validated.policy)
+        || typeof test !== 'string' || path.basename(test) !== test || /[\\/]/.test(test)
+        || typeof immutableTest !== 'string' || path.basename(immutableTest) !== immutableTest || /[\\/]/.test(immutableTest)
+        || typeof snapshot.code !== 'string' || evidenceHash(snapshot.code) !== snapshot.codeHash
+        || knowledge.acceptedCodeHash !== snapshot.codeHash
+        || evidenceHash(fs.readFileSync(sourcePath, 'utf8')) !== knowledge.sourceHash
+        || evidenceHash(fs.readFileSync(resultArtifactPath(directory, test), 'utf8')) !== snapshot.codeHash
+        || evidenceHash(fs.readFileSync(resultArtifactPath(directory, immutableTest), 'utf8')) !== snapshot.codeHash
+        || typeof snapshot.execution !== 'string' || !snapshot.execution.trim()
+        || snapshot.execution !== knowledge.execution || snapshot.reviewStatus !== knowledge.reviewStatus
+        || snapshot.generationMode !== knowledge.generationMode
+        || snapshot.tier !== knowledge.resolvedTier
+        || ['qualityGaps', 'measuredQualityGaps'].some(field => !Array.isArray(snapshot[field])
+            || !snapshot[field].every((item: unknown) => typeof item === 'string'))
+        || !isDeepStrictEqual(snapshot.coverage?.assessment, knowledge.coverage?.assessment)
+        || !isDeepStrictEqual(snapshot.mutation, knowledge.mutation)) { return invalid(); }
+    if ([manifest, knowledge].some(item => item.workflowVersion === AI_WORKFLOW_VERSION)) {
+        if ([manifest, knowledge].some(item => item.workflowVersion !== undefined && item.workflowVersion !== AI_WORKFLOW_VERSION)
+            || knowledge.reviewStatus !== 'completed' || knowledge.generationMode === 'deterministic-fallback') { return invalid(); }
+        requireReviewApproval(snapshot.code, knowledge.reviewApproval, {
+            runId: manifest.runId, sourceHash: manifest.sourceHash, target
+        });
+    }
+    const targetScope = { kind: 'function' as const, qualifiedName: target };
+    const assessment = evaluateQuality(validated.policy, {
+        identity: { sourcePath, sourceHash: knowledge.sourceHash, testHash: snapshot.codeHash,
+            targetScope, policyHash: validated.policy.policyHash },
+        executionPassed: true,
+        coverage: { sourceHash: knowledge.sourceHash, testHash: snapshot.codeHash, targetScope,
+            assessment: snapshot.coverage.assessment },
+        mutation: snapshot.mutation, reviewStatus: snapshot.reviewStatus,
+        generationMode: snapshot.generationMode, qualityGaps: []
+    });
+    if (!assessment.fullyPassed || !isDeepStrictEqual(assessment, snapshot.qualityAssessment)
+        || !isDeepStrictEqual(assessment, knowledge.qualityAssessment)) { return invalid(); }
+}
+
+/** Explicit inventory and completion; a report's mere existence is never a pass. */
+export class BatchJournal {
+    private readonly id = randomUUID();
+    private readonly startedAt = new Date().toISOString();
+    private status = 'discovering';
+    private finishedAt?: string;
+    private blockedModules = 0;
+    private readonly preflightEvents: Array<{ at: string; phase: 'initial' | 'setup' | 'decision'; status: string;
+        fixtureId?: string | null; resourceCount?: number; blockedModules?: number; report?: string }> = [];
+    private readonly targets: BatchTarget[] = [];
+    private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
+    private readonly files: string[] = [];
+    private readonly reportSummaries = new Map<number, TargetReportSummary>();
+    private scope?: BatchScopeSelection;
+    /** Stable batch-level stage when work stops before an individual target owns a report. */
+    private terminalFailureStage?: string;
+    private readonly stopPolicy: StopPolicySettings;
+    constructor(readonly directory: string, private readonly sourceRoot: string,
+        private readonly identity: { model: string; buildTimestamp: string; python: string; validationMode?: VerificationMode;
+            stopPolicy?: Partial<StopPolicySettings> }) {
+        this.stopPolicy = normalizeStopPolicy(identity.stopPolicy);
+        this.save();
+    }
+    private relative(file: string): string {
+        const relative = path.relative(this.sourceRoot, file);
+        if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) {
+            throw new Error(localize("批次來源不在已選資料夾內。"));
+        }
+        return relative.replace(/\\/g, '/') || '.';
+    }
+    selectScope(selection: BatchScopeSelection): void {
+        if (this.files.length || this.targets.length || this.status !== 'discovering') { throw new Error('Batch scope is fixed before target discovery'); }
+        const expected = createBatchScopeSelection(this.sourceRoot, selection.knownFiles, selection.selectedFiles);
+        if (canonicalScopeRoot(selection.root) !== canonicalScopeRoot(this.sourceRoot) || !isDeepStrictEqual(expected, selection)) {
+            throw new Error('Batch scope identity or selection is invalid');
+        }
+        this.scope = structuredClone(expected);
+        this.save();
+    }
+    discover(file: string, targets: string[]): void {
+        const relative = this.relative(file);
+        const identity = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+        if (this.scope && !this.scope.selectedFiles.some(selected => identity(selected) === identity(relative))) {
+            throw new Error('Batch source was excluded from the confirmed scope');
+        }
+        this.files.push(relative);
+        for (const target of targets) { this.targets.push({ id: this.targets.length, file: relative, target, state: 'pending' }); }
+        this.save();
+    }
+    discoveryFailed(file: string, stage: string): void {
+        this.discoveryFailures.push({ file: this.relative(file), stage }); this.save();
+    }
+    start(): void { this.status = 'running'; this.save(); }
+    preflight(blockedModules: number): void { this.blockedModules = blockedModules; this.save(); }
+    preflightEvidence(event: Omit<(typeof this.preflightEvents)[number], 'at'>): void {
+        const report = event.report && path.relative(this.directory, event.report).replace(/\\/g, '/');
+        this.preflightEvents.push({ ...event, ...(report ? { report } : {}), at: new Date().toISOString() });
+        this.save();
+    }
+    fail(stage: string): void {
+        // A batch report is an audit surface. Preserve a stable host-owned
+        // stage, never arbitrary exception or provider text.
+        this.terminalFailureStage = /^[a-z][a-z0-9-]{0,79}$/.test(stage) ? stage : 'batch-error';
+        this.save();
+    }
+    /** A source rejected before generation has a known terminal outcome, not a missing report or test pass. */
+    blockPreflightTargets(blocked: readonly BatchPreflightBlockedTarget[], report?: string): void {
+        const reportRelative = report && path.relative(this.directory, report).replace(/\\/g, '/');
+        if (reportRelative && (path.isAbsolute(reportRelative) || reportRelative === '..' || reportRelative.startsWith('../'))) {
+            throw new Error('Batch preflight report must be inside this batch');
+        }
+        const ids = new Set<number>();
+        for (const item of blocked) {
+            const target = this.targets[item.id];
+            const file = item.file.replace(/\\/g, '/');
+            const sameFile = process.platform === 'win32' ? target?.file.toLowerCase() === file.toLowerCase() : target?.file === file;
+            if (!target || ids.has(item.id) || !sameFile || target.target !== item.target || target.state !== 'pending') {
+                throw new Error('Batch preflight partition does not match pending targets');
+            }
+            ids.add(item.id);
+        }
+        for (const item of blocked) {
+            Object.assign(this.targets[item.id], { state: 'finished', terminalStatus: 'environment-blocked',
+                category: 'environment', stage: item.stage, preflightReason: item.reason,
+                environment: structuredClone(item.environment), modelRequests: 0, qualificationRequests: 0, formalRequests: 0, transportAttempts: 0,
+                ...(reportRelative ? { preflightReport: reportRelative } : {}) });
+        }
+        this.save();
+    }
+    begin(id: number): void {
+        if (this.targets[id].terminalStatus === 'environment-blocked') { throw new Error('Cannot execute a preflight-blocked target'); }
+        this.targets[id].state = 'running'; this.save();
+    }
+    /** Evaluated before dispatch, after the previous target's verified terminal report. */
+    stopDispatch(): boolean {
+        if (this.terminalFailureStage === 'batch-failure-limit') { return true; }
+        const failures = this.targets.filter(target => target.state === 'finished'
+            && !['environment', 'tool'].includes(target.category || '')
+            && ['failed', 'retained-after-failure', 'review-blocked', 'source-changed', 'round-limit', 'stagnated',
+                'quality-incomplete', 'execution-passed-review-incomplete'].includes(target.terminalStatus || '')).length;
+        if (!this.stopPolicy.batchFailureLimit || failures < this.stopPolicy.batchFailureLimit) { return false; }
+        this.terminalFailureStage = 'batch-failure-limit';
+        for (const target of this.targets) {
+            if (target.state === 'pending') {
+                Object.assign(target, { state: 'finished', terminalStatus: 'policy-not-run', stage: 'batch-failure-limit',
+                    modelRequests: 0, formalRequests: 0, transportAttempts: 0 });
+            }
+        }
+        this.save();
+        return true;
+    }
+    attach(id: number, directory: string): void {
+        const relative = path.relative(this.directory, directory);
+        if (path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep)) {
+            throw new Error(localize("批次報告不在本次輸出資料夾內。"));
+        }
+        this.targets[id].reportDirectory = relative.replace(/\\/g, '/'); this.save();
+    }
+    dummy(id: number): void { this.targets[id].terminalStatus = 'dummy-skipped'; }
+    refresh(id: number): void {
+        const target = this.targets[id];
+        const reportRoot = target.reportDirectory && path.join(this.directory, target.reportDirectory);
+        try {
+            if (!reportRoot) { throw Error('missing-report'); }
+            const directory = resultDataDirectory(reportRoot);
+            const hasFinal = fs.existsSync(path.join(reportRoot, 'final_report.md'));
+            const hasWorkflow = fs.existsSync(path.join(directory, 'workflow_report.md'));
+            if (!hasFinal && !hasWorkflow) { throw Error('missing-report'); }
+            if (target.terminalStatus !== 'dummy-skipped') {
+                const knowledge = JSON.parse(fs.readFileSync(path.join(directory, 'function_knowledge.json'), 'utf8'));
+                const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'run_manifest.json'), 'utf8'));
+                if (!knowledge.runId || manifest.runId !== knowledge.runId || !knowledge.sourceHash || manifest.sourceHash !== knowledge.sourceHash
+                    || manifest.target !== target.target || knowledge.target !== target.target || typeof knowledge.terminalStatus !== 'string'
+                    || knowledge.terminalStatus === 'running') { throw Error('incomplete-provenance'); }
+                if ((manifest.validationMode ?? 'full') !== (this.identity.validationMode ?? 'full')
+                    || (knowledge.validationMode ?? 'full') !== (manifest.validationMode ?? 'full')) { throw Error('mode-mismatch'); }
+                if (!hasFinal && !isReportExcluded(knowledge.terminalStatus)) { throw Error('missing-report'); }
+                if (knowledge.terminalStatus === 'passed') {
+                    if (manifest.validationMode === 'execution' || knowledge.validationMode === 'execution') { throw Error('mode-mismatch'); }
+                    const hasQualityContract = [manifest, knowledge].some(artifact =>
+                        ['qualityContractVersion', 'qualityPolicy', 'qualityAssessment'].some(key => Object.hasOwn(artifact, key)));
+                    if (hasQualityContract) {
+                        verifyQualityPass(directory, path.resolve(this.sourceRoot, target.file), target.target, manifest, knowledge);
+                    } else {
+                        // Preserve historical artifacts, but never certify their
+                        // current source dependencies from a legacy display score.
+                        throw Error('incomplete-dependency-provenance');
+                    }
+                }
+                if (knowledge.terminalStatus === 'execution-passed') {
+                    const baseline = JSON.parse(fs.readFileSync(path.join(directory, 'execution_baseline.json'), 'utf8'));
+                    if (manifest.validationMode !== 'execution' || knowledge.validationMode !== 'execution'
+                        || (this.identity.validationMode ?? 'full') !== 'execution'
+                        || knowledge.evidenceValid !== true || knowledge.executionVerified !== true
+                        || knowledge.executionBaseline !== 'execution_baseline.json'
+                        || knowledge.acceptedTest !== baseline.testFile || knowledge.acceptedCodeHash !== baseline.testHash
+                        || !verifyExecutionEvidence(directory, path.resolve(this.sourceRoot, target.file), baseline, {
+                            runId: manifest.runId, sourceHash: manifest.sourceHash, target: target.target
+                        })) { throw Error('incomplete-execution-provenance'); }
+                }
+                target.terminalStatus = knowledge.terminalStatus;
+                target.category = knowledge.failureCategory;
+                target.stage = knowledge.failureStage;
+                if (Number.isSafeInteger(knowledge.failureCount) && Number.isSafeInteger(knowledge.failureLimit)) {
+                    target.failureCount = knowledge.failureCount;
+                    target.failureLimit = knowledge.failureLimit;
+                    target.stopReason = typeof knowledge.stopReason === 'string' ? knowledge.stopReason : null;
+                    target.effectiveSettings = normalizeStopPolicy(knowledge.effectiveSettings);
+                }
+                if (target.category === 'environment') {
+                    const diagnostic = knowledge.diagnostic || {};
+                    target.environment = describeImportIssue(diagnostic, target.stage || 'environment');
+                    if (target.environment.kind === 'missing-dependency') { target.environment.missingModule = target.environment.issue; }
+                    if (target.environment.kind === 'import-side-effect') { target.environment.operation = target.environment.issue; }
+                }
+                const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+                if (events.some(event => event.runId !== knowledge.runId || event.sourceHash !== knowledge.sourceHash)) {
+                    throw Error('incomplete-provenance');
+                }
+                target.modelRequests = events.filter(event => event.stage === 'model-request' && event.status === 'requested').length;
+                target.qualificationRequests = events.filter(event => event.stage === 'model-request' && event.status === 'requested'
+                    && event.detail?.phase === 'context-qualification').length;
+                target.formalRequests = target.modelRequests! - target.qualificationRequests!;
+                const transports = events.filter(event => event.stage === 'model-request' && event.status === 'timing'
+                    && event.detail?.version === 'model-request-timing-v1' && event.detail?.kind === 'transport');
+                target.transportAttempts = transports.length || undefined;
+                target.capabilitySummary = summarizeModelCapability(transports.map(event => event.detail));
+                this.reportSummaries.set(id, summarizeTarget(directory, knowledge, {
+                    schemaVersion: 'target-report-v1', sourcePath: path.resolve(this.sourceRoot, target.file),
+                    sourceFile: target.file, target: target.target, modelIdentity: this.identity.model, requestedTier: ''
+                }, knowledge.sourceHash));
+            }
+            target.state = 'finished';
+        } catch (error) {
+            this.reportSummaries.delete(id);
+            const changed = error instanceof Error && error.message === 'source-changed';
+            target.state = changed ? 'finished' : 'running';
+            target.terminalStatus = changed ? 'source-changed' : 'incomplete-report';
+            target.stage = error instanceof Error && ['source-changed', 'incomplete-dependency-provenance'].includes(error.message)
+                ? error.message : 'report-verification';
+            target.category = changed ? 'validation' : undefined;
+            delete target.environment;
+            delete target.modelRequests;
+            delete target.capabilitySummary;
+            // A failed/missing checkpoint is not a completed target, even when
+            // its outer task returned. Keep it visibly unfinished.
+        }
+        this.save();
+    }
+    finish(status: 'completed' | 'cancelled' | 'failed' | 'environment-blocked'): void {
+        // Earlier targets may have changed while later targets were running.
+        for (const target of this.targets) {
+            if (['passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
+        }
+        const unfinished = this.discoveryFailures.length || this.targets.some(target => target.state !== 'finished');
+        const targetFailures = this.targets.some(target => !['environment', 'tool'].includes(target.category || '')
+            && ['failed', 'retained-after-failure', 'source-changed'].includes(target.terminalStatus || ''));
+        const blocked = this.targets.filter(target => ['environment', 'tool'].includes(target.category || '')
+            || target.terminalStatus === 'environment-blocked');
+        this.status = this.terminalFailureStage === 'batch-failure-limit' ? 'policy-stopped'
+            : status === 'completed' && unfinished ? 'incomplete'
+            : status === 'completed' && targetFailures ? 'failed'
+                : status === 'completed' && blocked.length
+                    ? blocked.length === this.targets.length
+                        ? blocked.every(target => target.category === 'tool') ? 'tool-blocked' : 'environment-blocked'
+                        : 'partial' : status;
+        this.finishedAt = new Date().toISOString(); this.save();
+    }
+    summary(): string {
+        const passed = this.targets.filter(t => t.terminalStatus === 'passed').length;
+        const executed = this.targets.filter(t => t.terminalStatus === 'execution-passed').length;
+        const blocked = this.targets.filter(t => ['environment', 'tool'].includes(t.category || '')).length;
+        const failed = this.targets.filter(t => !['environment', 'tool'].includes(t.category || '')
+            && ['failed', 'retained-after-failure', 'source-changed'].includes(t.terminalStatus || '')).length;
+        const skipped = this.targets.filter(t => ['dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'no-mutation-candidates'].includes(t.terminalStatus || '')).length;
+        return localize("共 {0} 個目標；執行驗證通過 {1}、完整通過 {2}、環境／工具受阻 {3}、失敗 {4}、略過／未評分 {5}、未完成 {6}", this.targets.length, executed, passed, blocked, failed, skipped, this.targets.length - executed - passed - blocked - failed - skipped);
+    }
+
+    /** Batch-wide totals remain observations, never a quality score or model authorization. */
+    private capabilitySummary(): ModelCapabilitySummary {
+        return mergeModelCapabilitySummaries(this.targets.map(target => target.capabilitySummary));
+    }
+    private save(): void {
+        const counts: Record<string, number> = {};
+        const groups = new Map<string, { kind: string; issue: string; advice?: string; affectedTargets: number; files: Set<string> }>();
+        for (const target of this.targets) {
+            const status = target.terminalStatus || target.state;
+            counts[status] = (counts[status] || 0) + 1;
+            const environment = target.environment;
+            if (environment) {
+                const origin = environment.origin;
+                const issue = (environment.issue || environment.missingModule || environment.operation || target.stage || 'environment')
+                    + (origin && environment.kind !== 'missing-dependency' ? ` (${origin.file}:${origin.line})` : '');
+                const key = `${environment.kind}/${issue}`;
+                const group = groups.get(key) || { kind: environment.kind, issue, advice: environment.advice, affectedTargets: 0, files: new Set<string>() };
+                group.affectedTargets++; group.files.add(target.file); groups.set(key, group);
+            }
+        }
+        const environmentIssues = [...groups.values()].map(group => ({ ...group, files: [...group.files].sort() }));
+        const complete = this.status === 'completed';
+        const passed = counts.passed || 0;
+        const executed = counts['execution-passed'] || 0;
+        const mode = this.identity.validationMode ?? 'full';
+        const capabilitySummary = this.capabilitySummary();
+        const capabilityRate = measuredOutputRateMilli(capabilitySummary);
+        const blocked = this.targets.filter(target => ['environment', 'tool'].includes(target.category || '')
+            || target.terminalStatus === 'environment-blocked').length;
+        const incomplete = this.targets.filter(target => target.state !== 'finished'
+            || ['policy-not-run', 'review-blocked', 'round-limit', 'stagnated', 'quality-incomplete',
+                'execution-passed-review-incomplete'].includes(target.terminalStatus || '')).length;
+        const denominator = this.targets.length;
+        const rates = { denominator, passed: denominator ? passed / denominator : null,
+            blocked: denominator ? blocked / denominator : null, incomplete: denominator ? incomplete / denominator : null };
+        const cost = { modelRequests: this.targets.reduce((total, target) => total + (target.modelRequests || 0), 0),
+            transportAttempts: this.targets.reduce((total, target) => total + (target.transportAttempts || 0), 0),
+            outputTokens: capabilitySummary.outputTokens,
+            unknownRequestTargets: this.targets.filter(target => target.modelRequests === undefined).length };
+        const manifest = { schemaVersion: 1, batchId: this.id, startedAt: this.startedAt, finishedAt: this.finishedAt,
+            validationMode: mode,
+            stopPolicy: this.stopPolicy,
+            stopReason: this.terminalFailureStage === 'batch-failure-limit' ? 'batch-failure-limit' : null,
+            allTargetsExecutionVerified: complete && this.targets.length > 0 && executed === this.targets.length,
+            status: this.status, complete, allTargetsPassed: complete && this.targets.length > 0 && passed === this.targets.length,
+            preflightBlockedModules: this.blockedModules,
+            preflightEvents: this.preflightEvents,
+            model: this.identity.model, buildTimestamp: this.identity.buildTimestamp,
+            pythonExecutable: this.identity.python, roleContracts: ROLE_CONTRACT_VERSIONS,
+            ...(this.terminalFailureStage ? { terminalFailureStage: this.terminalFailureStage } : {}),
+            ...(this.scope ? { scope: this.scope } : {}),
+            discoveredFiles: this.files, discoveryFailures: this.discoveryFailures,
+            expectedTargets: this.targets.length, finishedTargets: this.targets.filter(t => t.state === 'finished').length,
+            attemptedTargets: this.targets.filter(target => target.state !== 'pending'
+                && !['environment-blocked', 'policy-not-run'].includes(target.terminalStatus || '')).length,
+            preflightBlockedTargets: counts['environment-blocked'] || 0,
+            statusCounts: counts, environmentIssues, rates, cost, modelCapabilitySummary: capabilitySummary, targets: this.targets };
+        const temporary = path.join(this.directory, 'batch_manifest.pending.json');
+        fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');
+        fs.renameSync(temporary, path.join(this.directory, 'batch_manifest.json'));
+        const safe = (value: string) => value.replace(/[|\r\n]/g, ' ');
+        const report = [localize("# 批次執行摘要"), '', `## ${manifest.allTargetsPassed ? localize("完整通過")
+            : manifest.allTargetsExecutionVerified ? localize("全部執行驗證通過；完整品質尚未驗證") : localize("未全部通過")}`, '', this.summary(), '',
+            localize("- 驗證目標：{0}", mode === 'execution' ? localize("執行驗證；Trace、覆蓋率、突變與品質審查未執行") : localize("完整品質驗證")),
+            localize("- 狀態：{0}（執行完成不代表測試通過）", this.status),
+            ...(this.terminalFailureStage ? [localize("- 批次終止階段：{0}", safe(this.terminalFailureStage))] : []),
+            ...(this.scope ? [t('ui.batchScopeSummary', this.scope.selectedFiles.length, this.scope.knownFiles.length, this.scope.excludedFiles.length)] : []),
+            ...(this.blockedModules ? [localize("- 前置預檢有 {0} 個模組受阻：[原因與處理方式]({1})。受影響目標不計為測試通過。", this.blockedModules,
+                reportLink(this.targets.find(target => target.preflightReport)?.preflightReport || 'preflight/import_check.md'))] : []),
+            localize("- 預期目標：{0}；已有終態：{1}；完整通過：{2}", this.targets.length, manifest.finishedTargets, passed),
+            localize('- 通過率 {0}；受阻率 {1}；未完成率 {2}（分母 {3} 個確認目標）。',
+                ...[rates.passed, rates.blocked, rates.incomplete].map(rate => rate === null ? 'N/A' : (rate * 100).toFixed(1) + '%'), denominator),
+            localize('- 模型請求 {0} 次；HTTP {1} 次；有計時配對的輸出 {2} tokens；用量未知目標 {3} 個。',
+                cost.modelRequests, cost.transportAttempts, cost.outputTokens, cost.unknownRequestTargets),
+            localize("- 模型：{0}；建置：{1}", safe(this.identity.model), safe(this.identity.buildTimestamp)),
+            `- Python：${safe(this.identity.python)}`, '', localize("| 目標狀態 | 數量 |"), '| --- | ---: |',
+            ...Object.entries(counts).map(([status, count]) => `| ${status} | ${count} |`), '',
+            localize('## 模型能力觀測（本次批次）'), '',
+            localize('- 完成傳輸：{0}；逾時：{1}；因輸出長度停止：{2}。', capabilitySummary.completedTransports,
+                capabilitySummary.timedOutTransports, capabilitySummary.lengthStoppedTransports),
+            localize('- 有計時配對的輸出 tokens：{0}；生成計時：{1} ms；量測輸出速率：{2} tokens/s。', capabilitySummary.outputTokens,
+                capabilitySummary.outputEvalMs, capabilityRate === null ? localize('未知') : (capabilityRate / 1000).toFixed(3)),
+            localize('- 只彙總已驗證逐目標傳輸數字；這不是品質分數、模型資格、容量宣稱或後續請求保證。'), '',
+            ...(this.preflightEvents.length ? [localize('## 初始化處理紀錄'), '',
+                localize('| 階段 | 決定／結果 | 設定 ID | 隔離資源數 | 受阻模組 | 報告 |'), '| --- | --- | --- | ---: | ---: | --- |',
+                ...this.preflightEvents.map(event => `| ${event.phase} | ${event.status} | ${event.fixtureId === undefined ? '—' : event.fixtureId || 'none'} | ${event.resourceCount ?? '—'} | ${event.blockedModules ?? '—'} | ${event.report ? `[${localize('查看結果')}](${reportLink(event.report)})` : '—'} |`), '',
+                localize('初始化就緒僅代表所選模組可載入；未開始的函式、審查與突變均不計為通過。'), ''] : []),
+            localize("## 環境障礙"), '', localize("| 分類 | 共同原因 | 受影響目標 | 處理方式 |"), '| --- | --- | ---: | --- |',
+            ...environmentIssues.map(issue => `| ${issue.kind} | ${safe(issue.issue)} | ${issue.affectedTargets} | ${safe(issue.advice || '')} |`), '',
+            ...this.targets.filter(target => target.terminalStatus === 'environment-blocked').map(target =>
+                `- ${reportCell(target.file)} :: ${reportCell(target.target)}：${target.preflightReason}; ${reportCell(target.environment?.issue || target.stage || 'environment')}`), '',
+            localize("缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。"),
+            localize("匯入副作用：在測試工具設定 llmUnitTest.importFixtures，明確模擬初始化相依，保持受測原檔不變。安裝套件不能解決目錄建立等副作用；API 不相容須核對原專案版本宣告。"), '',
+            localize("## 未完成與略過"), '',
+            ...this.discoveryFailures.map(item => localize("- 無法掃描 {0}：{1}", safe(item.file), safe(item.stage))),
+            ...this.targets.filter(t => t.state !== 'finished').map(t => `- ${safe(t.file)} :: ${safe(t.target)}：${t.terminalStatus || t.state}`),
+            localize("Dummy／Stub、審查未完成、品質不足及缺報告皆不計為通過。逐目標輸出與模型請求數見 batch_manifest.json。"), ''].join('\n');
+        // The audit inventory stays complete; the user-facing result list contains only attempted test targets.
+        fs.writeFileSync(path.join(this.directory, 'batch_workflow.md'), report, 'utf8');
+        const visible = this.targets.filter(t => t.state !== 'pending' && t.terminalStatus !== 'environment-blocked' && !isReportExcluded(t.terminalStatus));
+        const failureTargets = visible.filter(t => t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'failure_report.md')));
+        const failures = this.discoveryFailures.length > 0 || ['cancelled', 'failed', 'incomplete', 'environment-blocked', 'partial'].includes(this.status)
+            || visible.some(t => t.terminalStatus && !['passed', 'execution-passed'].includes(t.terminalStatus)) || failureTargets.length > 0;
+        const concise = [localize('# 批次測試結果'), '', localize('- **模型識別**: {0}', reportCell(this.identity.model)),
+            localize('- 狀態：{0}（執行完成不代表測試通過）', this.status), this.summary(), '',
+            localize('| 目標 | 結果／失敗原因 | 覆蓋率 | 突變分數 | 測資與突變測資 |'), '| --- | --- | --- | --- | --- |',
+            ...visible.map(t => {
+                const summary = this.reportSummaries.get(t.id);
+                const link = t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'final_report.md'))
+                    ? `[${localize('查看結果')}](${reportLink(t.reportDirectory + '/final_report.md')})` : '—';
+                return `| ${reportCell(t.file)} :: ${reportCell(t.target)} | ${reportCell(summary ? `${summary.outcome} / ${conciseReason(summary.reason)}` : t.terminalStatus || t.state)} | ${summary?.coverage || 'N/A'} | ${summary?.mutation || 'N/A'} | ${link} |`;
+            }), '', ...(visible.length ? [] : [localize('本次沒有可列入的測試目標。'), '']),
+            ...(failures ? [localize('[失敗報告與完整流程](failure_report.md)'), ''] : [])].join('\n');
+        fs.writeFileSync(path.join(this.directory, 'batch_summary.md'), concise, 'utf8');
+        if (failures) {
+            fs.writeFileSync(path.join(this.directory, 'failure_report.md'), [localize('# 批次失敗報告'), '', report,
+                localize('## 各目標完整流程'), '', ...visible.map(t => {
+                    const file = t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'failure_report.md'))
+                        ? 'failure_report.md' : 'workflow_report.md';
+                    return t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, file))
+                        ? `- [${reportCell(t.file)} :: ${reportCell(t.target)}](${reportLink(t.reportDirectory + '/' + file)})`
+                        : `- ${reportCell(t.file)} :: ${reportCell(t.target)}：${localize('尚無流程報告；未計入通過。')}`;
+                }), ''].join('\n'), 'utf8');
+        }
+    }
+}

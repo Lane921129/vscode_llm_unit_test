@@ -1,0 +1,538 @@
+import ast
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).parent))
+import basic_mutation_runner as runner
+from mutation_operators_v2 import iter_mutations
+
+
+class MutationV2Tests(unittest.TestCase):
+    def variants(self, expression):
+        tree = ast.parse('def target(x, y):\n    return ' + expression + '\n')
+        return [(record, ast.unparse(variant)) for record, variant in iter_mutations(tree, tree.body[0])]
+
+    def test_numeric_boundaries_arithmetic_comparison_and_unary(self):
+        variants = self.variants('x / 100')
+        self.assertEqual({r['to'] for r, _ in variants if r['kind'] == 'numeric_constant'}, {'0', '1', '99', '101', '-100'})
+        self.assertEqual({r['to'] for r, _ in variants if r['kind'] == 'binary'}, {'Add', 'Sub', 'Mult', 'FloorDiv', 'Mod', 'Pow'})
+        self.assertEqual({r['to'] for r, _ in self.variants('x < y') if r['kind'] == 'compare'}, {'Eq', 'NotEq', 'LtE', 'Gt', 'GtE'})
+        self.assertTrue(any('return x' in source for r, source in self.variants('not x') if r['kind'] == 'unary'))
+        self.assertTrue(any('return -x' in source for r, source in self.variants('+x') if r['kind'] == 'unary'))
+
+    def test_strings_containers_and_index_boundaries_are_single_site(self):
+        self.assertEqual({r['to'] for r, _ in self.variants("'值'") if r['kind'] == 'string_constant'}, {"''", "'值__mutated__'"})
+        containers = [source for r, source in self.variants('[x, y]') if r['kind'] == 'container']
+        self.assertTrue(any('return []' in source for source in containers))
+        self.assertTrue(any('return [y]' in source for source in containers))
+        self.assertTrue(any('return [x]' in source for source in containers))
+        boundaries = [source for r, source in self.variants('x[y]') if r['kind'] == 'index_boundary']
+        self.assertTrue(any('x[y + 1]' in source for source in boundaries))
+        self.assertTrue(any('x[y - 1]' in source for source in boundaries))
+        for _, source in self.variants('x[y:100]'):
+            compile(source, '<variant>', 'exec')
+
+    def test_function_body_scope_and_v1_reconstruction_are_preserved(self):
+        tree = ast.parse('def target(x=100):\n    def nested(): return 200\n    return x + 1\n'
+                         'def other(): return 300\n')
+        variants = list(iter_mutations(tree, tree.body[0]))
+        self.assertTrue(all(record['line'] == 3 for record, _ in variants))
+        self.assertFalse(any(record['from'] in ('100', '200', '300') for record, _ in variants))
+        old = runner.mutation_candidates(tree, tree.body[0])
+        self.assertEqual(len(old), 3)
+        self.assertIn('return x - 1', ast.unparse(runner.apply_mutation(tree, 1, 'target')))
+        self.assertTrue(any(record['to'] == '0' for record, _ in self.variants('2j')
+                            if record['kind'] == 'numeric_constant'))
+        if hasattr(ast, 'MatchSingleton'):
+            match_tree = ast.parse('def target(x):\n    match x:\n        case None: return True\n    return False\n')
+            matches = [(record, variant) for record, variant in iter_mutations(match_tree, match_tree.body[0])
+                       if record['kind'] == 'match_literal']
+            self.assertEqual(len(matches), 1)
+            self.assertIn('case True:', ast.unparse(matches[0][1]))
+            compile(matches[0][1], '<variant>', 'exec')
+        documented = ast.parse('"""module docs"""\ndef target(x):\n    """target docs"""\n    return "value"\n')
+        for scope in (documented, documented.body[1]):
+            strings = [record for record, _ in iter_mutations(documented, scope) if record['kind'] == 'string_constant']
+            self.assertEqual(len(strings), 2)
+            self.assertTrue(all(record['from'] == "'value'" for record in strings))
+
+    def measure(self, root, **kwargs):
+        source, tests = root / 'sample.py', root / 'test_sample.py'
+        source.write_text('def target(x):\n    return x + 1\n', encoding='utf-8')
+        tests.write_text('import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
+                         '    def test_value(self):\n        self.assertEqual(target(3), 4)\n', encoding='utf-8')
+        return runner.run_mutation_trials(source, tests, max_mutations=0, target_function='target', **kwargs)
+
+    def test_real_parallel_trials_identify_killing_tests_and_keep_deterministic_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = self.measure(Path(directory), workers=2)
+            second = self.measure(Path(directory), workers=1)
+        self.assertEqual(first['operatorSetVersion'], 'builtin-ast-v2')
+        self.assertEqual(first['executionBackend'], 'isolated-unittest-v1')
+        self.assertEqual(first['status'], 'complete')
+        self.assertGreater(first['counts']['available'], 3)
+        self.assertEqual(first['candidateIds'], second['candidateIds'])
+        self.assertEqual(first['counts'], second['counts'])
+        for mutant in first['mutants']:
+            self.assertGreaterEqual(mutant['elapsedMs'], 0)
+            if mutant['status'] == 'KILLED':
+                self.assertEqual(mutant['killedBy'], ['test_sample.Cases.test_value'])
+                self.assertEqual(mutant['testFailures'][0]['phase'], 'test')
+
+    def test_bounded_parallelism_uses_distinct_directories(self):
+        active = peak = 0
+        lock = threading.Lock()
+        directories = []
+        def fake_run(args, **kwargs):
+            nonlocal active, peak
+            is_mutant = kwargs['cwd'].name.startswith('mutant_')
+            if is_mutant:
+                with lock:
+                    active += 1
+                    peak = max(peak, active)
+                    directories.append(str(kwargs['cwd']))
+                time.sleep(.03)
+            Path(args[args.index('--result-json') + 1]).write_text(json.dumps({
+                'schemaVersion': 'generated-test-result-v1', 'testsRun': 1, 'status': 'passed', 'testFailures': []}), encoding='utf-8')
+            if is_mutant:
+                with lock:
+                    active -= 1
+            self.assertNotIn('start_new_session', kwargs)
+            self.assertNotIn('creationflags', kwargs)
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=2)
+        self.assertEqual(peak, 2)
+        self.assertEqual(len(directories), len(set(directories)))
+        self.assertEqual(result['counts']['executed'], result['counts']['available'])
+
+    def test_missing_structured_report_and_fixture_error_cannot_kill(self):
+        def fake_run(args, **kwargs):
+            baseline = kwargs['cwd'].name == 'baseline'
+            if baseline:
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+            return subprocess.CompletedProcess(args, 0 if baseline else 1, '', 'FAIL: guessed.name')
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=1, operator_version='builtin-ast-v1')
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertEqual(result['counts']['error'], 3)
+        self.assertTrue(all('killedBy' not in m for m in result['mutants']))
+
+    def test_real_setup_failures_are_errors_without_killing_test_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, tests = root / 'sample.py', root / 'test_sample.py'
+            source.write_text('def target(x):\n    return x + 1\n', encoding='utf-8')
+            tests.write_text('import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
+                             '    def setUp(self): self.assertEqual(target(3), 4)\n'
+                             '    def test_value(self): self.assertTrue(True)\n', encoding='utf-8')
+            result = runner.run_mutation_trials(source, tests, max_mutations=0, target_function='target',
+                                               operator_version='builtin-ast-v1', workers=2)
+        self.assertTrue(result['baseline_passed'])
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertEqual(result['counts']['error'], 3)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertTrue(all('killedBy' not in m for m in result['mutants']))
+
+    def test_optional_external_metadata_cannot_claim_unexecuted_kills(self):
+        def provider(tree, scope, source_hash, scope_name, scope_version):
+            variant = ast.unparse(runner.apply_mutation(tree, 0, 'target'))
+            return {'engine': 'mutatest', 'engineVersion': '3.1.0', 'operatorSetVersion': 'test-provider-v1',
+                    'excluded': {'noop': 2, 'duplicate': 3, 'invalid': 4},
+                    'candidates': [({'id': 'a' * 64, 'kind': 'return', 'line': 2, 'column': 4, 'position': 0,
+                                     'from': 'return', 'to': 'None', 'killedBy': ['invented.test'], 'elapsedMs': 999}, variant)]}
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.measure(Path(directory), candidate_provider=provider)
+        self.assertEqual(result['excluded'], {'noop': 2, 'duplicate': 3, 'invalid': 4})
+        self.assertEqual(result['engine'], 'mutatest')
+        self.assertEqual(result['engineVersion'], '3.1.0')
+        self.assertEqual(result['mutants'][0]['killedBy'], ['test_sample.Cases.test_value'])
+
+    def test_external_provider_failure_preserves_only_safe_reason_code(self):
+        class Unavailable(Exception):
+            reason_code = 'unsupported-version'
+        def provider(*args):
+            raise Unavailable('private arbitrary response')
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.measure(Path(directory), candidate_provider=provider)
+        self.assertEqual(result['status'], 'failed')
+        self.assertIsNone(result['counts']['available'])
+        self.assertEqual(result['diagnosticCode'], 'unsupported-version')
+        self.assertNotIn('private', json.dumps(result))
+
+    def test_deadline_keeps_unstarted_candidates_and_timeout_out_of_killed(self):
+        def fake_run(args, **kwargs):
+            if kwargs['cwd'].name == 'baseline':
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            time.sleep(kwargs['timeout'] + .01)
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=2, stage_timeout_seconds=.2)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertLessEqual(result['counts']['executed'], 2)
+        self.assertGreater(result['counts']['notRun'], 0)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertTrue(all('killedBy' not in m for m in result['mutants']))
+
+    def test_cold_baseline_allowance_is_shared_by_builtin_and_external_candidates(self):
+        def provider(tree, scope, *args):
+            return {'engine': 'mutatest', 'engineVersion': '3.1.0', 'operatorSetVersion': 'test-provider-v1',
+                    'candidates': [({'id': 'a' * 64, 'kind': 'return', 'line': 2, 'column': 4, 'position': 0,
+                                     'from': 'return', 'to': 'None'}, ast.unparse(runner.apply_mutation(tree, 0, 'target')))]}
+        for candidate_provider in (None, provider):
+            clock, allocations = [0.0], []
+            def fake_run(args, **kwargs):
+                baseline = kwargs['cwd'].name == 'baseline'
+                allocations.append((baseline, kwargs['timeout']))
+                clock[0] += 6 if baseline else .1
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(runner.subprocess, 'run', side_effect=fake_run):
+                result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=60,
+                                      candidate_provider=candidate_provider)
+            self.assertEqual(result['baselineStatus'], 'passed')
+            self.assertEqual(result['baselineTimeoutSeconds'], 20)
+            self.assertEqual(result['baselineAllocatedSeconds'], 20)
+            self.assertEqual(result['baselineElapsedMs'], 6000)
+            self.assertEqual(allocations[0], (True, 20))
+            self.assertEqual(result['mutantTimeoutPolicy'], 'baseline-calibrated-v1')
+            self.assertEqual(result['configuredMutantTimeoutSeconds'], 5)
+            self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
+            self.assertTrue(all(timeout == 13 for _, timeout in allocations[1:]))
+            self.assertTrue(all(mutant['allocatedSeconds'] == 13 for mutant in result['mutants']))
+            self.assertEqual(result['counts']['killed'], 0)
+
+    def test_cold_mutants_receive_baseline_calibration_with_identical_serial_and_parallel_policy(self):
+        def provider(tree, scope, *args):
+            return {'engine': 'mutatest', 'engineVersion': '3.1.0', 'operatorSetVersion': 'test-provider-v1',
+                    'candidates': [({'id': 'a' * 64, 'kind': 'return', 'line': 2, 'column': 4, 'position': 0,
+                                     'from': 'return', 'to': 'None'}, ast.unparse(runner.apply_mutation(tree, 0, 'target')))]}
+        for workers in (1, 4):
+            clock = [0.0]
+            def fake_run(args, **kwargs):
+                duration = 5.158 if kwargs['cwd'].name == 'baseline' else 6
+                if kwargs['timeout'] < duration:
+                    clock[0] += kwargs['timeout']
+                    raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+                clock[0] += duration
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(runner.subprocess, 'run', side_effect=fake_run):
+                result = self.measure(Path(directory), workers=workers, timeout_seconds=5, stage_timeout_seconds=60,
+                                      candidate_provider=provider)
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual(result['effectiveMutantTimeoutSeconds'], 11.316)
+            self.assertEqual(result['mutants'][0]['allocatedSeconds'], 11.316)
+            self.assertEqual(result['counts']['survived'], 1)
+            self.assertEqual(result['counts']['timeout'], 0)
+
+    def test_short_stage_remainder_starts_no_mutant_below_the_successful_baseline_cost(self):
+        clock = [0.0]
+        def fake_run(args, **kwargs):
+            if kwargs['cwd'].name == 'baseline':
+                clock[0] += 6
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            self.fail('A mutant must not start with only two seconds after a six-second baseline')
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=8)
+        self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
+        self.assertTrue(all('allocatedSeconds' not in mutant for mutant in result['mutants']))
+        self.assertEqual(result['counts']['executed'], 0)
+        self.assertEqual(result['counts']['timeout'], 0)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertGreater(result['counts']['notRun'], 0)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertEqual(result['elapsedMs'], 6000)
+        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['diagnosticCode'], 'mutation-stage-budget-insufficient')
+
+    def test_a_started_hanging_mutant_still_times_out_without_extending_the_original_stage(self):
+        clock = [0.0]
+        def fake_run(args, **kwargs):
+            if kwargs['cwd'].name == 'baseline':
+                clock[0] += 6
+                Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                    'status': 'passed', 'testFailures': []}), encoding='utf-8')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            self.assertEqual(kwargs['timeout'], 7)
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner.subprocess, 'run', side_effect=fake_run):
+            result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=13)
+        self.assertEqual(result['effectiveMutantTimeoutSeconds'], 13)
+        self.assertEqual(result['mutants'][0]['allocatedSeconds'], 7)
+        self.assertEqual(result['counts']['timeout'], 1)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertGreater(result['counts']['notRun'], 0)
+        self.assertFalse(result['scoreAvailable'])
+        self.assertEqual(result['elapsedMs'], 13000)
+
+    def test_mutant_setup_rechecks_admission_against_remaining_stage_after_copying(self):
+        clock = [0.0]
+        prepare = runner.prepare_trial_directory
+        def slow_mutant_setup(*args):
+            prepared = prepare(*args)
+            if args[2].name.startswith('mutant_'):
+                clock[0] += .6
+            return prepared
+        def baseline(args, **kwargs):
+            self.assertEqual(kwargs['cwd'].name, 'baseline')
+            clock[0] += 1
+            Path(args[-1]).write_text(json.dumps({'schemaVersion': 'generated-test-result-v1', 'testsRun': 1,
+                                                'status': 'passed', 'testFailures': []}), encoding='utf-8')
+            return subprocess.CompletedProcess(args, 0, '', '')
+        for workers in (1, 2):
+            clock[0] = 0
+            with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(runner, 'prepare_trial_directory', side_effect=slow_mutant_setup), \
+                    patch.object(runner.subprocess, 'run', side_effect=baseline) as run:
+                result = self.measure(Path(directory), workers=workers, timeout_seconds=5, stage_timeout_seconds=2.5)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(result['counts']['executed'], 0)
+            self.assertEqual(result['counts']['timeout'], 0)
+            self.assertFalse(result['scoreAvailable'])
+            self.assertEqual(result['counts']['notRun'], result['counts']['selected'])
+
+    def test_real_fresh_import_cost_no_longer_times_out_every_mutant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, tests = root / 'sample.py', root / 'test_sample.py'
+            source.write_text('import time\ntime.sleep(0.2)\ndef target(x): return x + 1\n', encoding='utf-8')
+            tests.write_text('import unittest\nfrom sample import target\nclass Cases(unittest.TestCase):\n'
+                             '    def test_value(self): self.assertEqual(target(3), 4)\n', encoding='utf-8')
+            result = runner.run_mutation_trials(source, tests, max_mutations=0, target_function='target',
+                                               timeout_seconds=.05, stage_timeout_seconds=20, workers=2,
+                                               operator_version='builtin-ast-v1')
+        self.assertEqual(result['baselineStatus'], 'passed', result.get('baseline_output'))
+        self.assertGreaterEqual(result['baselineElapsedMs'], 200)
+        self.assertGreater(result['effectiveMutantTimeoutSeconds'], .05)
+        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['counts']['timeout'], 0)
+        self.assertEqual(result['counts']['killed'], 3)
+
+    def test_cold_baseline_uses_only_remaining_stage_time_and_timeout_never_kills(self):
+        clock = [0.0]
+        prepare = runner.prepare_trial_directory
+        def slow_setup(*args):
+            result = prepare(*args)
+            clock[0] += 2.25
+            return result
+        def timed_out(args, **kwargs):
+            self.assertAlmostEqual(kwargs['timeout'], .75)
+            clock[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(args, kwargs['timeout'])
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner, 'prepare_trial_directory', side_effect=slow_setup), \
+                patch.object(runner.subprocess, 'run', side_effect=timed_out) as run:
+            result = self.measure(Path(directory), workers=1, timeout_seconds=5, stage_timeout_seconds=3)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(result['baselineAllocatedSeconds'], .75)
+        self.assertEqual(result['baselineElapsedMs'], 750)
+        self.assertEqual(result['elapsedMs'], 3000)
+        self.assertEqual(result['baselineStatus'], 'timeout')
+        self.assertNotIn('effectiveMutantTimeoutSeconds', result)
+        self.assertEqual(result['counts']['executed'], 0)
+        self.assertEqual(result['counts']['killed'], 0)
+        self.assertEqual(result['counts']['notRun'], result['counts']['selected'])
+        self.assertFalse(result['scoreAvailable'])
+        self.assertIn('0.750s', result['baseline_output'])
+
+    def test_exhausted_setup_budget_starts_no_baseline(self):
+        clock = [0.0]
+        prepare = runner.prepare_trial_directory
+        def slow_setup(*args):
+            result = prepare(*args)
+            clock[0] = 3
+            return result
+        with tempfile.TemporaryDirectory() as directory, patch.object(runner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(runner, 'prepare_trial_directory', side_effect=slow_setup), \
+                patch.object(runner.subprocess, 'run') as run:
+            result = self.measure(Path(directory), stage_timeout_seconds=3)
+        run.assert_not_called()
+        self.assertEqual(result['baselineStatus'], 'not-run')
+        self.assertEqual(result['baselineAllocatedSeconds'], 0)
+        self.assertEqual(result['baselineElapsedMs'], 0)
+        self.assertFalse(result['scoreAvailable'])
+
+    def test_invalid_workers_and_versions_are_rejected(self):
+        for workers in (0, 5, True, 1.5):
+            with self.assertRaises(ValueError):
+                runner.run_mutation_trials('missing', 'missing', workers=workers)
+        with self.assertRaises(ValueError):
+            runner.run_mutation_trials('missing', 'missing', operator_version='unknown')
+        for budget in (0, -1, True, float('inf'), float('nan')):
+            for key in ('timeout_seconds', 'stage_timeout_seconds'):
+                with self.subTest(key=key, budget=budget), self.assertRaises(ValueError):
+                    runner.run_mutation_trials('missing', 'missing', **{key: budget})
+
+
+class StructuredTestResultsTests(unittest.TestCase):
+    def invoke(self, source):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'test_sample.py').write_text(source, encoding='utf-8')
+            result = subprocess.run([sys.executable, '-B', str(Path(runner.__file__).with_name('generated_test_runner.py')),
+                                     'test_sample', '--result-json', str(root / 'result.json')], cwd=root,
+                                    capture_output=True, text=True, encoding='utf-8', timeout=15,
+                                    env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+            return result.returncode, json.loads((root / 'result.json').read_text(encoding='utf-8'))
+
+    def test_failure_error_and_subtest_ids_do_not_include_exception_or_parameters(self):
+        code, result = self.invoke('import unittest\nclass Cases(unittest.TestCase):\n'
+                                   '    def test_failure(self): self.assertEqual(1, 2, "private message")\n'
+                                   '    def test_error(self): raise ValueError("private exception")\n'
+                                   '    def test_subtest(self):\n'
+                                   '        with self.subTest(value="private parameter"): self.assertTrue(False)\n')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual({r['testId'] for r in result['testFailures']}, {
+            'test_sample.Cases.test_failure', 'test_sample.Cases.test_error', 'test_sample.Cases.test_subtest'})
+        self.assertNotIn('private', json.dumps(result))
+
+    def test_loader_setup_cleanup_and_zero_tests_are_not_actual_test_failures(self):
+        sources = [
+            'raise ValueError("load failure")\n',
+            'import unittest\nclass Cases(unittest.TestCase):\n    def setUp(self): raise ValueError()\n    def test_one(self): pass\n',
+            'import unittest\nclass Cases(unittest.TestCase):\n    def tearDown(self): raise ValueError()\n    def test_one(self): pass\n',
+            'import unittest\nclass Cases(unittest.TestCase):\n    def setUp(self):\n        with self.subTest(): self.assertTrue(False)\n    def test_one(self): pass\n',
+            'import unittest\nclass Cases(unittest.IsolatedAsyncioTestCase):\n    async def asyncSetUp(self): raise ValueError()\n    async def test_one(self): pass\n',
+            'import unittest\n',
+        ]
+        for source in sources:
+            code, result = self.invoke(source)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(result['status'], 'runner-error')
+
+    def test_background_error_with_a_failed_test_is_not_a_kill(self):
+        code, result = self.invoke('import unittest, threading\nclass Cases(unittest.TestCase):\n'
+                                   '    def test_background(self):\n'
+                                   '        def worker(): raise ValueError("background")\n'
+                                   '        thread = threading.Thread(target=worker)\n'
+                                   '        thread.start()\n        thread.join()\n'
+                                   '        self.assertTrue(False)\n')
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'runner-error')
+        self.assertEqual(result['testFailures'], [])
+
+    def test_isolation_violation_is_not_a_kill(self):
+        code, result = self.invoke('import unittest\nclass Cases(unittest.TestCase):\n'
+                                   '    def test_io(self): open("forbidden.txt", "w")\n')
+        self.assertEqual(code, 86)
+        self.assertEqual(result['status'], 'isolation-blocked')
+        self.assertEqual(result['testFailures'], [])
+
+
+class MutationV3Tests(unittest.TestCase):
+    def test_v3_keeps_every_v2_variant_and_adds_only_the_standalone_call(self):
+        from mutation_operators_v3 import iter_mutations as variants_v3
+        tree = ast.parse('def target(items):\n    record(items)\n    return 1\n')
+        previous = [(record, ast.dump(variant)) for record, variant in iter_mutations(tree, tree.body[0])]
+        current = [(record, ast.dump(variant)) for record, variant in variants_v3(tree, tree.body[0])]
+        self.assertEqual(current[:len(previous)], previous)
+        self.assertEqual(len(current), len(previous) + 1)
+        self.assertEqual(current[-1][0]['kind'], 'call_statement_omission')
+        self.assertEqual(current[-1][0]['line'], 2)
+
+    def test_call_omission_respects_body_scope_and_does_not_duplicate_argument_evaluation(self):
+        from mutation_operators_v3 import iter_mutations as variants_v3
+        text = ('@decorate(build())\ndef target(sink=setup()):\n'
+                '    """preserved docs"""\n    def nested(): hidden()\n'
+                '    class Nested:\n        def method(self): hidden()\n'
+                '    sink.append(make())\n')
+        tree = ast.parse(text)
+        omissions = [(record, variant) for record, variant in variants_v3(tree, tree.body[0])
+                     if record['kind'] == 'call_statement_omission']
+        self.assertEqual(len(omissions), 1)
+        record, variant = omissions[0]
+        self.assertEqual(record['line'], 7)
+        calls = []
+        namespace = {'decorate': lambda _value: lambda function: function, 'build': lambda: None,
+                     'setup': lambda: None, 'make': lambda: calls.append('argument')}
+        exec(compile(variant, '<neutral-call-omission>', 'exec'), namespace)
+        sink = []
+        namespace['target'](sink)
+        self.assertEqual((sink, calls), ([], []))
+        self.assertEqual(ast.dump(variant.body[0].body[1]), ast.dump(tree.body[0].body[1]))
+        self.assertEqual(ast.dump(variant.body[0].body[2]), ast.dump(tree.body[0].body[2]))
+
+    def measure(self, *, strong=True, workers=2, version='builtin-ast-v3', async_method=False, no_calls=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, tests = root / 'sample.py', root / 'test_sample.py'
+            helpers = ('def first(items): items.append("first")\n'
+                       'def second(items): items.append("second")\n')
+            call = 'target(items)'
+            imports = 'from sample import target\n'
+            target = 'target'
+            if async_method:
+                helpers = helpers.replace('def ', 'async def ')
+                body = ('class Worker:\n    def __init__(self, items): self.items = items\n'
+                        '    async def target(self):\n        await first(self.items)\n        await second(self.items)\n')
+                call, imports, target = 'asyncio.run(Worker(items).target())', 'import asyncio\nfrom sample import Worker\n', 'Worker.target'
+            else:
+                body = 'def target(items):\n' + ('    pass\n' if no_calls else '    first(items)\n    second(items)\n')
+            source.write_text(helpers + body, encoding='utf-8')
+            assertion = ('self.assertEqual(items, ["first", "second"])' if strong and not no_calls
+                         else 'self.assertIsInstance(items, list)')
+            tests.write_text('import unittest\n' + imports + 'class Cases(unittest.TestCase):\n'
+                             '    def test_effects(self):\n        items = []\n        ' + call + '\n        ' + assertion + '\n',
+                             encoding='utf-8')
+            before = source.read_bytes()
+            result = runner.run_mutation_trials(source, tests, max_mutations=0, target_function=target,
+                                                operator_version=version, workers=workers, stage_timeout_seconds=30)
+            self.assertEqual(source.read_bytes(), before)
+            return result
+
+    def test_real_call_omissions_are_killed_with_unique_attribution_and_stable_ids(self):
+        serial = self.measure(workers=1)
+        parallel = self.measure(workers=2)
+        for run in (serial, parallel):
+            self.assertEqual(run['operatorSetVersion'], 'builtin-ast-v3')
+            self.assertEqual(run['status'], 'complete', run.get('baseline_output'))
+            self.assertEqual((run['counts']['available'], run['counts']['killed']), (2, 2))
+            self.assertTrue(all(item['killedBy'] == ['test_sample.Cases.test_effects'] for item in run['mutants']))
+        self.assertEqual(serial['candidateIds'], parallel['candidateIds'])
+
+    def test_weak_effect_assertions_leave_real_survivors_and_legacy_v2_stays_empty(self):
+        weak = self.measure(strong=False)
+        self.assertEqual(weak['status'], 'complete')
+        self.assertEqual((weak['counts']['killed'], weak['counts']['survived']), (0, 2))
+        old = self.measure(version='builtin-ast-v2')
+        self.assertEqual(old['status'], 'no-candidates')
+        self.assertEqual(old['counts']['available'], 0)
+        self.assertFalse(old['scoreAvailable'])
+
+    def test_async_instance_method_with_required_constructor_executes_each_omission(self):
+        result = self.measure(async_method=True)
+        self.assertEqual(result['status'], 'complete', result.get('baseline_output'))
+        self.assertEqual((result['counts']['available'], result['counts']['killed']), (2, 2))
+        self.assertTrue(all(item['from'] == 'await_call' for item in result['mutants']))
+
+    def test_v3_noop_body_remains_unscored(self):
+        result = self.measure(no_calls=True)
+        self.assertEqual(result['status'], 'no-candidates')
+        self.assertEqual(result['counts']['available'], 0)
+        self.assertFalse(result['scoreAvailable'])
+
+
+if __name__ == '__main__':
+    unittest.main()

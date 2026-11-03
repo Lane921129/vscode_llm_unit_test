@@ -1,0 +1,648 @@
+"""One fail-closed external-operation policy for all Python execution phases.
+
+Only import/traceback source reads, stdlib asyncio socketpair plumbing, guarded
+independent in-memory SQLite and explicitly declared app resource operations are
+permitted. This process-local audit guard is not an OS sandbox for hostile native
+extensions. Generated tests still use mocks instead of direct filesystem I/O.
+"""
+from contextlib import contextmanager, ExitStack
+import ast
+import hashlib
+import builtins
+import errno
+import importlib._bootstrap_external
+import importlib.metadata
+import importlib.machinery
+import linecache
+import io
+import os
+import ntpath
+import platform
+import socket
+import site
+import sqlite3
+import sys
+import threading
+import tokenize
+import traceback
+import types
+import sysconfig
+import warnings
+from pathlib import Path
+from unittest.mock import patch
+from trace_value_codec import type_field
+from import_fixtures import ImportFixtures
+from isolated_resources import (for_plan as isolated_resources_for_plan, is_redirect_frame,
+                                is_unc_or_device, absolute as resource_absolute, inside as resource_inside,
+                                _LogicalScandir)
+
+POLICY_VERSION = 'python-execution-policy-v1'
+ISOLATION_EXIT_CODE = 86
+ISOLATION_MARKER = 'TEST_ISOLATION_BLOCKED'
+_active = None
+_WINDOWS_VER_PROBE = getattr(platform, '_syscmd_ver', None)
+_WINDOWS_VER_SNAPSHOT = None
+_THREAD_BOOTSTRAP_CODE = threading.Thread._bootstrap_inner.__code__
+_THREAD_START_CODE = threading.Thread.start.__code__
+_CURRENT_FRAMES = sys._current_frames
+_THREAD_EXCEPT_ARGS = threading.ExceptHookArgs
+_WAIT_EVENT = threading.Event
+_LOADER_GET_DATA_CODE = importlib._bootstrap_external.FileLoader.get_data.__code__
+_TOKENIZE_OPEN_CODE = tokenize.open.__code__
+_WARNING_FORMAT_CODE = getattr(getattr(warnings, '_formatwarnmsg_impl', None), '__code__', None)
+_WARNING_MESSAGE_TYPE = warnings.WarningMessage
+_SOURCE_TO_CODE_CODE = importlib._bootstrap_external.SourceLoader.source_to_code.__code__
+_LINECACHE_CODES = {value.__code__ for value in vars(linecache).values() if type(value) is types.FunctionType}
+_TRACEBACK_CODES = {value.__code__ for value in vars(traceback).values() if type(value) is types.FunctionType}
+for _owner in (traceback.FrameSummary, traceback.StackSummary, traceback.TracebackException):
+    for _value in vars(_owner).values():
+        if type(_value) is property:
+            _value = _value.fget
+        elif type(_value) in (classmethod, staticmethod):
+            _value = _value.__func__
+        if type(_value) is types.FunctionType:
+            _TRACEBACK_CODES.add(_value.__code__)
+_AST_PARSE_CODE = ast.parse.__code__
+_METADATA_READ_CODE = importlib.metadata.PathDistribution.read_text.__code__
+_METADATA_ZIP_CODE = importlib.metadata.FastPath.zip_children.__code__
+_METADATA_FILES = None
+_PACKAGE_ROOTS = tuple(os.path.normcase(os.path.realpath(directory)) for directory in
+                       {sysconfig.get_path('purelib'), sysconfig.get_path('platlib'),
+                        site.getusersitepackages() if site.ENABLE_USER_SITE else None} if directory)
+_SOURCE_LOADER = importlib._bootstrap_external.SourceFileLoader
+_STDLIB_ARCHIVES = {os.path.normcase(os.path.realpath(str(base / f'python{sys.version_info.major}{sys.version_info.minor}.zip')))
+                    for base in (Path(sys.base_prefix), Path(sysconfig.get_path('stdlib')).parent)}
+
+
+def _prepare_metadata_reads():
+    """Only standard metadata in this interpreter's installed package directories."""
+    global _METADATA_FILES
+    if _METADATA_FILES is not None:
+        return
+    permitted = set()
+    for directory in {sysconfig.get_path('purelib'), sysconfig.get_path('platlib')}:
+        if not directory:
+            continue
+        root = Path(directory).resolve()
+        for pattern in ('*.dist-info', '*.egg-info'):
+            for metadata in root.glob(pattern):
+                if metadata.is_symlink() or not metadata.is_dir():
+                    continue
+                for name in ('METADATA', 'PKG-INFO', 'entry_points.txt', 'top_level.txt', 'WHEEL', 'RECORD'):
+                    file = (metadata / name).resolve()
+                    if file.is_relative_to(root):
+                        permitted.add(os.path.normcase(str(file)))
+    _METADATA_FILES = permitted
+
+
+def _prepare_windows_version_probe():
+    """Snapshot only the stdlib's fixed host `ver` probe before app execution.
+
+    platform.win32_ver() can launch a shell even for platform.machine() during
+    a dependency import. Replay its real host result without exempting any
+    subprocess or device operation inside the execution guard. Respect the
+    original helper's fallback/default arguments; never invent an OS version.
+    """
+    global _WINDOWS_VER_SNAPSHOT
+    if sys.platform != 'win32' or _WINDOWS_VER_PROBE is None:
+        return None
+    if _WINDOWS_VER_SNAPSHOT is None:
+        _WINDOWS_VER_SNAPSHOT = _WINDOWS_VER_PROBE()
+    snapshot = _WINDOWS_VER_SNAPSHOT
+
+    def cached_ver(system='', release='', version='',
+                   supported_platforms=('win32', 'win16', 'dos')):
+        if sys.platform not in supported_platforms or snapshot == ('', '', ''):
+            return system, release, version
+        return snapshot
+
+    return cached_ver
+
+
+def _package_metadata_read(filename, frame):
+    if not isinstance(filename, (str, bytes, os.PathLike)):
+        return False
+    if is_unc_or_device(filename):
+        return False
+    filename = os.path.normcase(os.path.realpath(os.fsdecode(filename)))
+    owner = _METADATA_ZIP_CODE if filename in _STDLIB_ARCHIVES else _METADATA_READ_CODE
+    if filename not in (_METADATA_FILES or ()) and filename not in _STDLIB_ARCHIVES:
+        return False
+    for _ in range(12):
+        if frame is None:
+            break
+        if frame.f_code is owner:
+            return True
+        frame = frame.f_back
+    return False
+
+
+class RuntimePolicyError(RuntimeError):
+    prefix = f'{ISOLATION_MARKER}: '
+    suffix = '; mock the dependency at its target use point.'
+
+    def __init__(self, operation):
+        self.operation = operation
+        super().__init__(self.prefix + operation + self.suffix)
+
+
+class BackgroundExecutionError(RuntimeError):
+    """Uncaught background exceptions invalidate a successful foreground call."""
+    def __init__(self, failures):
+        self.failures = tuple(failures[:10])
+        super().__init__('Background execution failed: ' + ', '.join(self.failures))
+
+
+def block_operation(operation, error_type=RuntimePolicyError, resource=None):
+    """Record before raising so application code cannot swallow a violation."""
+    if _active is not None:
+        _active['violations'].append(operation)
+        error_type = _active['error_type']
+    error = error_type(operation)
+    if type(resource) in (str, bytes):
+        raw = resource if type(resource) is bytes else resource.encode('utf-8', errors='surrogatepass')
+        # Never persist original paths, URLs, contents or credential-bearing names.
+        error.resource_diagnostic = {'id': 'resource-' + hashlib.sha256(raw).hexdigest()[:16],
+                                     'fixtureType': 'sqlite' if 'SQLite' in operation or operation == 'resource-schema-required' else
+                                     'directory' if operation in ('os.mkdir', 'os.listdir', 'os.scandir') else 'text'}
+    if _active is not None and _active['first_error'] is None:
+        _active['first_error'] = error
+    raise error
+
+
+class _ResourceCursor(sqlite3.Cursor):
+    def execute(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        try:
+            return super().execute(*args, **kwargs)
+        except sqlite3.OperationalError as error:
+            self.connection._check_resource_schema(error)
+            raise
+
+    def executemany(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        try:
+            return super().executemany(*args, **kwargs)
+        except sqlite3.OperationalError as error:
+            self.connection._check_resource_schema(error)
+            raise
+
+    def executescript(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        try:
+            return super().executescript(*args, **kwargs)
+        except sqlite3.OperationalError as error:
+            self.connection._check_resource_schema(error)
+            raise
+
+    def fetchone(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        return super().fetchone(*args, **kwargs)
+
+    def fetchmany(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        return super().fetchmany(*args, **kwargs)
+
+    def fetchall(self, *args, **kwargs):
+        self.connection._require_resource_caller()
+        return super().fetchall(*args, **kwargs)
+
+    def __next__(self):
+        self.connection._require_resource_caller()
+        return super().__next__()
+
+
+class _MemoryConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        self._isolated_file_resource = (args[0] if args else kwargs.get('database')) != ':memory:'
+        self._resource_owner = _active.get('resources') if _active else None
+        super().__init__(*args, **kwargs)
+        # Temporary sort tables must not create files in the user's TEMP. The
+        # database and its journals remain inside the owned resource directory.
+        super().execute('PRAGMA temp_store=MEMORY')
+
+        def authorize(action, *_args):
+            if action == sqlite3.SQLITE_ATTACH:
+                if _active is not None:
+                    _active['violations'].append('SQLite ATTACH / VACUUM INTO')
+                return sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_PRAGMA and _args and str(_args[0]).lower() in (
+                    'temp_store_directory', 'data_store_directory') or (
+                    action == sqlite3.SQLITE_PRAGMA and len(_args) > 1
+                    and str(_args[0]).lower() == 'temp_store' and _args[1] is not None):
+                if _active is not None:
+                    _active['violations'].append('SQLite external temporary directory')
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        super().set_authorizer(authorize)
+
+    def set_authorizer(self, *args, **kwargs):
+        block_operation('replacing SQLite isolation authorizer')
+
+    def _check_resource_schema(self, error):
+        if (self._isolated_file_resource and getattr(error, 'sqlite_errorcode', None) == sqlite3.SQLITE_ERROR
+                and str(error).lower().startswith(('no such table:', 'no such column:'))):
+            # An absent declared schema is setup evidence, never an assertion
+            # oracle manufactured from the tool's empty database.
+            block_operation('resource-schema-required', resource=getattr(self, '_resource_logical_name', None))
+
+    def _require_resource_caller(self):
+        if self._isolated_file_resource and self._resource_owner:
+            self._resource_owner.require_application_caller()
+
+    def cursor(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            self._require_resource_caller()
+            if args or kwargs:
+                block_operation('custom isolated SQLite cursor factory')
+            return super().cursor(factory=_ResourceCursor)
+        return super().cursor(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            return self.cursor().execute(*args, **kwargs)
+        return super().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            return self.cursor().executemany(*args, **kwargs)
+        return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        if self._isolated_file_resource:
+            return self.cursor().executescript(*args, **kwargs)
+        return super().executescript(*args, **kwargs)
+
+    def commit(self):
+        self._require_resource_caller()
+        return super().commit()
+
+    def rollback(self):
+        self._require_resource_caller()
+        return super().rollback()
+
+    def __enter__(self):
+        self._require_resource_caller()
+        return super().__enter__()
+
+    def __exit__(self, *args):
+        self._require_resource_caller()
+        return super().__exit__(*args)
+
+
+def _import_or_traceback_read(filename):
+    # The direct operation owner must be the loader or traceback reader. An
+    # application frame deeper under an import does not obtain read permission.
+    frame = sys._getframe(2)
+    while frame and (frame.f_code.co_filename == __file__ or is_redirect_frame(frame)):
+        frame = frame.f_back
+    if not frame:
+        return False
+    if _package_metadata_read(filename, frame):
+        return True
+    if filename == '<unknown>' and frame.f_code is _AST_PARSE_CODE:
+        caller = frame.f_back
+        return bool(caller and caller.f_code in _TRACEBACK_CODES)
+    if frame.f_code is _LOADER_GET_DATA_CODE:
+        return True
+    if frame.f_code is _TOKENIZE_OPEN_CODE:
+        frame = frame.f_back
+    # linecache is a general-purpose reader; calling getline() from an
+    # application must not turn arbitrary file contents into allowed input.
+    while frame and frame.f_code in _LINECACHE_CODES:
+        frame = frame.f_back
+    if frame and frame.f_code is _WARNING_FORMAT_CODE:
+        message = frame.f_locals.get('msg')
+        if type(message) is not _WARNING_MESSAGE_TYPE:
+            return False
+        details = vars(message)
+        if details.get('category') is not SyntaxWarning or details.get('filename') != filename:
+            return False
+        # Python's compiler warning formatter reads the same source through
+        # linecache. Require the actual source-loader compilation on the stack;
+        # application warn_explicit/getline calls gain no general read access.
+        caller = frame.f_back
+        for _ in range(64):
+            if caller is None:
+                break
+            if caller.f_code is _SOURCE_TO_CODE_CODE:
+                return True
+            caller = caller.f_back
+        return False
+    return bool(frame and frame.f_code in _TRACEBACK_CODES)
+
+
+def _asyncio_socketpair():
+    # Windows socketpair needs a loopback listener. This narrow stdlib frame
+    # exception never permits arbitrary application loopback connections.
+    frame = sys._getframe(2)
+    while frame:
+        if frame.f_globals.get('__name__') == 'socket' and frame.f_code.co_name == '_fallback_socketpair':
+            return True
+        frame = frame.f_back
+    return False
+
+
+def _installed_import_probe(frame):
+    """Prove installed source is probing while its own module is being imported.
+
+    This only authorizes a synthetic *failure*, never an OS bind. Filename,
+    module name and an import somewhere on the stack alone are not evidence.
+    """
+    if _active is None or not frame or type(frame.f_code.co_filename) is not str:
+        return False
+    filename = frame.f_code.co_filename
+    if is_unc_or_device(filename) or not os.path.isabs(filename):
+        return False
+    filename = os.path.normcase(os.path.realpath(filename))
+    if not any(filename.startswith(root + os.sep) for root in _PACKAGE_ROOTS):
+        return False
+    namespace = frame.f_globals
+    spec = namespace.get('__spec__')
+    if type(spec) is not importlib.machinery.ModuleSpec or not getattr(spec, '_initializing', False):
+        return False
+    if type(spec.loader) is not _SOURCE_LOADER or type(spec.origin) is not str:
+        return False
+    if os.path.normcase(os.path.realpath(spec.origin)) != filename:
+        return False
+    module = sys.modules.get(spec.name)
+    if type(module) is not types.ModuleType or module.__dict__ is not namespace:
+        return False
+    module_frame = frame
+    for _ in range(64):
+        if module_frame is None:
+            return False
+        if module_frame.f_globals is namespace and module_frame.f_code.co_name == '<module>':
+            break
+        module_frame = module_frame.f_back
+    else:
+        return False
+    # Read through the pinned loader API already permitted by the audit policy;
+    # compiling does not import/evaluate the source or grant application I/O.
+    try:
+        source = _SOURCE_LOADER(spec.name, filename).get_data(filename)
+        if len(source) > 1024 * 1024:
+            return False
+        compiled = compile(source, frame.f_code.co_filename, 'exec', dont_inherit=True)
+    except (OSError, SyntaxError, ValueError):
+        return False
+    if compiled != module_frame.f_code:
+        return False
+    pending = [compiled]
+    while pending:
+        code = pending.pop()
+        if code == frame.f_code:
+            return True
+        pending.extend(value for value in code.co_consts if type(value) is types.CodeType)
+    return False
+
+
+def _probe_bind(sock, address):
+    # Exact literals avoid DNS, wildcard listeners and user-defined conversions.
+    if (type(address) is tuple and len(address) == 2 and type(address[0]) is str
+            and address[0] in ('127.0.0.1', '::1') and type(address[1]) is int and address[1] == 0
+            and _installed_import_probe(sys._getframe(1))):
+        raise OSError(errno.EAFNOSUPPORT, 'Network capability unavailable in isolated execution')
+    return _SOCKET_BIND(sock, address)
+
+
+_SOCKET_BIND = socket.socket.bind
+
+
+def _audit(event, args):
+    if _active is None:
+        return
+    if event in ('_thread.start_new_thread', '_thread.start_joinable_thread'):
+        # Thread.start waits for its bootstrap handshake. A raw low-level start
+        # can return before a child frame exists and evade the drain boundary.
+        if sys._getframe(1).f_code is not _THREAD_START_CODE:
+            block_operation('unmanaged low-level thread startup')
+    if event == 'sys.setprofile' and _active['protect_profile']:
+        frame = sys._getframe(1)
+        if not (frame.f_code is _THREAD_BOOTSTRAP_CODE
+                and frame.f_globals.get('_profile_hook') is _active['thread_profile']):
+            block_operation('replacing execution observer')
+    resources = _active.get('resources')
+    resource_operation = bool(resources and resources.allows_audit(event, args)) if event in (
+        'open', 'sqlite3.connect', 'os.remove', 'os.rename', 'os.rmdir', 'os.mkdir') else False
+    if event in ('open', 'sqlite3.connect', 'os.listdir', 'os.scandir') and args and is_unc_or_device(args[0]):
+        # Import/traceback permissions never extend to an original network path.
+        # Approved normal API calls have already become local physical paths.
+        block_operation('unapproved UNC or device filesystem access', resource=args[0])
+    if event == 'sqlite3.connect' and not (type(args[0]) is str and args[0] == ':memory:') and not resource_operation:
+        block_operation('non-isolated SQLite connection', resource=args[0])
+    if event == 'sqlite3.connect/handle' and not isinstance(args[0], _MemoryConnection):
+        block_operation('unguarded SQLite connection factory')
+    if event in ('sqlite3.load_extension', 'sqlite3.enable_load_extension'):
+        block_operation('SQLite extension loading')
+    if event == 'open':
+        mode, flags = args[1], args[2]
+        writing = (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (
+            isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+        if not resource_operation and (writing or not _import_or_traceback_read(args[0])):
+            block_operation('file write' if writing else 'file read', resource=args[0])
+    if event in ('os.remove', 'os.rename', 'os.rmdir', 'os.mkdir', 'os.chmod', 'os.chown',
+                 'os.link', 'os.symlink', 'os.truncate', 'os.utime', 'os.chdir'):
+        if not resource_operation:
+            block_operation(event, resource=args[0] if args else None)
+    if event in ('subprocess.Popen', 'os.system', 'os.exec', 'os.spawn', 'os.posix_spawn', 'os.fork', 'os.forkpty'):
+        block_operation('shell / subprocess')
+    if event in ('socket.connect', 'socket.bind', 'socket.getaddrinfo', 'socket.sendto') and not _asyncio_socketpair():
+        block_operation('network connection')
+
+
+sys.addaudithook(_audit)
+
+
+@contextmanager
+def _guard_unc_metadata(resources):
+    """Block before Windows metadata APIs that have no audit event.
+
+    Patch both public APIs and the known C-function aliases captured by ntpath.
+    This is a standard-library boundary, not a sandbox for arbitrary retained
+    native function pointers or hostile extensions.
+    """
+    def wrap(function, operation, *, resolve=False, unsupported=False, path_key='path', lexical=False):
+        def guarded(*args, **kwargs):
+            value = args[0] if args else kwargs.get(path_key)
+            if not is_unc_or_device(value):
+                return function(*args, **kwargs)
+            if lexical:
+                # GetFullPathName is lexical. Preserve Path.absolute/abspath
+                # without contacting Windows or requiring a resource approval.
+                logical = ntpath.normpath(os.fsdecode(value))
+                return os.fsencode(logical) if isinstance(value, bytes) else logical
+            if unsupported or not resources:
+                block_operation(operation, resource=value)
+            mapped, matched = resources.translate(value, operation)
+            if not matched:
+                block_operation(operation, resource=value)
+            if kwargs.get('dir_fd') is not None or kwargs.get('follow_symlinks') is False:
+                block_operation('unsupported isolated resource descriptor or symlink operation')
+            new_args, new_kwargs = list(args), dict(kwargs)
+            if new_args:
+                new_args[0] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
+            else:
+                new_kwargs[path_key] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
+            with resources.authorize((resource_absolute(mapped),)):
+                try:
+                    result = function(*new_args, **new_kwargs)
+                except OSError as error:
+                    # A missing strict path is about the controlled resource;
+                    # avoid exposing its physical worker directory as evidence.
+                    if getattr(error, 'filename', None) is not None:
+                        error.filename = os.fspath(value)
+                    raise
+            if resolve:
+                resolved = os.fsdecode(result)
+                if resolved.startswith('\\\\?\\'):
+                    resolved = resolved[4:]
+                if not resource_inside(resolved, resources.data):
+                    block_operation('resolved isolated resource escapes worker')
+                logical = ntpath.normpath(os.fsdecode(value))
+                return os.fsencode(logical) if isinstance(value, bytes) else logical
+            if operation in ('os.scandir', 'nt.scandir'):
+                return _LogicalScandir(result, value, resources)
+            return result
+        return guarded
+
+    with ExitStack() as stack:
+        # Path.stat/exists/is_dir/is_file, Path.iterdir and direct os metadata.
+        for name in ('stat', 'lstat', 'listdir', 'scandir', 'access', 'mkdir', 'open', 'remove', 'unlink', 'rmdir'):
+            stack.enter_context(patch.object(os, name, wrap(getattr(os, name), 'os.' + name)))
+        for module in (builtins, io):
+            stack.enter_context(patch.object(module, 'open', wrap(module.open, 'file read/write', path_key='file')))
+        stack.enter_context(patch.object(os.path, 'realpath', wrap(os.path.realpath, 'path.resolve', resolve=True)))
+        for name in ('exists', 'lexists', 'isfile', 'isdir', 'islink', 'isjunction'):
+            if hasattr(os.path, name):
+                stack.enter_context(patch.object(os.path, name, wrap(getattr(os.path, name), 'path.' + name)))
+        for name in ('ismount', 'isdevdrive'):
+            if hasattr(os.path, name):
+                stack.enter_context(patch.object(os.path, name, wrap(getattr(os.path, name), 'path.' + name, unsupported=True)))
+        if hasattr(os, 'readlink'):
+            stack.enter_context(patch.object(os, 'readlink', wrap(os.readlink, 'os.readlink', unsupported=True)))
+        if os.name == 'nt':
+            import nt
+            for module in (nt, ntpath):
+                for name in ('_getfinalpathname', '_getfullpathname', '_path_exists', '_path_lexists', '_path_isfile',
+                             '_path_isdir', '_path_islink', '_path_isjunction'):
+                    if hasattr(module, name):
+                        stack.enter_context(patch.object(module, name, wrap(getattr(module, name), 'nt.' + name,
+                            resolve=name == '_getfinalpathname', lexical=name == '_getfullpathname')))
+                for name in ('_findfirstfile', '_getvolumepathname', '_path_isdevdrive', '_nt_readlink', 'readlink'):
+                    if hasattr(module, name):
+                        stack.enter_context(patch.object(module, name, wrap(getattr(module, name), 'nt.' + name, unsupported=True)))
+            # os imported these C operations from nt; protect direct nt calls too.
+            for name in ('stat', 'lstat', 'listdir', 'scandir', 'access', 'mkdir', 'open', 'remove', 'unlink', 'rmdir'):
+                stack.enter_context(patch.object(nt, name, wrap(getattr(nt, name), 'nt.' + name)))
+        yield
+
+
+def _drain_background_threads(initial_threads):
+    """Keep policy/observers active until all newly-created Python threads exit.
+
+    The owning worker/runner deadline bounds this wait and kills its process
+    tree. Managed daemon/child threads are included; raw startup is rejected.
+    """
+    waiter = _WAIT_EVENT()
+    interrupted = None
+    while set(_CURRENT_FRAMES()) - initial_threads:
+        try:
+            waiter.wait(0.005)
+        except BaseException as error:
+            # An interrupt must not clear the guard while child code still runs.
+            interrupted = error
+    if interrupted is not None:
+        raise interrupted
+
+
+@contextmanager
+def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, import_paths=None):
+    global _active
+    if _active is not None:
+        raise RuntimeError('Nested execution policy guards are unsupported')
+    _prepare_metadata_reads()
+    windows_version_probe = _prepare_windows_version_probe()
+    from python_import_paths import configured_import_paths
+    # Search roots are application data.  They are deliberately installed only
+    # after the policy and its standard-library dependencies have loaded.
+    application_paths = configured_import_paths() if import_paths is None else list(import_paths)
+    original_import_paths = sys.path[:]
+    fixtures = ImportFixtures()
+    resources = isolated_resources_for_plan(fixtures.plan)
+    fixtures.resources = resources
+    if resources:
+        from import_fixtures import evidence as import_evidence
+        import_evidence()['resources'] = resources.evidence()
+    violations = []
+    background_failures = []
+    initial_threads = set(_CURRENT_FRAMES())
+    connect = sqlite3.connect
+    state = {'violations': violations, 'error_type': error_type, 'first_error': None,
+             'protect_profile': protect_profile, 'thread_profile': threading.getprofile(), 'resources': resources}
+
+    def memory_connect(*args, **kwargs):
+        if len(args) > 5 or 'factory' in kwargs:
+            block_operation('custom SQLite connection factory')
+        if resources:
+            connection = resources.sqlite_connect(connect, args, {**kwargs, 'factory': _MemoryConnection})
+            value = args[0] if args else kwargs.get('database')
+            if type(value) in (str, bytes):
+                connection._resource_logical_name = value
+            return connection
+        return connect(*args, **kwargs, factory=_MemoryConnection)
+
+    def observe_background_exception(args):
+        name = type_field(args.exc_type, '__name__')[:120] if type(args) is _THREAD_EXCEPT_ARGS else 'unknown-background-error'
+        background_failures.append(name)
+
+    def block_profile_replacement(*_args, **_kwargs):
+        block_operation('replacing execution observer')
+
+    try:
+        _active = state
+        with ExitStack() as stack:
+            if windows_version_probe is not None:
+                stack.enter_context(patch.object(platform, '_syscmd_ver', windows_version_probe))
+            for module in (sqlite3, sqlite3.dbapi2):
+                stack.enter_context(patch.object(module, 'connect', memory_connect))
+                stack.enter_context(patch.object(module, 'Connection', _MemoryConnection))
+            stack.enter_context(patch.object(threading, 'excepthook', observe_background_exception))
+            if protect_profile:
+                for name in ('setprofile', 'setprofile_all_threads'):
+                    if hasattr(threading, name):
+                        stack.enter_context(patch.object(threading, name, block_profile_replacement))
+            stack.enter_context(fixtures)
+            stack.enter_context(_guard_unc_metadata(resources))
+            stack.enter_context(patch.object(socket.socket, 'bind', _probe_bind))
+            if resources:
+                stack.enter_context(resources.guarding(block_operation))
+            try:
+                # Preserve the declared precedence even when a root is already
+                # present as the current working directory.  Skipping it would
+                # let a later package interior outrank a copied flat module.
+                priority = list(dict.fromkeys(application_paths))
+                sys.path[:] = [*priority, *[item for item in original_import_paths if item not in priority]]
+                yield violations
+            finally:
+                if threading.excepthook is not observe_background_exception:
+                    background_failures.append('background-exception-observer-replaced')
+                _drain_background_threads(initial_threads)
+                if threading.excepthook is not observe_background_exception:
+                    background_failures.append('background-exception-observer-replaced')
+    except BaseException as error:
+        if violations:
+            if isinstance(error, error_type):
+                raise
+            raise state['first_error'] or error_type(violations[0]) from None
+        if background_failures:
+            raise BackgroundExecutionError(background_failures) from None
+        raise
+    finally:
+        _active = None
+        sys.path[:] = original_import_paths
+    if violations:
+        raise state['first_error'] or error_type(violations[0])
+    if background_failures:
+        raise BackgroundExecutionError(background_failures)

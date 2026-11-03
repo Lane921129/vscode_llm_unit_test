@@ -1,0 +1,7 @@
+HTTP CLIENT MOCKING:
+Never make a real network request from a generated test.
+Patch the source-used client/member at the target module's use point, preserving aliases and any existing module client binding.
+Configure a minimal response object with only the status, headers, text/bytes, json(), iterator or other members actually consumed by the source. A JSON payload is not automatically a response object.
+Distinguish direct calls, await and async with. Use AsyncMock for awaited members; an unawaited client.method(...) inside async with must directly return an async context manager, for example from MagicMock.
+Arrange controlled dependency behavior, call the real target once for the seed, then assert source-shown request arguments and observable target results or errors. Do not call the client to calculate an expected result.
+Do not invent status checking, retries, timeout handling, authentication or error translation that the source does not implement. A mock validates unit behavior, not a real service integration.

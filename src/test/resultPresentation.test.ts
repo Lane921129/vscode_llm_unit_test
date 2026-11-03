@@ -1,0 +1,241 @@
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { presentOutcome, presentSummaryOutcome, stageLabel, withOutcomeHeader, describeStageEvent } from '../pipeline/resultPresentation';
+import { formatTierHistory, TierHistory } from '../pipeline/tierHistory';
+import { describeImportIssue } from '../environment/importDiagnostics';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as vm from 'node:vm';
+import zhTw from '../i18n/zh-tw';
+import { getLanguage, setLanguage } from '../i18n/core';
+
+test('prompt-budget progress shows safe role metrics and distinguishes reserved input from context', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const label = describeStageEvent('model-request', 'budget-exceeded', {
+                role: 'analyst-planning', estimatedInputTokens: 6200, reservedInputTokens: 300,
+                inputBudget: 6400, contextWindow: 16384, raw: 'PRIVATE_PROVIDER_RESPONSE'
+            });
+            assert.match(label, /analyst-planning.*6200.*300.*6400.*100.*16384/);
+            assert.match(label, lang === 'en' ? /model request not sent/ : /未送出模型請求/);
+            assert.doesNotMatch(label, /PRIVATE_PROVIDER_RESPONSE|完整通過|Fully passed/);
+            if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            for (const malformed of [null, [], { estimatedInputTokens: 'PRIVATE_PROVIDER_RESPONSE' },
+                { estimatedInputTokens: NaN, reservedInputTokens: 0, inputBudget: 100, contextWindow: 4096 },
+                { estimatedInputTokens: Number.MAX_SAFE_INTEGER, reservedInputTokens: 1, inputBudget: 100, contextWindow: 4096 }]) {
+                const fallback = describeStageEvent('model-request', 'budget-exceeded', malformed);
+                assert.match(fallback, lang === 'en' ? /model request not sent/ : /未送出模型請求/);
+                assert.doesNotMatch(fallback, /PRIVATE_PROVIDER_RESPONSE|NaN|Infinity/);
+            }
+            assert.doesNotMatch(describeStageEvent('model-request', 'budget-exceeded', {
+                role: 'PRIVATE_PROVIDER_RESPONSE', estimatedInputTokens: 101, reservedInputTokens: 0,
+                inputBudget: 100, contextWindow: 4096
+            }), /PRIVATE_PROVIDER_RESPONSE/);
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('mutation progress is localized and never describes selection as a completed measurement', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const selected = describeStageEvent('mutation-engine', 'selected', { actual: 'mutatest', raw: 'PRIVATE_RESPONSE' });
+            const failed = describeStageEvent('mutation-engine', 'failed', { reason: 'package-missing', raw: 'PRIVATE_RESPONSE' });
+            const started = describeStageEvent('mutation', 'started', { engine: 'mutatest', raw: 'PRIVATE_RESPONSE' });
+            assert.match(selected, lang === 'en' ? /awaiting measurement/ : /等待量測/);
+            assert.match(failed, lang === 'en' ? /package-missing; stopped without switching/ : /package-missing；已停止，未更換/);
+            assert.match(started, lang === 'en' ? /after completion/ : /完成後才能判定/);
+            for (const label of [selected, failed, started]) {
+                assert.doesNotMatch(label, /PRIVATE_RESPONSE/);
+                if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            }
+            assert.doesNotMatch(describeStageEvent('mutation-engine', 'failed', { raw: 'PRIVATE_RESPONSE' }), /PRIVATE_RESPONSE/);
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('progress explains rejection, incomplete review and intermediate acceptance without raw replies', () => {
+    assert.match(describeStageEvent('structure', 'rejected', { reason: '沒有 test_ 方法', raw: 'PRIVATE_RESPONSE' }), /沒有 test_ 方法.*Writer/);
+    assert.doesNotMatch(describeStageEvent('structure', 'rejected', { raw: 'PRIVATE_RESPONSE' }), /PRIVATE_RESPONSE/);
+    assert.match(describeStageEvent('reviewer', 'invalid-response', { diagnostics: ['target-self-mock'], raw: 'PRIVATE_RESPONSE' }), /target-self-mock.*不採用/);
+    assert.match(describeStageEvent('reviewer', 'unavailable', {}), /審查未完成.*不進入突變/);
+    assert.match(describeStageEvent('validation', 'accepted', {}), /不代表完整通過/);
+    assert.match(describeStageEvent('validation', 'passed', {}, 'execution'), /本模式不執行品質審查與突變/);
+    assert.doesNotMatch(describeStageEvent('validation', 'accepted', {}, 'execution'), /繼續量測突變/);
+    for (const [stage, status] of [['structure', 'passed'], ['scenarios', 'observed'], ['coverage', 'measured'],
+        ['validation', 'passed'], ['executable-baseline', 'checkpointed'], ['model-request', 'requested'], ['model-request', 'completed'], ['writer-seed', 'started'], ['writer-seed', 'accepted'],
+            ['quality-experiment', 'observed'], ['quality-experiment', 'improved'], ['quality-experiment', 'unchanged'],
+            ['quality-experiment-baseline', 'passed'], ['quality-novelty', 'duplicate'], ['reviewer', 'repair-requested'],
+            ['candidate-artifact', 'rejected']]) {
+        assert.notEqual(describeStageEvent(stage, status, {}), status);
+    }
+});
+
+test('tier summary preserves fallback history across a restart, rollback and interrupted measurement', () => {
+    const history: TierHistory = { requested: 'tier2', initial: 2,
+        rounds: [{ loop: 1, start: 2 }, { loop: 2, start: 2 }],
+        transitions: [{ loop: 1, from: 2, to: 1, reason: '候選驗證失敗' }] };
+    const state = { tierHistory: history, executableBaseline: { tier: 2 } };
+    const running = formatTierHistory(state);
+    assert.match(running, /曾自動降級：是.*第 1 輪 Tier 2 → 1/);
+    assert.match(running, /第 2 輪 Tier 2/);
+    assert.match(running, /目前保留候選：Tier 2/);
+    assert.match(formatTierHistory({ ...state, acceptedTest: 'loop1_test.py', resolvedTier: 1 }), /目前保留候選：Tier 1/);
+    assert.match(formatTierHistory({ tierHistory: history }), /尚無已驗證候選/);
+    assert.equal(formatTierHistory({ resolvedTier: 2 }), '', 'old reports must not invent a transition history');
+});
+
+test('final status cannot be promoted by a high-scoring retained candidate or partial stage success', () => {
+    for (const terminalStatus of ['failed', 'retained-after-failure', 'execution-passed-review-incomplete',
+        'review-blocked', 'running', 'round-limit', 'stagnated', 'no-mutation-candidates', 'dummy-skipped', 'stub-skipped', 'stub-smoke-generated', 'cancelled', 'unknown']) {
+        assert.notEqual(presentOutcome({ terminalStatus, qualityAssessment: { fullyPassed: true } }).kind, 'passed');
+    }
+    assert.notEqual(presentOutcome({ terminalStatus: 'passed' }).kind, 'passed');
+    assert.notEqual(presentOutcome({ terminalStatus: 'passed', validationMode: 'execution', qualityAssessment: { fullyPassed: true } }).kind, 'passed');
+    assert.notEqual(presentOutcome({ terminalStatus: 'execution-passed', validationMode: 'execution' }).kind, 'executed');
+    assert.equal(presentOutcome({ terminalStatus: 'passed', qualityAssessment: { fullyPassed: true } }).kind, 'passed');
+    assert.equal(presentOutcome({ terminalStatus: 'passed', evidenceValid: false, qualityAssessment: { fullyPassed: true } }).kind, 'failed');
+    const body = '# Evidence\n\nRan 2 tests\nOK\ncoverage 100%';
+    const report = withOutcomeHeader(body, { terminalStatus: 'failed', failureCategory: 'environment' });
+    assert.match(report.split('\n')[0], /未通過：匯入／環境受阻/);
+    assert.ok(report.endsWith(body), 'original evidence remains intact');
+    assert.match(stageLabel('passed'), /非最終結果/);
+});
+
+test('execution-only outcomes explain absent mutation even after a successful run', () => {
+    const evidence = { validationMode: 'execution', terminalStatus: 'execution-passed', executionVerified: true };
+    assert.match(presentOutcome(evidence).label, /未執行突變/);
+    const report = withOutcomeHeader('# Saved evidence', evidence);
+    assert.match(report, /突變測試未執行：本次選擇/);
+    assert.match(report, /完整品質驗證（含突變）.*重新執行/);
+    assert.ok(report.endsWith('# Saved evidence'));
+    assert.doesNotMatch(withOutcomeHeader('# Full run', { validationMode: 'full', terminalStatus: 'running' }), /本次選擇「僅執行驗證」/);
+});
+
+test('API incompatibility and unsafe initialization have different bounded advice', () => {
+    const api = describeImportIssue({ exception_type: 'AttributeError', dependency_api: { module: 'vendor', attribute: 'launch' } }, 'module-import');
+    assert.equal(api.kind, 'dependency-api'); assert.equal(api.issue, 'vendor.launch');
+    const mkdir = describeImportIssue({ exception_type: 'TraceSafetyError', blocked_operation: 'os.mkdir',
+        origin: { file: 'sub/config.py', line: 3 } }, 'module-import');
+    assert.equal(mkdir.kind, 'import-side-effect'); assert.equal(mkdir.origin?.file, 'sub/config.py');
+    assert.equal(describeImportIssue({ origin: { file: '../outside.py', line: 3 } }, 'module-import').origin, undefined);
+    assert.equal(describeImportIssue({ exception_type: 'AttributeError', dependency_api: { module: 'raw\ntext', attribute: 'x' } }, 'module-import').kind, 'other');
+});
+
+test('the actual result-card renderer keeps 100% neutral unless the final outcome fully passes', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../src/ui/webviewContent.ts'), 'utf8');
+    const renderer = source.slice(source.indexOf('function escapeHtml('), source.indexOf('function toggleItemCheck('));
+    for (const terminalStatus of ['failed', 'retained-after-failure', 'execution-passed-review-incomplete', 'running']) {
+        const outcome = presentOutcome({ terminalStatus, qualityAssessment: { fullyPassed: true } });
+        const html = vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome, i18n: zhTw.ui });
+        assert.doesNotMatch(html, /#2ea043/);
+        assert.ok(html.includes(outcome.label));
+        assert.match(html, /100%/);
+    }
+    const outcome = presentOutcome({ terminalStatus: 'passed', qualityAssessment: { fullyPassed: true } });
+    assert.match(vm.runInNewContext(renderer + ';getScoreBadge("100%", "100%", outcome)', { outcome, i18n: zhTw.ui }), /#2ea043/);
+});
+
+
+test('historical demo summary omits incomplete review without claiming full approval or hiding real failures', () => {
+    const evidence = { terminalStatus: 'execution-passed-review-incomplete',
+        qualityAssessment: { toolsSatisfied: true, fullyPassed: false } };
+    assert.match(presentSummaryOutcome(evidence).label, /測試執行與量測達標/);
+    assert.equal(presentSummaryOutcome(evidence).kind, 'pending');
+    assert.match(presentOutcome(evidence).label, /審查未完成/);
+    for (const extra of [{ evidenceValid: false }, { failureCategory: 'environment' },
+        { terminalStatus: 'failed' }, { terminalStatus: 'retained-after-failure' },
+        { qualityAssessment: { toolsSatisfied: false, fullyPassed: false } }]) {
+        assert.notEqual(presentSummaryOutcome({ ...evidence, ...extra }).label, presentSummaryOutcome(evidence).label);
+    }
+});
+
+test('AI workflow exposes review blocking even when a retained candidate has complete tool measurements', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const evidence = { workflowVersion: 'ai-reviewed-loop-v1', terminalStatus: 'review-blocked',
+                qualityAssessment: { toolsSatisfied: true, fullyPassed: true } };
+            const outcome = presentSummaryOutcome(evidence);
+            assert.equal(outcome.kind, 'pending');
+            assert.match(outcome.label, lang === 'en' ? /latest candidate was not approved by review/ : /最新候選審查未批准/);
+            assert.equal(outcome.label, presentOutcome(evidence).label);
+            const oldStatusInNewRun = { ...evidence, terminalStatus: 'execution-passed-review-incomplete' };
+            assert.equal(presentSummaryOutcome(oldStatusInNewRun).label, presentOutcome(oldStatusInNewRun).label);
+            if (lang === 'en') { assert.doesNotMatch(outcome.label, /\p{Script=Han}/u); }
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('focused gap progress labels do not confuse an unrelated gain with resolving the selected task', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const detail = { focus: { id: 'measured', kind: 'survivor' }, globalProgress: 'improved' };
+            const unchanged = describeStageEvent('quality-experiment', 'unchanged', detail);
+            assert.match(unchanged, lang === 'en' ? /selected supplemental-test gap is unresolved/ : /指定補測缺口尚未解決/);
+            assert.match(unchanged, lang === 'en' ? /other measurements improved/ : /其他量測有改善/);
+            const resolved = describeStageEvent('quality-experiment', 'resolved', detail);
+            assert.match(resolved, lang === 'en' ? /overall quality.*separate assessment/ : /整體品質仍須另外判定/);
+            const unavailable = describeStageEvent('quality-experiment', 'unavailable', detail);
+            assert.match(unavailable, lang === 'en' ? /cannot be marked resolved/ : /不能判定已解決/);
+            if (lang === 'en') { assert.doesNotMatch(unchanged + resolved + unavailable, /\p{Script=Han}/u); }
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('new recovery and focused-progress events are explained in both languages without claiming a new pass', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            for (const [stage, status, expected] of [
+                ['quality-experiment', 'resolved', lang === 'en' ? /overall quality.*separate assessment/ : /整體品質仍須另外判定/],
+                ['quality-experiment', 'unavailable', lang === 'en' ? /cannot be marked resolved/ : /不能判定已解決/],
+                ['quality-experiment', 'unchanged', lang === 'en' ? /selected supplemental-test gap is unresolved/ : /指定補測缺口尚未解決/],
+                ['quality-experiment', 'deferred', lang === 'en' ? /unresolved.*other measured gaps.*denominator is unchanged/ : /尚未解決.*其他實測缺口.*分母不變/],
+                ['passing-tests', 'preservation-rejected', lang === 'en' ? /revision was rejected.*original tests retained/ : /拒絕修訂.*保留原測試/],
+                ['executable-baseline', 'restored', lang === 'en' ? /restored.*no new measurement/ : /已恢復.*未產生新量測/]
+            ] as const) {
+                const label = describeStageEvent(stage, status, { raw: 'PRIVATE_PROVIDER_RESPONSE' });
+                assert.match(label, expected);
+                assert.notEqual(label, status);
+                assert.doesNotMatch(label, /PRIVATE_PROVIDER_RESPONSE|Fully passed|完整通過/);
+                if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            }
+        }
+    } finally { setLanguage(originalLanguage); }
+});
+
+test('AI workflow progress keeps tool evidence separate from Writer tests and Reviewer approval', () => {
+    const originalLanguage = getLanguage();
+    try {
+        for (const lang of ['zh-tw', 'en']) {
+            setLanguage(lang);
+            const expected = lang === 'en' ? {
+                seed: /awaiting Reviewer approval/, numeric: /evidence goes to AI.*do not rewrite tests/,
+                evidence: /Writer must add tests.*do not merge tests/,
+                approved: /approved.*not a full pass/, rejected: /Writer.*execution and review/
+            } : {
+                seed: /等待 Reviewer 審查批准/, numeric: /證據交 AI 修訂.*不改寫測試/,
+                evidence: /Writer 補寫測試.*不合併測試/,
+                approved: /批准.*尚非完整通過/, rejected: /Writer.*重新執行與審查/
+            };
+            for (const [stage, status, expression] of [
+                ['writer-seed', 'accepted', expected.seed], ['numeric-skill', 'verified', expected.numeric],
+                ['quality-evidence', 'writer-required', expected.evidence],
+                ['reviewer', 'approved', expected.approved], ['reviewer', 'rejected', expected.rejected]
+            ] as const) {
+                const label = describeStageEvent(stage, status, { raw: 'PRIVATE_RESPONSE' });
+                assert.match(label, expression);
+                assert.doesNotMatch(label, /PRIVATE_RESPONSE/);
+                if (lang === 'en') { assert.doesNotMatch(label, /\p{Script=Han}/u); }
+            }
+        }
+    } finally { setLanguage(originalLanguage); }
+});

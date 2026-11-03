@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+# This workflow only reads source code and never receives cloud-model keys.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify extension and Python pipeline
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.12', '3.13']
+
+    steps:
+      - name: Check out complete history for secret scanning
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Node.js dependencies
+        run: npm ci
+
+      - name: Install Python dependencies
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          subprocess.run([sys.executable, '-m', 'venv', '.venv'], check=True)
+          python = pathlib.Path('.venv') / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+          subprocess.run([str(python), '-m', 'pip', 'install', '-r', 'requirements.txt'], check=True)
+
+      - name: Scan tracked files and reachable Git history for secrets
+        run: python python_scripts/secret_scan.py --history
+
+      - name: Compile regression tests
+        run: npm run compile-tests
+
+      - name: Run Node regression tests
+        run: node test/run_unit_tests.js
+
+      - name: Run Webview regression tests
+        if: ${{ !cancelled() }}
+        run: npm run test:webview
+
+      - name: Run Python regression tests
+        if: ${{ !cancelled() }}
+        run: npm run test:python
+
+      - name: Build extension
+        if: ${{ !cancelled() }}
+        run: npm run compile
+
+  external-mutation:
+    name: Verify installed Mutatest adapter
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up supported dependency environment
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install and require the real external adapter
+        shell: python
+        run: |
+          import json
+          import subprocess
+          import sys
+          subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt'], check=True)
+          probe = subprocess.run([sys.executable, 'python_scripts/external_mutation_runner.py', '--probe', 'mutatest'],
+                                 check=True, capture_output=True, text=True)
+          result = json.loads(probe.stdout)
+          assert result['supported'] is True and result['engineVersion'] == '3.1.0', result
+
+      - name: Verify external mutation and fresh isolated resources
+        run: python -m unittest python_scripts/test_external_mutation_runner.py python_scripts/test_import_fixtures.py python_scripts/test_external_isolated_resources.py

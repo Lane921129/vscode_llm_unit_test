@@ -1,0 +1,319 @@
+import * as assert from 'node:assert/strict';
+import * as path from 'node:path';
+import { test } from 'node:test';
+import { qualificationAppliesToRequest, qualificationEndpointKey } from '../llm/modelQualification';
+import { BUG_FIXER_QUALIFICATION_PROMPT, REVIEWER_QUALIFICATION_PROMPT } from '../llm/roleQualification';
+import { PLAIN_TEST_GENERATION_PROBE_PROMPT } from '../llm/testGenerationQualification';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { getRuntimeContextPreference, RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference } from '../llm/runtimeContextPreferences';
+import { buildOllamaRoleQualificationProbe } from '../llm/ollamaCapability';
+import { responseSchemaForOutputFormat } from '../llm/customApi';
+
+const writerResponse = `import unittest
+class TestCases(unittest.TestCase):
+    def test_positive(self):
+        self.assertEqual(increment(1), 2)
+    def test_negative(self):
+        self.assertEqual(increment(-1), 0)
+`;
+const fixerResponse = '```python\ndef test_increment(self):\n    self.assertEqual(increment(1), 2)\n```';
+const metadata = { details: { parameter_size: '3B' },
+    model_info: { 'general.architecture': 'neutral', 'neutral.context_length': 16384 }, parameters: 'num_ctx 4096' };
+
+test('Sidebar connection binds actual role probes to one local runtime snapshot', async t => {
+    const Module = require('module');
+    const originalLoad = Module._load;
+    const originalFetch = globalThis.fetch;
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const settings = new Map<string, unknown>([['language', 'zh-tw'], ['pythonPath', python],
+        ['ollamaBaseUrl', 'http://127.0.0.1:11434'], ['runtimeContextTokens', 0]]);
+    const executed: any[][] = [], messages: any[] = [], information: string[] = [], warnings: string[] = [], errors: string[] = [];
+    const stored = new Map<string, unknown>();
+    const vscode = {
+        commands: { executeCommand: async (...args: any[]) => { executed.push(args); } },
+        workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => settings.has(key) ? settings.get(key) : fallback }) },
+        env: { language: 'zh-tw' }, Uri: { file: (fsPath: string) => ({ fsPath }) },
+        ProgressLocation: { Notification: 1 },
+        window: {
+            withProgress: async (_options: unknown, run: () => Promise<void>) => run(),
+            showInformationMessage: (message: string) => { information.push(message); },
+            showWarningMessage: (message: string) => { warnings.push(message); },
+            showErrorMessage: (message: string) => { errors.push(message); }
+        }
+    };
+    Module._load = function (name: string, ...args: any[]) {
+        return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
+    };
+    try {
+        const { MutationViewProvider } = require('../ui/SidebarProvider');
+        let receive!: (message: unknown) => Promise<void>;
+        const provider = new MutationViewProvider({ get: async (key: string) => key === 'llm_api_keys'
+            ? JSON.stringify({ neutral: { model: 'neutral-cloud', key: 'fixture-only-credential' } }) : undefined },
+        { get: (key: string) => stored.get(key), update: async (key: string, value: unknown) => { stored.set(key, value); } });
+        provider.resolveWebviewView({ webview: { options: {}, html: '',
+            postMessage: (message: unknown) => { messages.push(message); },
+            onDidReceiveMessage: (handler: typeof receive) => { receive = handler; } } });
+        const reset = () => { executed.length = messages.length = information.length = warnings.length = errors.length = 0; stored.clear(); };
+        const finalProfile = () => executed.filter(item => item[0] === 'llm-unit-test.updateModelProfile').at(-1)?.[1];
+        const request = () => receive({ command: 'testConnection', envType: 'local', modelName: 'neutral-model', timeoutSeconds: 337 });
+        const installTransport = (show: () => Response = () => Response.json(metadata), onWriter?: () => void,
+            running: unknown = { models: [] }) => {
+            const probes: any[] = [];
+            globalThis.fetch = async (url, init) => {
+                const endpoint = String(url);
+                if (endpoint.endsWith('/api/tags')) { return Response.json({ models: [{ name: 'neutral-model' }] }); }
+                if (endpoint.endsWith('/api/show')) { return show(); }
+                if (endpoint.endsWith('/api/ps')) { return Response.json(running); }
+                assert.ok(endpoint.endsWith('/api/generate'), 'only normal connection endpoints are used');
+                const body = JSON.parse(String(init?.body));
+                probes.push(body);
+                assert.equal(body.system, ' ');
+                assert.equal(body.options.temperature, 0);
+                let response: string;
+                if (body.prompt === '\n' + PLAIN_TEST_GENERATION_PROBE_PROMPT) {
+                    assert.equal(body.format, undefined);
+                    onWriter?.();
+                    response = writerResponse;
+                } else if (body.prompt.endsWith(REVIEWER_QUALIFICATION_PROMPT)) {
+                    assert.deepEqual(body.format, responseSchemaForOutputFormat('review-json'));
+                    assert.deepEqual(body, buildOllamaRoleQualificationProbe('neutral-model', REVIEWER_QUALIFICATION_PROMPT,
+                        'review-json', body.options.num_ctx));
+                    response = '{"findings":[]}';
+                } else {
+                    assert.equal(body.prompt, '\n' + BUG_FIXER_QUALIFICATION_PROMPT);
+                    assert.equal(body.format, undefined); response = fixerResponse;
+                }
+                return Response.json({ response });
+            };
+            return probes;
+        };
+        const assertVerified = (numCtx: number, known: boolean) => {
+            const profile = finalProfile();
+            assert.equal(profile.testGenerationReady, true, 'the real fixed Python fixture must execute successfully');
+            assert.deepEqual(Object.values(profile.roleQualification).map((role: any) => role.state), ['verified', 'verified', 'verified']);
+            assert.equal(profile.contextLengthKnown, known);
+            assert.deepEqual(profile.qualificationRuntime, { version: 'ollama-context-v1', numCtx });
+            assert.equal(profile.endpointKey, qualificationEndpointKey('local', 'http://127.0.0.1:11434'));
+            assert.equal(qualificationAppliesToRequest(profile, { envType: 'local', modelName: 'neutral-model',
+                endpointKey: profile.endpointKey, runtimeContextTokens: numCtx }), true);
+            assert.deepEqual(messages.filter(item => item.command === 'modelProbeResult').at(-1).profile, profile);
+            assert.equal(errors.length, 0);
+            const probeEvents = messages.filter(item => item.command === 'appendLog'
+                && item.text.startsWith('[role-qualification-probe] ')).map(item => JSON.parse(item.text.slice('[role-qualification-probe] '.length)));
+            assert.ok(probeEvents.length > 0);
+            assert.ok(probeEvents.every(event => event.timeoutMs === 337000), 'connection probes use the selected API allowance');
+        };
+
+        await t.test('automatic mode sends half the known model limit to all role probes and retains that choice on next selection', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const probes = installTransport(undefined, undefined, { models: [{ name: 'neutral-model', context_length: 4096 }] });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.equal(information.length, 1);
+            await receive({ command: 'getModelRuntimeContext', modelName: 'neutral-model', revision: 1 });
+            const selection = messages.filter(item => item.command === 'modelRuntimeContext').at(-1);
+            assert.equal(selection.requestTokens, 8192);
+            assert.equal(selection.savedTokens, 8192);
+            assert.equal(selection.allocatedTokens, 4096, 'a previous allocation remains a separate observed fact');
+            assert.equal(selection.allocationSource, 'ollama-ps');
+            assert.equal(selection.defaultTokens, undefined, 'the selected PS observation is not relabeled as a Modelfile default');
+            assert.equal(selection.modelLimit, 16384);
+            assert.equal(probes.length, 3, 'selection does not fabricate or repeat role qualification');
+        });
+
+        await t.test('legacy captured 4096 migrates to half the known limit before real role qualification', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 4096, 'captured-runtime'));
+            stored.set('llmUnitTest.modelProfiles.v1', [{ envType: 'local', ...identity, paramSize: '3B',
+                contextLength: 16384, contextLengthKnown: true, qualificationRuntime: { version: 'ollama-context-v1', numCtx: 4096 } }]);
+            const probes = installTransport(undefined, undefined, { models: [{ name: 'neutral-model', context_length: 4096 }] });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.deepEqual(getRuntimeContextPreference(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY), identity),
+                { ...identity, tokens: 8192, source: 'captured-runtime' });
+            await receive({ command: 'getModelRuntimeContext', modelName: 'neutral-model', revision: 2 });
+            const selection = messages.filter(item => item.command === 'modelRuntimeContext').at(-1);
+            assert.equal(selection.requestTokens, 8192);
+            assert.equal(selection.savedTokens, 8192);
+            assert.equal(qualificationAppliesToRequest(finalProfile(), { envType: 'local', ...identity, runtimeContextTokens: 4096 }), false);
+        });
+
+        await t.test('an explicit per-model 4096 choice remains the wire context despite a larger automatic default', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 4096, 'user-choice'));
+            const probes = installTransport();
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [4096, 4096, 4096]);
+            assertVerified(4096, true);
+            assert.deepEqual(getRuntimeContextPreference(stored.get(RUNTIME_CONTEXT_PREFERENCES_KEY), identity),
+                { ...identity, tokens: 4096, source: 'user-choice' });
+        });
+
+        await t.test('saved choice changes during a probe require fresh qualification and cannot relabel its wire capacity', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 8192, 'user-choice'));
+            const probes = installTransport(undefined, () => {
+                stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 16384, 'user-choice'));
+            });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.equal(information.length, 0);
+            assert.ok(warnings.some(message => message.includes('設定已變更')));
+            assert.equal(qualificationAppliesToRequest(finalProfile(), { envType: 'local', ...identity, runtimeContextTokens: 16384 }), false);
+        });
+
+        await t.test('metadata-fetch preference changes cannot hide a probe snapshot mismatch', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const identity = { endpointKey: qualificationEndpointKey('local', 'http://127.0.0.1:11434'), modelName: 'neutral-model' };
+            stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 8192, 'user-choice'));
+            const probes = installTransport(() => {
+                stored.set(RUNTIME_CONTEXT_PREFERENCES_KEY, upsertRuntimeContextPreference([], identity, 16384, 'user-choice'));
+                return Response.json(metadata);
+            });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.equal(information.length, 0);
+            assert.ok(warnings.some(message => message.includes('設定已變更')));
+        });
+
+        await t.test('configuration changes during generation cannot relabel the old probes as the new context', async () => {
+            reset(); settings.set('runtimeContextTokens', 8192);
+            const probes = installTransport(undefined, () => { settings.set('runtimeContextTokens', 16384); });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [8192, 8192, 8192]);
+            assertVerified(8192, true);
+            assert.equal(qualificationAppliesToRequest(finalProfile(), { envType: 'local', modelName: 'neutral-model',
+                endpointKey: finalProfile().endpointKey, runtimeContextTokens: 16384 }), false);
+            assert.equal(information.length, 0);
+            assert.ok(warnings.some(message => message.includes('設定已變更')));
+            reset();
+            const nextProbes = installTransport();
+            await request();
+            assert.deepEqual(nextProbes.map(body => body.options.num_ctx), [16384, 16384, 16384]);
+            assertVerified(16384, true);
+        });
+
+        await t.test('invalid explicit context stops before qualification transport', async () => {
+            for (const scenario of [
+                { setting: -1, show: () => Response.json(metadata) },
+                { setting: 1.5, show: () => Response.json(metadata) },
+                { setting: '8192', show: () => Response.json(metadata) }
+            ]) {
+                reset(); settings.set('runtimeContextTokens', scenario.setting);
+                const probes = installTransport(scenario.show);
+                await request();
+                assert.equal(probes.length, 0);
+                assert.equal(finalProfile().testGenerationReady, false);
+                assert.equal(finalProfile().qualificationRuntime, undefined, 'no unexecuted runtime receives qualification evidence');
+                assert.ok(Object.values(finalProfile().roleQualification).every((role: any) => role.state !== 'verified'));
+                assert.equal(information.length, 0);
+                assert.ok(warnings.some(message => message.includes('Context 設定不可用')));
+                assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_PROVIDER_ERROR|PRIVATE_INVALID_JSON/);
+            }
+        });
+
+        await t.test('explicit context above or without metadata reaches fixed role probes without replacing model metadata', async () => {
+            for (const scenario of [
+                { setting: 32769, known: true, show: () => Response.json(metadata) },
+                { setting: 8192, known: false, show: () => Response.json({ details: metadata.details }) },
+                { setting: 8192, known: false, show: () => new Response('PRIVATE_PROVIDER_ERROR', { status: 500 }) },
+                { setting: 8192, known: false, show: () => new Response('PRIVATE_INVALID_JSON', { status: 200 }) }
+            ]) {
+                reset(); settings.set('runtimeContextTokens', scenario.setting);
+                const probes = installTransport(scenario.show);
+                await request();
+                assert.deepEqual(probes.map(body => body.options.num_ctx), Array(3).fill(scenario.setting));
+                assertVerified(scenario.setting, scenario.known);
+                assert.equal(finalProfile().contextLength, scenario.known ? 16384 : 4096);
+                assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_PROVIDER_ERROR|PRIVATE_INVALID_JSON/);
+            }
+        });
+
+        await t.test('automatic metadata fallback is qualified by actual role probes, never by show success or failure alone', async () => {
+            for (const show of [() => new Response('PRIVATE_PROVIDER_ERROR', { status: 500 }),
+                () => new Response('PRIVATE_INVALID_JSON', { status: 200 })]) {
+                reset(); settings.set('runtimeContextTokens', 0);
+                const probes = installTransport(show);
+                await request();
+                assert.deepEqual(probes.map(body => body.options.num_ctx), [4096, 4096, 4096]);
+                assertVerified(4096, false);
+                assert.ok(messages.some(item => item.command === 'appendLog' && item.text.includes('已選容量')));
+                assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_PROVIDER_ERROR|PRIVATE_INVALID_JSON/);
+            }
+        });
+
+        await t.test('unknown upper bound describes an observed ps capacity as the selected context without calling it a conservative fallback', async () => {
+            reset(); settings.set('runtimeContextTokens', 0);
+            const probes = installTransport(() => Response.json({ details: metadata.details }), undefined,
+                { models: [{ name: 'neutral-model', context_length: 16384 }] });
+            await request();
+            assert.deepEqual(probes.map(body => body.options.num_ctx), [16384, 16384, 16384]);
+            assertVerified(16384, false);
+            const log = messages.find(item => item.command === 'appendLog' && item.text.includes('未提供可驗證的 Context 上限'))?.text;
+            assert.match(log, /已選容量 16,384 tokens/);
+            assert.doesNotMatch(log, /自動保守值/);
+        });
+
+        await t.test('generation transport failure preserves the attempted context without a successful role claim', async () => {
+            reset(); settings.set('runtimeContextTokens', 8192);
+            const probes = installTransport(undefined, () => { throw new Error('PRIVATE_TRANSPORT_FAILURE'); });
+            await request();
+            assert.equal(probes.length, 1);
+            assert.equal(finalProfile().testGenerationReady, false);
+            assert.deepEqual(finalProfile().qualificationRuntime, { version: 'ollama-context-v1', numCtx: 8192 });
+            assert.ok(Object.values(finalProfile().roleQualification).every((role: any) => role.state !== 'verified'));
+            assert.equal(information.length, 0);
+            assert.ok(warnings.some(message => message.includes('角色資格測試未完成或未通過')));
+            assert.deepEqual(Object.values(finalProfile().roleQualification).map((role: any) => role.state), ['not-run', 'not-run', 'not-run']);
+            assert.doesNotMatch(JSON.stringify({ messages, warnings, errors }), /PRIVATE_TRANSPORT_FAILURE/);
+        });
+
+        await t.test('Cloud and Custom connection paths ignore an invalid local context setting', async () => {
+            for (const envType of ['cloud', 'custom'] as const) {
+                reset(); settings.set('runtimeContextTokens', 'invalid-local-only');
+                const probes: any[] = [];
+                globalThis.fetch = async (_url, init) => {
+                    if (!init?.body) {
+                        assert.equal(envType, 'cloud');
+                        return Response.json({ models: [{ name: 'models/neutral-cloud', inputTokenLimit: 32768,
+                            supportedGenerationMethods: ['generateContent'] }] });
+                    }
+                    const body = JSON.parse(String(init.body));
+                    probes.push(body);
+                    assert.equal(body.options, undefined, 'non-local transports never receive Ollama runtime options');
+                    assert.equal(body.num_ctx, undefined);
+                    const prompt = envType === 'cloud' ? body.contents[0].parts[0].text
+                        : body.messages.find((item: any) => item.role === 'user').content;
+                    const response = prompt === PLAIN_TEST_GENERATION_PROBE_PROMPT ? writerResponse
+                        : prompt === REVIEWER_QUALIFICATION_PROMPT ? '{"findings":[]}' : fixerResponse;
+                    assert.ok([PLAIN_TEST_GENERATION_PROBE_PROMPT, REVIEWER_QUALIFICATION_PROMPT,
+                        BUG_FIXER_QUALIFICATION_PROMPT].includes(prompt));
+                    return Response.json(envType === 'cloud'
+                        ? { candidates: [{ content: { parts: [{ text: response }] } }] }
+                        : { choices: [{ message: { content: response } }] });
+                };
+                await receive({ command: 'testConnection', envType, modelName: 'neutral-custom',
+                    cloudKeyName: 'neutral', customUrl: 'https://fixture.invalid/chat/completions' });
+                assert.equal(probes.length, 3);
+                assert.equal(finalProfile().envType, envType);
+                assert.equal(finalProfile().testGenerationReady, true);
+                assert.deepEqual(Object.values(finalProfile().roleQualification).map((role: any) => role.state),
+                    ['verified', 'verified', 'verified']);
+                assert.equal(finalProfile().qualificationRuntime, undefined);
+                assert.equal(errors.length, 0);
+                assert.equal(warnings.length, 0);
+                assert.equal(information.length, 1);
+            }
+        });
+    } finally {
+        Module._load = originalLoad;
+        globalThis.fetch = originalFetch;
+    }
+});

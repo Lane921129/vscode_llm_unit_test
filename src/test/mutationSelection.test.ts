@@ -1,0 +1,152 @@
+import * as assert from 'node:assert/strict';
+import * as path from 'node:path';
+import { test } from 'node:test';
+import { selectMutationEngine, mutationArguments } from '../mutation/mutationSelection';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
+
+const validProbe = { schemaVersion: 'external-mutation-probe-v1', engine: 'mutatest', supported: true,
+    engineVersion: '3.1.0', operatorSetVersion: 'mutatest-ast-3.1.0-v2', platform: 'Windows', diagnosticCode: null };
+
+test('builtin selection is explicit and does not launch an external probe', async () => {
+    const selected = await selectMutationEngine(undefined, undefined, async () => { throw Error('unexpected probe'); });
+    assert.deepEqual(selected, { requested: 'builtin', actual: 'builtin', workers: 2,
+        operatorSetVersion: 'builtin-ast-v3', executionBackend: 'isolated-unittest-v1' });
+    const args = mutationArguments(selected, 'source with spaces.py', 'test with spaces.py', 'compute', 'Calculator', 30);
+    assert.equal(path.basename(args[0]), 'basic_mutation_runner.py');
+    assert.deepEqual(args.slice(1), ['source with spaces.py', 'test with spaces.py', '0', '5', 'compute', 'Calculator', '30', '2', 'builtin-ast-v3']);
+    assert.deepEqual(mutationArguments(selected, 'source.py', 'test_source.py', 'compute', '', 30).slice(-2),
+        ['builtin-ast-v3', '--activate-functions']);
+});
+
+test('external selection retains requested engine and builds the real adapter command', async () => {
+    const selected = await selectMutationEngine('mutatest', 4, async args => {
+        assert.deepEqual([args[0], path.basename(args[1]), ...args.slice(2)], ['-B', 'external_mutation_runner.py', '--probe', 'mutatest']);
+        return { code: 0, stdout: JSON.stringify(validProbe) };
+    });
+    assert.equal(selected.requested, 'mutatest'); assert.equal(selected.actual, 'mutatest');
+    assert.equal(selected.engineVersion, '3.1.0');
+    assert.equal(selected.operatorSetVersion, 'mutatest-ast-3.1.0-v2');
+    const args = mutationArguments(selected, 'source.py', 'test_source.py', 'compute', '', 3);
+    assert.deepEqual([path.basename(args[0]), ...args.slice(1)], ['external_mutation_runner.py', 'mutatest',
+        'source.py', 'test_source.py', '0', '3', 'compute', '', '3', '4']);
+});
+
+test('bad settings are rejected before any probe and cannot coerce into valid engines', async () => {
+    for (const [engine, workers] of [['unknown', 2], [['builtin'], 2], [{ toString: () => 'mutatest' }, 2],
+        ['builtin', 0], ['builtin', 5], ['builtin', 1.5], ['builtin', '2'], ['builtin', NaN]] as Array<[unknown, unknown]>) {
+        await assert.rejects(selectMutationEngine(engine, workers, async () => { throw Error('unexpected probe'); }),
+            (error: unknown) => error instanceof AnalysisStageError && error.stage === 'mutation-preflight');
+    }
+});
+
+test('unavailable selected engine stops with its stable diagnostic and no fallback', async () => {
+    for (const diagnosticCode of ['package-missing', 'unsupported-version', 'unsupported-platform', 'adapter-unavailable', 'self-check-failed']) {
+        let calls = 0;
+        await assert.rejects(selectMutationEngine('mutatest', 2, async () => {
+            calls++; return { code: 0, stdout: JSON.stringify({ ...validProbe, supported: false, diagnosticCode }) };
+        }), (error: unknown) => error instanceof AnalysisStageError && error.category === 'environment'
+            && (error.diagnostic as { reasonCode: string }).reasonCode === diagnosticCode);
+        assert.equal(calls, 1);
+    }
+});
+
+test('malformed wrong-engine and unverified-version probes cannot authorize execution', async () => {
+    const probes = [
+        { code: 1, stdout: JSON.stringify(validProbe) }, { code: 0, stdout: 'private arbitrary tool text' },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'builtin' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, supported: 'true' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, engineVersion: '3.2.0' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, operatorSetVersion: 'builtin-ast-v2' }) },
+        // A historical arithmetic-only probe cannot authorize today's adapter.
+        { code: 0, stdout: JSON.stringify({ ...validProbe, operatorSetVersion: 'mutatest-ast-3.1.0-v1' }) }
+    ];
+    for (const probe of probes) {
+        await assert.rejects(selectMutationEngine('mutatest', 2, async () => probe), (error: unknown) =>
+            error instanceof AnalysisStageError && !error.message.includes('private arbitrary tool text'));
+    }
+    await assert.rejects(selectMutationEngine('mutmut', 2, async () => ({ code: 0,
+        stdout: JSON.stringify({ ...validProbe, engine: 'mutmut', supported: true }) })), AnalysisStageError);
+});
+test('auto selection prioritizes mutatest when probe succeeds', async () => {
+    const probed: string[] = [];
+    const selected = await selectMutationEngine('auto', 3, async args => {
+        const engine = args[args.indexOf('--probe') + 1];
+        probed.push(engine);
+        if (engine === 'mutatest') {
+            return { code: 0, stdout: JSON.stringify(validProbe) };
+        }
+        return { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'mutmut', supported: false }) };
+    });
+    assert.deepEqual(probed, ['mutatest']);
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'mutatest',
+        workers: 3,
+        engineVersion: '3.1.0',
+        operatorSetVersion: 'mutatest-ast-3.1.0-v2',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});
+
+test('auto selection cannot authorize the unimplemented mutmut adapter from an arbitrary operator version', async () => {
+    const probed: string[] = [];
+    const selected = await selectMutationEngine('auto', 2, async args => {
+        const engine = args[args.indexOf('--probe') + 1];
+        probed.push(engine);
+        if (engine === 'mutatest') {
+            return { code: 0, stdout: JSON.stringify({ ...validProbe, supported: false, diagnosticCode: 'package-missing' }) };
+        }
+        if (engine === 'mutmut') {
+            return { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'mutmut', supported: true, operatorSetVersion: 'mutmut-ast-v1', engineVersion: '3.7.0' }) };
+        }
+        return { code: 1, stdout: '' };
+    });
+    assert.deepEqual(probed, ['mutatest', 'mutmut']);
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'builtin',
+        workers: 2,
+        operatorSetVersion: 'builtin-ast-v3',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});
+
+test('auto selection falls back to builtin when external engines are unsupported', async () => {
+    const probed: string[] = [];
+    const selected = await selectMutationEngine('auto', 2, async args => {
+        const engine = args[args.indexOf('--probe') + 1];
+        probed.push(engine);
+        return { code: 0, stdout: JSON.stringify({ ...validProbe, engine, supported: false, diagnosticCode: 'adapter-unavailable' }) };
+    });
+    assert.deepEqual(probed, ['mutatest', 'mutmut']);
+    assert.deepEqual(selected, {
+        requested: 'auto',
+        actual: 'builtin',
+        workers: 2,
+        operatorSetVersion: 'builtin-ast-v3',
+        executionBackend: 'isolated-unittest-v1'
+    });
+});
+
+test('auto selection preserves cancellation, deadlines and tool failures without launching another probe', async () => {
+    for (const failure of [new Error('spawn failure'), Object.assign(new Error('cancelled'), { name: 'AbortError' }),
+        new AnalysisStageError('timeout', 'mutation-preflight', 'deadline exhausted'),
+        new AnalysisStageError('validation', 'source-changed', 'identity drift')]) {
+        let calls = 0;
+        await assert.rejects(selectMutationEngine('auto', 2, async () => { calls++; throw failure; }), error => error === failure);
+        assert.equal(calls, 1);
+    }
+});
+
+test('auto selection rejects malformed probe output instead of disguising tool corruption as unavailability', async () => {
+    for (const result of [{ code: 1, stdout: JSON.stringify(validProbe) }, { code: 0, stdout: 'private tool text' },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, schemaVersion: 'old' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, engine: 'other' }) },
+        { code: 0, stdout: JSON.stringify({ ...validProbe, supported: 'false' }) }]) {
+        let calls = 0;
+        await assert.rejects(selectMutationEngine('auto', 2, async () => { calls++; return result; }),
+            (error: unknown) => error instanceof AnalysisStageError && error.stage === 'mutation-preflight'
+                && !error.message.includes('private tool text'));
+        assert.equal(calls, 1);
+    }
+});

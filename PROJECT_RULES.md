@@ -1,0 +1,476 @@
+# 專案執行規則
+
+本文件是本專案自動化測試系統的長期約束；程式、提示詞、測試與維護工作都必須遵守。
+
+## 2026-10-27 首要目標
+
+- 依使用者指示，依序推進工具事實／模型判斷契約、局部修改與 host AST 合成、使用者 fixture／需求契約、能力適配、未見專案重複驗收、可重現公開版本。驗收條件與逐項進度以 `docs/通用化首要目標_2026_10_27.md` 為目前工作入口，優先於歷史待辦順序。
+- 六項均保留現行安全與品質門檻；可獨立驗證的增量完成後才提交推送，回歸通過不得冒充真實模型或跨平台驗收。第一項未完成整體結構化依據驗收前，不能以單一語句攔截宣稱已完成。
+
+## 2026-10-27 匯入能力探測與回傳流程
+
+- 共用執行防護只可對已安裝 Python 原始碼套件正在匯入自身模組的精確 loopback／port 0 bind 提供固定 OSError，讓套件走無網路能力分支；必須核實安裝根、真實 loader／spec／模組 globals 及磁碟編譯 code 身分。此路徑不得執行 native bind，不按套件、專案或模型名稱授權；應用、匯入後呼叫、偽造 filename、其他地址／port、connect／DNS／sendto 及 raw bind 仍鎖存違規。
+- 來源 setup 契約可附 target body 的 returnFlow 與結果丟棄站點；獨立 scope 不混入，async／generator／decorator 保持 unknown。普通無值 return 函式只在正常完成時回 None，不把相依 Mock.return_value 傳給外層。Writer 與 Fixer 共用來源事實，測試須核實來源副作用；None-only 不足以驗證副作用。來源行為非獨立需求 oracle，不依失敗輸出自動改 expected，不省 native、同候選審查或品質 gate。
+
+## 2026-10-27 Reviewer 結構化依據
+
+- 正式 `review-v8` 每個 finding 必須包含 `basis`，以 kind／ref／field／value 分開主張來源與判斷。工具事實須是同候選明列的 scalar 欄位、相關位置及相同值；缺欄位不推導 false／unknown。evidence-gap 只引用已明列的 unknown；test-code 明示為 unverified 判斷，不冒充工具事實。獨立需求須宿主提供同來源／run／target 的唯一 R-id 與完整原文，不由模型或觀測自創。
+- JSON schema、文字回退及本機 parser 共用此契約。缺失／矛盾依據回原一次同候選契約補正，持續失敗保持未審過，不刪 finding、不授突變批准、不續期限。舊格式只供歷史 reader；資格版本升為 `python-unittest-v9`，不沿用舊角色判定，既有可選事先資格政策不變。
+- 完整規格見 `docs/reviewer-evidence-basis.md`。引用與 scalar 一致只驗證明列前提，不代表任意理由已證明正確；既有有界矛盾防護、真實執行、成功情境保護及品質門檻仍保留。需求封包目前是宿主介面，使用者入口仍屬第三項目標。
+- Reviewer 到 Writer 的正式有效問題使用完整 `writer-review-feedback-v1` 封包，綁候選 hash、全部 findings／basis 及 AST 方法範圍；不得送入通用文字摘要而截斷 JSON。身分、回饋或範圍不符須停止；容量沿既有完整提示 gate 處理，不裁來源或依據、不續期限。封包不授執行或品質批准。
+- 無 missing-scenario 且引用定位至既有 test 方法的正式審查，使用 `WRITER_METHOD_EDIT_V1`：Writer 只回指定方法；簽名／decorator／async AST 不改，範圍外原文與 fixture 保留。Python 重規劃核 hash，Node 獨立依 UTF-8 範圍重組；無效模型片段沿原計畫及額度補正，工具失敗 typed 停止，不能回退重寫整份基線。純 missing-scenario 使用新增片段並綁本次被審候選，包含當輪新增測試；原完整封包跨拒絕保留，空新增或修改舊方法不授執行，多 TestCase 裸方法不猜 fixture owner。完整合成仍核原精確 focus／物件重放、成功情境、新 native、同候選審查與品質證據。混合 finding 及一般結構／fixture 路徑尚待後續局部化。
+
+## 2026-10-26 補測包裝抽取一致性
+
+- Writer 初始檔案與新增測試共用詞法 Python fence 掃描及 literal 保真正規化。新增模式辨識完整 TestCase 或裸 test 方法，唯一完整 fence 的前後說明可作傳輸包裝移除；多個 fence、未閉合尾段或無 fence 的說明不得裁成可執行前綴。字串內 marker 不算包裝，不改寫 Python body、測值或 expected。
+- 抽取及 AST 合併只建立待驗證候選，仍核對原基線、完整觀測族、真實執行、同候選 Reviewer 與品質證據。歷史首行 SyntaxError 若解析輸入仍含 Markdown，不能單憑錯誤位置斷言 fence 內 Python 有錯；原文未保存時保留不確定性。固定回覆整合通過不代表真實模型已完成補測。
+
+## 2026-10-26 審查矛盾、修訂範圍與格式恢復時間
+
+- Reviewer 對同一已成功執行、同呼叫觀測核實、可重播純量的「不是有效 float／string／integer／boolean」完整機械指控，若只要求改成有效同型值，須退回原有一次 Reviewer 契約補正，不交 Writer、不刪 finding 製造批准。不同型別、未知／未執行、具體替代值或獨立需求保持可審查。
+- 有效 Reviewer 沒有 missing-scenario finding 時，Writer 修正保留當前 AST 的 class.method 集合；不可把規則卡當新增測試清單。擴寫、移除或改名在執行前拒絕，下一次仍沿同一範圍與原額度。明確缺情境的補測及原通過情境保護不改；工具身分或盤點失敗不得猜測方法集合。
+- 改變提示的格式恢復不能借用舊提示 token 速度；單次上限是 cap，不是重試必須保留的最低時間。規劃與正式送出前均使用原期限的剩餘時間，至少保留30秒或較小的使用者單次額度，不重設期限、增加次數或借此採用截斷內容。同提示增額仍沿原實測／完整額度政策。
+- 語法診斷節錄可優先選抽取後錯行附近，須以同一抽取內容的座標取樣並明示行號範圍，不能猜原回覆位移。原提示／來源及憑證遮蔽、六行／1200字元與不可執行限制維持；隱私 context 只在當次記憶體使用，不保存完整 provider 回覆。
+
+## 2026-10-26 輸出預算與完成回覆的格式診斷
+
+- 正式 Local 請求的合法輸出預留必須同時成為 wire `num_predict`，包括無候選、未知修訂工作量與保留原額度的分支；不得只寫預算卻讓 provider 採未限定輸出。既有同角色增額、容量及時間／計數上限保持，不採 length 前綴；Cloud／Custom 不借此變更政策。
+- Python 方法盤點須分開回傳可解析結果及有位置的語法拒絕。非零程序、無效 DTO／hash、解析資源限額與逾時是工具失敗，應停止，不能一律歸咎模型或要求 Writer 修工具。舊陣列 CLI 保留，新診斷 CLI 以 UTF-8 stdin／ASCII-safe JSON 交換，不執行候選或回傳任意 traceback、SyntaxError 原行及 msg。
+- 完整回覆後的格式失敗可保存來源／實際提示綁定的安全節錄及詞法統計，維持原六行／1200字元與不可執行限制；完整 provider 回應、憑證與私有來源重述不落盤。語法位置指抽取後內容，不冒充模型沒有生成測試。單一 seed 的格式重送保留原完整必要證據與同一案例，只附格式指引，不另灌全量修訂語境、不續期限或增加重試次數。
+
+## 2026-10-26 呼叫端參數 Mock 的結構修復
+
+- execution Writer 可選取來源綁定的參數 Mock adapter：原 Checker 必須證明 patch 路徑錯把函式參數當模組屬性，工具另核完整來源 hash、唯一普通目標／測試、明確參數傳入、標準 qualified patch 與未重綁的 alias。只處理已在來源出現的單層成員，未知、fixture hook、動態展開、逃逸及重綁不推導。
+- AI 收到完整來源、失敗方法及完整選項，決定是否把錯誤 patch scope 改為新的標準 MagicMock assignment，保留同 alias 傳給目標，並將既有 Mock 設定與斷言接至該成員。工具只提供結構接合，不產生測值、expected、次數或新斷言；縮排整理不得改寫多行字串內容。scope 外位元組鎖定，套用重規劃並雙端核 hash，仍需原 Checker、真實目標及完整隔離證據。ABSTAIN 回原有限修訂，期限／計數不續，full 不變。
+
+## 2026-10-26 資源與單元隔離提示一致性
+
+- 宿主批准的資源負責應用匯入及已宣告 I/O，不把函式參數變成模組屬性，也不代表所有單元案例都禁止 Mock。來源已核實的相依使用點可明確替換，呼叫端參數可使用測試自有的相容 fixture；生成測試仍不得直接 I/O、patch 目標或以不相容 scalar 取代 connection。
+- 使用 Mock 的案例只驗證其明確控制的單元行為，不能宣稱已驗證真實資源或外部整合。資源批准、schema／seed、來源身分、native frame、斷言與隔離 gate 均保持；提示精簡只改固定重述，不裁切來源、候選、必要 setup 或觀測。
+
+## 2026-10-26 來源 Mock setup 選取
+
+- execution Writer 只可對原 Checker 重新核實的 immutable datetime/date patch 問題選取封閉 setup 修復。須核對完整來源模組 hash、唯一目標、穩定 from-import 與單一來源呼叫成員；唯一普通測試的既有標準 patch scope、alias 及成員使用亦須可證明。未知 class 使用、別名重綁／逃逸、反射或來源改寫不推導。
+- AI 必須收到完整目標、方法與替換 scope。工具只改 canonical patch 綁定與同 alias 的標準 Mock 成員前綴，不產生 fixture／expected／呼叫次數；Python 重規劃與 Node 位元組重組皆核對 hash，其餘原文鎖定。合法 `ABSTAIN` 是放棄選取，交回原有限修訂；非法指令、取消或漂移不採用，計數與期限不續，套用不授執行批准。
+- 實測 once 斷言出現多次呼叫時可附同源呼叫拼字導航，要求模型核對精確參數、順序、次數及 setup 歷史；靜態呼叫站不當 runtime 次數，不能自動降低斷言或把來源拼字當輸出 oracle。可省略的 literal 導航須整段保留或整份省略，完整來源／契約不裁切。
+
+## 2026-10-26 初始 execution 草稿接續
+
+- 只有 execution 的可信呼叫端可啟用 `continueUnexecutedWriterDraft`。尚無 baseline 且從未進入 native 執行時，完整模型候選即使被結構檢查拒絕，也可作下一次 Writer 修訂的未批准草稿，避免已補 import 因第二項錯誤被回復而遺失。候選仍保存為 rejected，事件 `writer-draft/continued` 必須標 executable／approved 為false；不把草稿提升為保留或執行基線。
+- full、未啟用、已有 baseline、任何 native 嘗試後及修訂範圍拒絕，仍採原保留／回復政策。結構、綁定、範圍、有效斷言、真目標 frame及完整隔離證據都保留；不得借此採用截斷回覆、續期限或增加修訂次數。
+
+## 2026-10-25 種子範圍恢復與依賴綁定
+
+- 當 host 已明確持有初始單測 seed 範圍，完整 length 的詞法樣本有多個測試方法簽名時，標為 `seed-scope-overrun`；即使已有斷言，也使用既有唯一格式恢復，不為完成整份 suite 增額。未知樣本、單方法、完整候選修訂及補測不借此 scope；詞法計數不是有效測試數。原來源／證據、floor、期限與最多兩次保持。
+- 未重綁且與完整來源中唯一目標一致的絕對 `from import`，可在應用的 canonical 依賴綁定位置替換，僅認來源實際使用成員的 Mock 斷言。不據此宣稱 provider 屬性 patch 等價；wildcard、重綁、動態 namespace、target／owner 及指回它們的 package alias 仍拒絕。合法 namespace 位置但未證明觀察時須保留失敗，不能誤報位置未知；真目標仍須在 patch 生效時呼叫。
+
+## 2026-10-25 重複測試外框恢復
+
+- `writerSeedPromptMode` 是使用者明確的本機 Writer 初始種子偏好，於 run 啟動時固定；預設 instruction，明選 code-completion 時從首問使用無 body 的 canonical 外框與完整可逆註解證據。full／execution 初始種子共用；其他角色、完整修訂及新增補測不借此 scope，未知外框保持指令模式，不按模型名稱判斷能力。續寫仍須明確 stop。偏好續寫後若完整 length 高度重複，既有唯一恢復切回原完整指令契約；不能層層重包提示、增設第三問或改寫模型內容。
+- 完整 length 回覆高度重複、至少兩個 `test_` 簽名及四個 Python fence，且沒有可辨識 `self.assert*` 時，判為 `repetitive-test-shells`，優先使用原有唯一格式／seed 續寫恢復，不僅因方法外框存在就提高輸出額度。除上節明確單一 seed 超出範圍外，單方法 setup、已有斷言、樣本不完整或未達重複門檻保留既有路由；詞法分類不授予 AST、執行或品質批准。
+- 恢復仍保留完整必要證據、原輸出 floor、原期限與兩次上限，不能採用截斷前綴。歷史節錄無法還原原文，不把外框次數冒充有效測試方法數。
+
+## 2026-10-25 執行模式的來源片段修復
+
+- 只有 execution 模式的窄任務可以讓 AI 回覆來源片段 ID 指令。完整目標來源、失敗方法及全部候選片段須保留；來源／候選／計畫 hash 與 UTF-8 範圍重新核對後才能套用，其他程式位元組鎖定。這不授予新 oracle、patch、資源或品質批准，原期限與計數不續。
+- Bug Fixer 的字串參數修復只接受同內容的空白差異；Mock receiver 修復只沿既有明確 patch 的來源消費路徑，不能改斷言方法、參數或次數。AttributeError 必須唯一定位至本候選原文完全相符的實測斷言行；目標函式或 setup 內的例外不能借此改斷言。
+- 獨立標準 Mock 配為 factory return value 時，須核對唯一建構、身分及 target 呼叫前的唯一配置；重綁、晚綁定或未知 constructor 不推導 receiver。來源消費圖只可用 hash 綁定模組內實際宣告補足 global 名稱，不把 partial 圖升格為完整。結構階段只在唯一測試方法／唯一 receiver 差異時交 Writer，保存 `static-binding` 依據，不捏造實測失敗或借 Bug Fixer 權限。
+- Writer 的名稱綁定修復只處理 Checker 明確報出的未綁定測試名稱；完整模組只供靜態核對唯一目標與來源宣告，不匯入應用或全部送入模型。只能插入一行方法內明確 import；同一來源的多個標準測試 helper 須由原 Checker 重掃確認並原子補齊，避免結構拒絕回復原稿後逐項互相丟失。未知 helper／綁定不猜、不能安裝套件或以 helper 計算預期值。套用 import 不代表原預期答案已正確。
+- 除上述可證明的封閉編輯外，保留原角色修訂流程。套用後的完整候選仍須走結構、綁定、必要修復範圍、真實 native 目標呼叫及隔離完成證據，不能把選取或套用事件算成通過。
+
+## 2026-10-24 已生成 AI 候選重驗
+
+- 明確指定 `replayCandidate` 時只允許 `execution` 模式。須核對已保存角色事件的完整模型回覆、run／來源／精確目標、provider／模型與候選原文雜湊；不可採未完成回覆、遮蔽內容、缺失或無效產物。重驗事件保存原始 run、sequence 與候選 hash，不冒充新的模型請求或舊通過狀態。預設只重驗，未明確要求 repair 不發送額外生成請求。
+- 預設須為同一 native 來源；明確允許 identical-source draft 時，原檔與目前檔案的完整內容 hash 都須相同。只能重用 AI 草稿，不能借用舊環境、Trace、oracle、執行、Reviewer 或品質批准；仍以目前目標綁定、批准資源及新隔離程序重新驗證實際 native 目標呼叫與完整完成證據。
+- 狀態斷言關聯可接受來源所有正常路徑共同寫入的直接輸入屬性，集合 mutator 另須測試明確提供標準集合。真實回傳物件的方法回傳值可沿未重綁的 receiver 追蹤；不追任意 helper 的回傳、不借反射或測試覆寫的值。這些只證明語法關聯，不提供預期答案、執行成功或品質批准。
+
+## 2026-10-24 參數物件重放核對
+
+- 物件觀測交接須同時保留完整提示及 host-owned 的同一份案例；Context 省略時不得消耗交接或建立核對案例。提示末端可重申當前屬性路徑、操作、內建例外與已觀測的 returned／raised 區別，不代寫 body或測試、不推算新預期值。可從同案例typed資料完整重述其他控制及實測回傳；可讀摘要超1500字元或不可表示時整段引用原完整封包，不裁切或忽略原資料。
+- `--check-replay` 只解析 AST，不載入來源或執行候選。排除目前基線中的原測試方法，只對一個新方法的可解析控制判定 matched／contradicted／unknown。已證明把 getter 例外換成 None／dict／缺少屬性，或混用 remove／false，交 Writer 有界修訂。靜態核對可辨識無繼承／decorator的測試自有簡單類別：僅純量欄位、封閉無參數初始化與明確內建例外property；必須在真正讀取的receiver上，不能把property物件放進一般屬性。其他自訂 fixture、setter、複雜 setup 或未知綁定保持 unknown；matched 也不是執行或批准，規劃／worker不因此取得任意類別建構能力。
+- 輸出必須綁定本次候選、目前完整基線、來源與案例指紋；案例保留原 seed 來源，可在同來源／模組／資源語境下交給後續增長的基線，不能把原 seed hash 冒充目前基線 hash 或借用舊方法來匹配新案例。來源或 native 路徑不符時停止工具交接，不要求模型修工具。
+- Bug Fixer 可能建立未經 Writer 合併的新執行基線；補測選取新方法名稱前，須按該完整基線 hash 重新取得 AST 方法盤點。不得借用舊候選盤點、猜第一個方法或把盤點當執行／審查批准。
+
+## 2026-10-24 突變副本與來源閉包
+
+- 突變基線及測試副本須保留原UTF-8位元組，不能用平台文字換行轉換讓CRLF變成CRCRLF。變異後來源亦按實際產生的位元組寫入；來源／候選身份與評分集合不得因修復複製方式而偽造。
+- 當初始化閉包含受測來源本身，只有可信runner明確選定且實際映射到trial內的突變來源可重綁其相依摘要；原來源批准仍須先核驗，其他相依的原檔或副本漂移、多重映射及trial外路徑仍拒絕。基線或變異體的載入／隔離失敗不算killed，整批pending不算完成。
+
+## 2026-10-23 Writer 補測範圍與成對預算
+
+- 補測使用獨立的單一新增方法契約，不繼承完整 suite／all-survivor 指令再要求模型覆寫。僅精簡固定說明；完整來源、必要 setup、實測觀測、原已執行基線及修訂中的未批准候選不能裁切或混為已通過成果。原目標綁定、隔離、保留、實跑、同候選 Reviewer 與品質門檻保持。
+- 只有 host 已持有已執行基線且正式請求新增方法時，才能標記 `single-test-addition`。Local Writer／Writer 修訂的初始輸出預留為1536（較小容量仍受原可用預留約束，較高 learned floor 優先），輸入預算須與實際 wire cap 成對；容量評估、增容、生成前預算及正式請求共用此 scope。這不是案例數量上限或品質批准，完整候選修訂不借此額度，Cloud／Custom 保留原政策。
+- 既有同角色 learned floor 不降低；若完整 length 回覆需恢復，仍沿原唯一重送、原容量及絕對期限／計數限制，不採用截斷前綴。少量輸出只代表目前新增工作範圍，不保證模型速度或完整車輛批次成功。
+
+## 2026-10-23 參數物件受控補測
+
+- 頂層同步函式的物件參數補測，只可從已執行保留候選靜態解析明確的 `SimpleNamespace`、固定 `Mock(return_value=...)`、常數 factory 或原樣回傳參數的 callable 配方。不得執行候選來規劃、不求值任意 lambda、不猜應用類別；共享／捕獲物件參照、未知 setup／運算及 import 重綁拒絕。identity 配方保留實際傳入物件身分，不當成常數。
+- 變化只沿來源支持的參數屬性路徑，從一個實測缺口規劃缺少、假值或受控 getter 例外；規劃不是 expected。worker 必須重新推導允許配方，核對 source／seed／context／批准資源身份，隔離載入並呼叫真目標。副作用即使被捕捉、ambient read、未進入目標 frame、觀測器失效、來源漂移或不可重播結果，皆不形成可採用觀測。
+- 一輪只執行一個案例，沿用工具16秒階段與外層20秒上限，包含冷載入且受原函式期限約束；不把未執行的規劃案例算已嘗試。提示僅交付能完整容納的一個觀測與配方，省略不能消耗交接。所有正式測試仍由 Writer 撰寫，合併後重新執行、Reviewer 同意及完整品質量測；觀測非獨立需求、不是測試檔或批准。
+
+## 2026-10-23 Writer 種子續寫恢復（優先於下文固定文字補正／外框條款）
+
+- seed 的單方法／單呼叫形狀檢查不以有無可用 Trace 為前提。AST 可提供 canonical 直接呼叫站的保守下界，不解碼物件輸入也不代表執行次數；未知 receiver／重綁／巢狀 body 不猜。只有精確觀測輸入才可標 grounded；沒有 Trace 的單一受控 fixture 仍走原 Checker／Reviewer，不冒充已核實 oracle。生成與 Writer 修訂都以相同 seed 範圍結尾，完整來源、發現與候選仍保留。
+- Bug Fixer 可原樣返回唯一失敗方法內既有的 fixture 類別；不能因方法內出現 class 就視為整份 TestCase 包裝。module／class fixture、其他方法、簽名／decorator及 import 範圍仍由原 Python AST gate 核驗，不授予額外修改權限。種子包裝可預列 `types` 標準庫以配合 SimpleNamespace 指引，但不可遮蔽同名目標；不提供 fixture 值或斷言。
+- 來源行號導航須綁定 AST 片段內容摘要及起訖行數，保留完整原文，未知／不符時不捏造位置。當前 coverage line／branch 可附至多十個鄰近行；過長行只引用完整來源的對應列，不複製整個函式或裁切來源。這是位置證據，不是執行結果、斷言 oracle 或品質批准。
+
+- 當正式 Local seed 的完整 length 回覆符合既有高度重複且無測試結構條件，唯一格式恢復可改為 `seed-code-completion-v1`。只依實際失敗形狀，不依模型名稱或參數量；沒有合法 canonical 包裝時仍採原文字補正。非 seed、Analyst、Reviewer、Bug Fixer 與正常請求不切換 raw。
+- 原完整角色契約與使用者證據逐行加 Python 註解前綴，可精確反解回原字串；不裁來源、setup 或觀測。結尾只有經目標契約核驗的 import／class／方法簽名，不含輸入、fixture 值、目標呼叫、expected 或斷言。新 wire 重新核算容量；原期限、計數及至多兩次不續。
+- 此窄路徑採 Ollama `raw:true` 且不送 system/template，避免 API 格式衝突。完整 stop 回覆才可與包裝原樣接合；若模型已返回完整 Python fence 則保留該完整產物。不修縮排、不挑多份候選、不採 length 前綴，空方法或錯誤內容仍由原 AST、seed、Checker、Reviewer、coverage／mutation 門檻拒絕。工具只提供包裝，測試內容仍由 AI 撰寫。
+- 診斷可保留程式內明確指定的固定框架指令重述，僅排除與該固定行完全相同的隱私遮蔽項；動態 prompt、來源、測資、fixture 或候選不可加入此公開集合。混合私有來源、疑似憑證及位置仍先遮蔽，原節錄限額與不可執行標記保持。
+- seed 提示須區分 Python 屬性與字典鍵，依來源 receiver 形狀安排物件與 callable 成員；這是 setup 指引，不提供值或 oracle，也不禁止明確、有證據的非法輸入案例。
+
+## 2026-10-22 Writer 重複輸出恢復與診斷（優先於下文僅增額／不保存節錄條款）
+
+- Local Writer／Writer 修訂的完整 length 回覆，若有至少16個非空行、80%以上為重複行且沒有可辨識 test_／self.assert，既有唯一恢復機會改送格式修正，不盲目提高輸出。此為文字形狀的恢復路由，不是 AST 判定或候選批准；無法判斷及已有測試結構時保留原增額政策，不依模型名稱特化。
+- 格式修正保留原必要提示與所有品質門檻，只附固定回饋、不回灌被丟棄原文。仍受首問前固定的最多兩次、原階段／單次／target期限及計數限制；提示已改變，不借用原請求的實測輸入或生成速度，重送前須有完整單次時間並重新核完整容量。
+- 依使用者要求，正式 Local length 失敗可保存受限、去密的模型文字診斷節錄：最多六種非空行、每行最多240字元加省略號、總預算最多1200字元，且永遠少於原回覆；附原行位置、樣本重複次數與字元數。先隱藏已知／疑似憑證、提示／來源重述及位置，無完整 provider envelope，complete與executable均為false，不寫成測試或交模型續寫。
+- failure／逐輪與workflow報告列出每次輸出失敗的詞法診斷、實測tokens、HTTP、耗時及恢復決策。只配對本次請求的傳輸資料，未知不借前次數值。舊結果沒有節錄時明示不能還原原文；字元統計不當成AST方法盤點，error也須計入逐輪失敗事件。
+
+## 2026-10-22 事先資格改為可選（優先於下文必須先通過探針的條款）
+
+- `requireRoleQualification` 預設 false，略過事先資格與增容固定探針，允許未探測或先前不可用的模型嘗試正式角色請求；不冒標 verified、不借舊容量資格，不放寬來源／隔離／必要完整提示、Checker、同候選 Reviewer 或 coverage／mutation 門檻。此布林值在啟動時凍結，執行中不可修改。
+- 使用者明確開啟後，開始前仍須有同模型／端點／容量的 Writer 資格，完整流程亦須 Reviewer；增容按新容量重驗，無法驗證即停。未開啟時增容撤回舊角色資格、標 not-run，正式候選仍實跑重審；固定探針不是正式候選的核准。
+- 主動測試連線時，各 provider 生成探針採側欄單次 API 等待時間，保留原單次期限／取消與宿主傳輸；Python 固定樣本執行仍最多30秒。Ollama 各角色固定探針使用同容量、輸出 cap 為1024，與正式生成額度分開；逐角色保存安全原因、HTTP碼、等待額度與耗時，第一項失敗或不可用後停止，未到達的角色標 not-run。Ollama 的傳輸／逾時／截斷／格式與固定樣本執行分開，不能把不可用誤稱模型能力不合格。
+
+# 2026-10-22 容量與測試重點修訂（優先於舊 Tier／手動上限條款）
+
+- 明確保存的正整數 `num_ctx` 是使用者的執行請求，可以超出或缺少模型 metadata。不得覆寫模型宣告、冒稱伺服器已接受或長提示已驗證；原始宣告、選擇、觀測及輸出 cap 分開記錄。同端點／模型／num_ctx 的角色資格仍須匹配。自動模式沿用宣告規劃，未知上限或手動超宣告時，不自動向更大容量外推；必要輸入不截斷。
+- 新介面使用 full、boundary、coverage、mutation 測試重點，只改情境與實測缺口的優先順序，不按模型參數量分 Tier、不降 Tier 重問。四種重點共用 seed、執行、Reviewer、coverage、mutation 與有界修訂；Auto 的角色資格與首錯即停仍適用。舊策略僅作設定及歷史相容。
+- Mock setup 骨架依來源使用點提供給各大小模型，不由 Tier 或名稱決定。scaffold 保持非可執行，不能代寫預期值。新 seed 的初始輸出額度按完整提示剩餘空間配置，最高 4096，保留補正／餘裕、原 deadline、一次恢復及截斷拒絕；提高輸出 cap 不要求模型填滿，也不改 num_ctx 或載入設定。
+
+## 目前驗收優先順序
+
+- `summarizeRepairOutput` 裁切超長 `FAIL:`／`ERROR:` 區塊時，必須保留失敗測試識別標頭與例外診斷列（如 `AssertionError:`），不得因後方巨量 `Calls:` 清單只取尾端而遺失核心錯誤；`executionFailureRepairGuidance` 僅在執行輸出實際出現對應 `AssertionError`／不可變型別 `TypeError` 時按需補充修復指引。
+- `HOST_ISOLATED_RESOURCE_CONTEXT` 必須明示為提示詞區段標記而非可匯入模組，且由 `validate_test_bindings.py` 靜態拒絕匯入。`validate_test_bindings.py` 與 `mock_behavior.py` 須診斷參數屬性誤作模組屬性 patch、不可變 `datetime`／`date` 型別方法 patch、同模組 helper 與 `moduleSource` 使用點不符，並支援 `setUp`／測試方法內的鏈式子 Mock provenance 追蹤與同方法合法 `@patch` 隔離，不放寬真實目標呼叫或斷言要求。`qualityStrategyHints` 必須相容 `builtin-ast-v3` 單引號格式化的存活突變字串與 `call_statement_omission`。
+- 模型傳輸須沿用宿主／注入的 `fetch`、Proxy、系統憑證與 TLS 驗證；不得為調整時間注入會略過 Proxy 或被憑證處理替換的 dispatcher。對宿主最終建立的 Undici 請求，在本次非同步作用域內將 `headersTimeout`／`bodyTimeout` 對齊原絕對期限；不改全域 Agent 或其他作業。執行物件的時間欄位須核驗可寫，失去支援時取消本次請求並記固定安全碼，diagnostics subscriber 不得拋出例外。非 Undici fetch 保留自身傳輸政策，完整 body 仍受 caller 的原期限與取消約束。Undici 只作開發回歸依賴，不是產品 runtime 相依；傳輸錯誤不寫入供應商原文。
+- Mock 父路徑覆寫時須撤銷已脫離的子圖證據，保留仍可達的獨立別名身分；`datetime`／`date` 不可變型別的確定性拒絕須有同來源且未重綁的有效 import 證明。歷史依賴提示、重綁、條件或未知來源不得直接升為確定性錯誤。Mock 累積呼叫次數不等於目標自身呼叫次數；修復提示須先區分 setup history，不得只為通過而要求弱化精確斷言。
+- 側欄與執行設定須明確區分「單次 API 等待上限（1–86,400 整數秒）」與「每個函式總時間上限（0.001–86,400 秒，精確至毫秒）」，啟動前驗證並合併既有 `targetBudget` 計數上限後建立不可變快照；非法單位或範圍直接阻擋啟動，重試不重設函式總期限。設定驗證通過後的宿主組態寫入若失敗不得阻斷分析命令啟動，且前置檢核訊息須同時顯示於系統日誌與宿主通知。
+- 初次壓縮與修訂 Writer 提示及 Tier 3 scaffold 須保留 `dependency-fixture-contract-v1` 已證明的消費 receiver 鏈（不以預設 `None` 覆蓋需繼續呼叫方法的回傳物件），並明示多個來源呼叫點不得堆疊多個 `assert_called_once_with`；此形狀指引不授權任意 patch 或推導預期輸出。
+- Auto 的共同角色資格須在來源批次掃描、初始化、Trace 與生成前檢查；使用同端點／模型／資格版本及本次有效 num_ctx，不借舊容量。full 需要 Writer／Reviewer，execution 只需要 Writer。手動 Tier 與不使用 AI 的明確單一 dummy／靜態惰性 stub 診斷保留既有政策。單一目標耗盡原有有限修訂而終局失敗後，保存證據與報告、完成清理，立即停止整檔／批次排程；未啟動目標保持 pending，不冒充完成。
+- 手動「中止測試」只送出取消與 `analysisStopping`，不能立即宣告 `analysisFinished` 或釋放執行預約。取消後至 HTTP／子程序、報告與隔離資源清理完成前，`ExecutionManager.hasActiveRun` 仍為 true，新分析不得開始；只有持有相同 execution 的 owner 在 finally 完成清理後，才能 `finish` 並通知完成。`canPublish` 在取消後立即拒絕一般結果／進度發布；舊 owner 的 `finish`／`endAnalysis` 不得清除新 run 的執行或 UI 所有權。必要清理不等於繼續生成，取消後不得再發模型請求或排下一目標。
+- 側欄結果以穩定 file-key 保存各檔案分組的手動展開／收合狀態；新結果、分數或狀態更新，以及平鋪／分組切換，不得重新展開已收合分組。全展開／全收合更新既有分組與新分組預設；切換受測專案才重設。結果卡的檔名／函式名與分數分列，保留標題可用寬度及長名稱換行，不能由分數擠成逐字直排。
+- Reviewer 斷言觀測使用 verified／contradicted／unknown；只有同型別輸入、完整唯一觀測與保守 setup 下的可支援比較才授予前兩者。未知預期值不是已證明錯誤，解析失敗也不能抹掉獨立可證明的目標結果綁定。直線 literal 容器內局部變數可靜態還原，禁止執行任意表達式；mutation、未知副作用與 fixture 不借用原觀測。對已核實同候選的機械矛盾只能有限重審，不刪 finding 冒充批准。
+- `prompt-capacity-v1` 只診斷 `current-role-prompt` 的完整輸入容量，保守字元估算不是 tokenizer 實測或整個流程可執行保證。相同完整請求已有合法觀測時，以 `max(estimatedInputTokens, observedInputTokens)` 加補正預留；逐容量重算既有 `roleRequestBudget` 的實際輸出政策與本角色 learned floor，才能反算最小容量，不沿用較小舊輸出額度低估需求。只保存固定 enum、數字與 null，不把來源或候選原文放入容量 DTO。
+- 模型上限須來自同端點／模型的已核實 metadata，明示 `ollama-show`／`stored-model-profile`；未知保持 null／`unknown`，不得以 fallback、參數量或模型名稱補造。`num_ctx`、Modelfile 預設與 `/api/ps` 最近分配另列，不等於所有同系列模型的上限。短角色探針通過只認證固定樣本；正式 Analyst、Writer、Reviewer 仍各核完整提示，容量足夠也不代表品質通過。
+- full 非 stub 流程先組好當前角色的完整提示並確認可容納，再對指定突變引擎執行本目標唯一一次預檢；所有增容資格探針與正式角色生成都須在該預檢成功後才能送出。預檢結果與失敗共用同一 Promise，不因換角色、重試或降階重跑；取消、來源版本核對、原單次／階段／target 期限及計數保持有效。即使增至已核實上限仍無法容納時，不得啟動引擎探測、截斷必要證據或放寬 schema。
+
+- Local Ollama 正式角色與連線資格探針使用同一串流接收器；NDJSON 必須有唯一 `done:true` 終端且完整讀至 EOF 才能採用，`length` 仍交既有有界輸出恢復，不採用前綴。明示 `done:false`、畸形／超界／重複終端或中斷皆停止；歷史普通 JSON 缺少 `done` 的相容不等於允許明示未完成。資格探針的原期限須涵蓋 HTTP 標頭與完整 body，清理不能因等待 `cancel()` 再次卡住。排隊自入隊就受原絕對期限及取消約束，過期項永不發送；active 工作真正結束後才能放行下一項。
+- `model-request-progress-v1` 只保存固定階段、安全數字與實際 wire 的 SHA-256／byte 數；提交傳輸層不代表伺服器收到、首段資料不等於首段回答、完整回覆也不等於測試通過。HTTP／模型耗時缺值保持未知。最近觀測容量與本次請求不同時明示重載風險，不自行覆寫已保存容量或將容量當成實際輸入 token 數。
+
+- 2026-10-15 起，Local 初始 Analyst 的 `num_predict=1024` 是起始輸出額度，不是模型 Context 上限。明確 `done_reason=length` 可在同一完整提示下增加輸出並至多重送一次，Analyst 與 Writer 的學習額度各自限定本目標；Reviewer、品質分析師、Fixer 與資格探針不借該額度。Analyst 明傳首問期限及原規劃階段期限：首問仍受原單次額度，length 重送可使用首問前已保留的階段餘額，並受原 target／family／計數限制；未明傳雙期限的呼叫端保留原 shared hard cap。缺少耗時資料時須保留完整單次時間，時間或完整輸入／輸出容量不足即記錄原因停止；不得在失敗後新建階段或猜測生成速度。必要增容仍須已核實上限與新容量角色資格，不採用截斷前綴、不重設保存偏好。
+
+- 品質補測任務使用 `quality-task-v4` 綁定本次 run／source／qualified target／focus 與已執行的精確輸入族；模型只能引用 scenario ID 與 `verify-observed-behavior`。模型的預期值及例外假設不送入 Writer 的已核實觀測欄位。空任務、無效契約或分析暫停可使用相同實測觀測繼續要求 Writer，但不造分析批准或品質通過。
+- `WRITER_FOCUS_CASE_FACTS_V1` 逐案呈現型別化證據還原的完整呼叫與實測結果；每案參數順序／型別不能互換或自行取整。可定位 literal 新呼叫須涵蓋本輪完整輸入族，缺案或偏離範圍交 Writer 有界修訂；完全未知動態呼叫仍由執行及審查確認。已有新觀測卻只回原基線，不進行重複量測；工具不生成 assertion，也不以輸入族匹配宣告殺死突變。
+- 單一目標在開始前依正規化輪數規劃角色、資格探針及重試的共享預算；五輪預設44 logical requests、88 transport attempts、440,000 estimated input tokens、20 candidates，上限64／128／640,000／40。`targetBudget` 的顯式限制（含零額度）仍優先；原10分鐘總期限不增加，途中不重設計數，巢狀流程不能換新預算。
+- Writer 先建立最小種子。當提示有一個完整、可重播且無衝突的選定受控案例時，種子須一個方法、一個可定位目標呼叫及相同輸入；動態／Mock／未知呼叫仍由既有工具執行與審查確認。輸入綁定不表示斷言正確；觀測只描述實作行為，不證明獨立需求。
+- 宣告給 Writer 生成器的輸入額度須預留實際 seed／addition system、完整 phase／baseline、案例事實、資源與觀測、output contract及換行，並與該角色已學習的輸出下限成對；不能宣告可用額度後才漏算附加內容。最後仍核完整 wire，必要來源不裁剪；逐案補測不重新帶入全域觀測。
+- 有已執行基線後，Writer 只生成新增測試，由 `writer-addition-v1` AST 工具保留完整原文並合併；完整 class 或裸方法可按唯一可證明的宿主綁定，改寫既有方法、fixture 或衝突 import 拒絕。每個合併候選重新執行、審查及量測，基線雜湊不能替新增候選授權。綁定品質輸入族時，新方法的可證明 literal 呼叫不得換成不相關輸入。
+- 同步頂層函式的完整品質觀測族可拆成逐案 Writer 子任務；每案僅一個新方法與一個精確呼叫，至多兩次契約補正，仍受原家族、角色與 target 預算。家族期限按 focus／基線固定一次，修訂或降階不續期。累積草稿保持未執行／未審查；所有案例完成後才驗證完整族、執行、審查及突變，部分草稿不得冒充批准或通過。
+- 逐案補測可對 AST 已證明的簡單 unittest 基線使用 `writer-addition-context-v1`：提示提供完整 imports／class setup 與既有方法身分，不重送舊測試內容。Host 保留完整原始基線位元組；此 setup 投影不是候選、執行證據或批准。含 fixture、全域狀態、helper、裝飾器或未知結構時保留完整基線提示；工具或資料契約失敗停止，不用不完整投影繼續。
+- 已有候選的 Writer 修訂保留原執行失敗及 Reviewer finding、原候選與完整證據，不重新拆成初次逐案生成；已執行但未批准的草稿不能成為新的不可修改補測基線。修訂仍保護真正通過的方法並重新執行、審查及同版量測。
+- 逐案補測可對 AST 已證明的簡單 unittest 基線使用 `writer-addition-context-v1`：提示提供完整 imports／class setup 與既有方法身分，不重送舊測試內容。Host 保留完整原始基線位元組；此 setup 投影不是候選、執行證據或批准。含 fixture、全域狀態、helper、裝飾器或未知結構時保留完整基線提示；工具或資料契約失敗停止，不用不完整投影繼續。
+- Reviewer 要求回傳測試改成例外測試，必須提出精確輸入、具體例外種類與證據；同候選／同輸入的完整已執行回傳觀測可反駁此機械矛盾，走既有一次契約重審。不同輸入或未知業務契約仍需審查，不刪 finding 冒充批准。
+- 最終、失敗及工作流程報告分列 AST 已證明的生成、新增、拒絕與保留方法數。合併不再計為生成；未知盤點不得補零，僅採同 run／source／target 與實際保留測試雜湊。未抽取成 Python 的回覆應記格式診斷，不推測為缺少 import。
+
+- 2026-10-14 起，Local 單測／批次在取得執行所有權後、任何目標開始前，核對同端點／模型的 `/api/show` 與 `/api/ps`，再建立本次容量快照；UI 與正式請求使用同份 metadata。只沿用合法且同身分的舊上限，明示 fresh／cached／unavailable 及安全原因碼；探索不授予角色資格、不修改手動或 captured 偏好。取消不得開始目標或保存新觀測。
+- Writer 的長度恢復分開「同容量增加輸出」與「提高 num_ctx」。上限未知時只能在本次已核對容量內配置完整輸入、輸出與128 tokens餘裕；增容仍要求同模型可信上限與新容量資格。只在相同完整提示的 completed length transport 採數值 prompt_eval_count／耗時，以 max(估量, 實測) 保留輸入；按容量及時間限額選有意義的增量，沒有空間就保存原因停止。首問前固定階段、shared及target期限；探針與正式請求各建一次單次期限，正式重送前再核對探針後餘額，已送出請求不續期，計數不重設，截斷內容不執行。
+- Reviewer 使用 review-v8，純指令回聲與沒有具體問題的泛用核實要求屬無效 assessment；完整重複的 import／assertion／patch 修改提議只依同候選 AST 事實拒收。不同測試方法、字串 literal 差異、patch 配置及附帶未知語意不得借機械事實否定。無效審查只有限重審，不刪 finding 冒充批准；Trace 支持案例一致性，仍不證明獨立業務需求。
+- Mock fixture 的結果消費形狀只描述來源實際需要的 iterable／常數索引，不生成 expected、資料內容或例外。初次與修訂皆保留已核驗的可操作 setup 指引，raw topology 可整份省略但不能連帶省略必要指引；參數屬性拼字不證明值、具體型別或 patch 權限。重綁、反射、動態索引、filter及未知控制流保持未知。唯一實測 unittest ERROR 的 patch 初始化失敗，須標準 mock 堆疊與本次失敗測試的 patch 使用行一致，才交 Writer；目標內部錯誤及類別 self／cls 不借此當成外部 protocol fixture。
+
+- 依使用者 2026-10-12 要求持續建立跨 Python 專案的 P0／P1 相容能力，不以專案或模型名稱特化。Tier 降級只接受已耗盡的候選／修復契約失敗；環境、AST 工具、來源漂移、模型傳輸、提示預算與 Reviewer 未完成保持其獨立失敗，不用更低 Tier 掩蓋。
+- 批次局部續跑為下方「仍受阻即停止」的窄例外：同一選取根、來源閉包、完整目標集合、Python 及實際 fixture ID 經核對，最後一次真正隔離匯入檢查明確 loaded 的來源可以繼續；受阻、未檢或診斷不完整來源的目標單獨列 environment-blocked，模型請求為零且不算通過。只有靜態 planning、取消／拒絕或身分漂移則停止批次，不推定相鄰來源或依賴可執行。批次內保存最後預檢快照及原因，不依賴外部 import_check 目錄。
+- Trace 新執行預設總時間60秒、規劃15秒、每案例目標執行5秒，可由 `traceTimeoutSeconds`／`tracePlanningTimeoutSeconds`／`traceCaseTimeoutSeconds` 調整，總時間最多300秒、單案例最多30秒，仍受原目標期限及清理時間限制。這是 Python 執行時間，不是 LLM 思考時間；宿主分配、規劃及案例實際耗時分開記錄。沒有明確新設定的舊純 planner 介面保留相容預設。
+- `probeInputFile` 只接受專案內普通 JSON、來源雜湊／相對檔案／qualified target 綁定的型別化參數及建構子資料，不接受 expected、程式碼、來源宣稱或金鑰。來源過期／連結／越界／無效輸入拒絕，不偷偷回退自動值。輸入須進真正隔離 worker 才有觀測；未知自訂物件列診斷，不猜建構。等價自動探測輸入可在規劃時去重，但保留全部來源位置，不能合併未知狀態、型別、kwargs順序或不同建構子。
+- Writer 的必要 setup 保留來源原文並區分 imports／globals／class fragments；完整同文才可引用去重，不讓 JSON 摘要取代程式碼。可斷言觀測與不可斷言診斷分開，仍保存完整失敗狀態。Mock 跨 module alias 只在完整同來源 AST 證明同一且未重綁的 module member 時接受；from-import、目標替換或含糊控制流不能借此通過。名稱／scaffold 問題交 Writer，不改寫來源。
+- 第二個 LLM（Reviewer）核對 Writer 的輸入、expected 及依據；工具實跑與安全／品質契約仍保留。審查失敗保存最多五項行號、原文引用、reason、action及固定拒絕原因，先去密再有界呈現；模型矛盾只算未採用 assessment，不假裝已批准。未知需求或沒有獨立 oracle 不由 Reviewer 猜答案。
+- 工具執行校驗階段命名為 Checker：由 `generated_test_runner.py` 執行 Writer 的 unittest，以斷言比對實際結果與測試內預期答案，不呼叫 LLM、不產生或改寫 expected。Checker 與 LLM Reviewer 分工獨立；Checker 通過不代表需求正確或完整品質通過。Validation 仍泛指結構、binding、證據與執行等工具驗證，Checker 是其中的執行校驗。
+
+- 依使用者 2026-10-12 確認，完整本機角色提示超額時，可在同一執行中動態提高 `num_ctx`，只依該端點／模型已核實的容量上限；未超額不調整，未知上限或到頂後仍無法容納則保存診斷並停止。保留完整來源、候選、觀測、補正與輸出預留，不截斷必要證據。這是下文固定起始容量的窄例外：已儲存選擇與設定快照不改写，本次實際容量另記錄。
+- 新容量不得沿用舊 `num_ctx` 的角色資格；重新執行固定公開 Writer／Reviewer 探針及隔離驗證，需用 Bug Fixer 時也核驗該角色。Auto/full 必須由新容量 verified Writer／Reviewer 接續；手動 Tier 保留起始時的嘗試政策，只依當次角色判斷，不因尚未通過 Reviewer 探針阻止 Writer／Analyst。探針不可執行或傳輸不可用不當作能力失敗；正式候選仍必須通過工具執行、同來源與完整測試雜湊的 Reviewer 核准才能突變，不借舊審查。所有探針、回退、重試與正式請求共享原期限與計數，不因增容重置。
+- 同一批次可重用完整已完成的同端點／模型／`num_ctx`／資格版本／Python／來源範圍／fixture 身分的角色判定，並讓後續目標使用本批次已核驗的容量；不寫回使用者偏好、不跨批次。來源、相依、Python 或 fixture 漂移撤回重用；timeout、取消與環境不可用不快取為負面能力。只重用資格與額度，不重用測试執行、Trace、資源或審查批准。
+- Local Writer／完整修訂若以 `done_reason=length` 中止，只以確切輸出 cap 學習本目標需求，最多重送同一完整提示一次；增輸出保留量與 `num_predict` 必須成對，必要時再核實增容，上限未知或仍不足即停止。2026-10-13 起，符合恢復資格的階段在首問前一次預留至多兩個單次請求額度；每次仍不超過使用者單次設定，明傳 shared deadline 與原 target deadline 都是硬上限，HTTP／增容不續期。有效當次 Ollama 數值耗時可估計加長重送所需時間；估計不夠則保存診斷停止，未知時須留足整次額度。截斷回覆不保存、不執行；階段與目標期限不重設，每次請求仍消耗原角色／目標計數。
+- 生成測試純載入失敗須保存真正 unittest 匯入原因，只在 runner 診斷、現行來源／測試位元組摘要、target、run ID、實體路徑與呼叫紀錄均相符時交 Writer。真正檔案身分錯誤、runner 故障或診斷無效為工具失敗，不交模型猜修、不降 Tier，不從載入訊息猜 pip 套件。
+- Writer 輸出只移除可證明的傳輸外框，保留多行字串、程式尾端與完整候選，不任選多份回覆。提示使用中性文字設計指引，不輸入可直接抄用的外部目標範例或範例答案。方法內明確 target import 可按詞法範圍核驗；重綁、遮蔽與未知控制流不借此通過。
+- Trace 依成功受控模組預檢的宿主實測耗時預先分配規劃及第一次案例冷載入額度，未知時仍為 planning 5 秒／total 12 秒；外層最多60秒且受原目標剩餘時間限制，重試共用當次 Trace 期限。成功預檢或規劃不是案例觀測，也不是 oracle。
+- Mutatest 3.1.0 的目前適配算子為 `mutatest-ast-3.1.0-v2`，現代 Python 的 literal 整數 subscript 用外部引擎原生 Index 算子產生候選；先通過算術及索引 AST probe。不得冒充 builtin 或將零候選計為完整通過；歷史 v1 保留讀取。
+- 若現有AST證明時鐘回傳值交給 `strftime`，使用獨立test-local alias建立具體datetime/date fixture並保留真formatter，不以固定Mock formatter回傳遮蔽格式行為。未知receiver chain不猜；fixture控制與格式實跑也不能代替獨立需求 oracle。
+
+- 靜態 SQLite schema 提案只接受可保真轉成宣告資源的 literal `CREATE TABLE IF NOT EXISTS`，綁定來源摘要、DDL／連線位置及精確資料庫地址；已有資源可補 schema，來源可證明的新資料庫亦可列入同一批准預覽。不可執行來源 SQL、匯入應用或複製正式資料來補 schema；動態路徑、不支援約束、衝突或跨來源證據不足須列診斷。各 worker 只在批准後建立新資料庫。
+- 靜態路徑可追蹤有界的本機 connection helper 與來源宣告的 ConfigParser fallback；若需空白設定才能選用 fallback，必須把空白設定 fixture 一併列入預覽，不能假設原設定不存在或讀取原設定。已批准的非空設定不被覆蓋。跨來源依據保存 `sourceDependencies` 並納入 plan 身分，每個 worker 再核對；依賴漂移或 frozen 程序不符 `pythonSourceMode` 即拒絕。可保真的明確新增欄位遷移須保留，未知 SQL 不猜。突變若改動設定依賴而無法重綁，維持 ERROR／未評分。
+- 宣告 schema 支援 literal default、欄位／複合 UNIQUE、INTEGER PRIMARY KEY AUTOINCREMENT；禁止丟棄來源約束以求建表成功。Writer 的修訂保留完整目標、setup、觀測及候選，只去除完整且相同的重複片段；超預算記為 prompt-budget 並停止，不因此降低 Tier。Analyst 格式失敗最多補正一次，沿用起始時分配的分析階段／目標總期限與相同證據；初問與補正各受單次請求額度限制，傳輸失敗不觸發格式重問。
+- 突變 baseline 冷啟動上限為 `max(20 秒, 設定的 mutant 上限)`。只有成功 baseline 才以 `max(設定值, baseline 實測秒數 × 2 + 1 秒)` 校準單 mutant 上限；序列／並行共用相同政策，實際分配仍不超過階段剩餘時間。排程及 setup 後餘額若少於成功 baseline 實測成本，保持 NOT_RUN／partial，不啟動可預期逾時的程序或延長 stage。保存設定值、校準值、每筆分配及耗時；timeout／error 不算 killed 或有效分數。
+- Writer 只接收目標與必要 setup 使用的 import，未知／wildcard 綁定保守保留；重複規則只呈現一次，optional 範例不能填滿輸入預算。完整目標、來源身分、必要 setup、觀測與修訂候選不截斷。AST `dependency-fixture-contract-v1` 只描述來源實際消費的 receiver／return value／context-manager 形狀，不授予 patch 權限、不提供 expected；重綁與未知控制流須保留診斷。初次生成可因預算省略整份形狀圖與圖例，但必要消費指引保留；修訂保留整份契約，不切部分路徑或隱藏 unknown。
+- Trace 全域診斷可用 parameter:null；無輸入或規劃不足仍是不完整觀測，不是載入失敗或 oracle。無效 wire 以 trace-contract typed 停止，不以 journal／legacy load_error 替代；取消與 target 預算原樣傳播。
+- 明確標準 SimpleNamespace 的巢狀 Mock 只依有界物件身分圖及真正注入的同一成員追蹤；別名修改撤回舊證據。未知工廠、反射、動態 kwargs、手動預呼叫與偽斷言不授予證據，不因物件結構可解析就跳過目標保真、真實執行與審查。
+- 普通 Writer 增量新方法名只依真正 AST 盤點選取；未知盤點不能當空集合。Host 只供包裝簽名並納入完整預算，不寫 body／expected、不借改名繞過情境去重或審查。Bug Fixer 最多三個 import 由 AST 計真正新增 binding；重複／既有不占額度，遮蔽與方法／fixture 保留契約不放寬。
+- Reviewer 的「Unbound import/name」、「已有 mock assertion 卻指稱缺失」及「替換成完全相同斷言」只在同候選執行與 AST 事實足以反證時標為無效契約；多餘語意主張與新情境需求不由字串規則否定。仍只允許一次契約重審，不刪 finding 冒充批准。
+
+- 依使用者 2026-10-10 確認，初始化先以純靜態 planner 彙整可證明的目錄與外部 callback 啟動入口，涵蓋選取來源的有界本機相依；planner 本身不 import 應用或求值來源。可確定候選直接進入預覽；若出現 `dynamic-directory`（例如由配置或 helper 算出的目錄），Host 先執行一次既有受控匯入掃描，只使用已批准 fixtures，不暫套任何新提案，再把實測目錄建議與後續靜態入口合併成同一清單。靜態候選與實測阻擋須分開標示，不能把規劃完成當成就緒。
+- 合併清單只有一次預覽、一次批准與套用後的一次實際重檢；確認前不得建立新提案的資源或執行其 callback。靜態待確認路徑取消時尚未 import；動態目錄路徑可能已完成前述診斷，取消僅停止套用新設定與後續重檢。來源閉包、根、設定或 Python 變動仍停止；未知副作用、缺 schema 或未解析的動態初始化保留診斷，不宣稱都能自動解決，也不循環批准。
+- 批次遇到待確認的規劃清單直接進入一次設定預覽，省去額外的處理初始化詢問；重檢成功接續原批次。受阻數保存最新設定結果，初始數留在歷史事件。本文下方「實測受阻才提案」的限制仍適用於 runtime advisor，不限制來源綁定且明確標示的靜態規劃候選。
+
+- 批次預檢受阻後選擇處理初始化，保留同一批次、選取來源及模型快照；暫停環境使用鎖，取得獨占設定鎖後才能確認套用。重檢就緒且來源／範圍／Python／實際設定 ID 一致才接續，並清除原批次的已完成失敗快取。仍受阻、拒絕、取消或身分改變即停止，不自動循環批准；未開始目標不算失敗執行或通過。只有明確選擇繼續診斷才展開既知環境失敗。
+- 初始化紀錄保存初始實際 fixture ID、資源數、處理決定、設定結果與是否接續；不得把提案 ID 當成已套用 ID。模組就緒不代表函式、Reviewer 或突變通過。Reviewer 對 import／mock 呼叫斷言的機械矛盾只能依同候選事實進行有界重審；未知需求仍須保留，不能刪 finding 冒充同意。
+
+- Windows 網路樣式名稱只能透過另外宣告的 `scope=unc-virtual` 映射成本機測試資源；`external-exact` 仍拒絕 UNC。宣告使用精確 `//server/share[/tail]` 邏輯名稱，保留應用原字面路徑，不推定網路位置可用或使用者原意。預覽須逐項顯示完整映射並明示「只在本機暫存區建立、不連線、不讀寫原共享位置、不是網路授權」；來源／設定變動或取消均不套用，確認後只重新預檢一次。
+- UNC 虛擬映射不得查詢原路徑 metadata、解析真實位置、讀寫共享資料或建立網路連線；路徑核對僅用字串與來源身分。拒絕裝置路徑、`IPC$`、跨層及來源交集；支援的共享根目錄也只代表虛擬名稱。資源只在工具擁有的本機 lease 中按程序建立、核對與清理；突變保留相同字面地址，不新增遠端別名。角色只取得設定別名／雜湊，別名及 seed 均不是 assertion oracle。
+- runtime 前置防護在支援的標準 Python 檔案／路徑 API 與已知 `ntpath` 別名上先阻擋或映射，再進入底層操作；未宣告或不支援的 UNC 操作保持受阻。這是程序內防護，不能宣稱為 OS sandbox，也不授權原生 extension 或任意私有 API 存取網路。
+- 精確外部資源使用 `scope=external-exact`，只接受經預覽確認、來源版本綁定的本機絕對路徑，且位於專案父層支援範圍之外並與來源樹完全分離。原路徑只作邏輯比對；實體資料仍只在 owned lease 建立及清理。拒絕磁碟根目錄、UNC／裝置路徑、路徑跨層、連結與來源重疊。突變沿用同一絕對比對，不推導額外外部別名；新地址未宣告就保持受阻。角色的資源摘要使用別名／雜湊，不另附外部完整路徑，且別名不能充當 expected。
+- 突變的來源副本與隔離資源別名須使用同一份已核對匯入布局；不得為未使用的平面目標建立額外目錄映射，也不得只因暫存區有同名檔案就猜測來源對應。基線布局／資源設定失敗保存為 error，沒有可採用分數；真正的多重別名衝突不能選第一筆忽略。
+- 依使用者 2026-10-09 要求，明確資源可使用 `scope=project-parent`，限定所選根目錄同父層且不與根目錄相交的子樹；`path` 仍須安全相對路徑，不接受 `..` 或任意絕對路徑。原位置只用於比對邏輯路徑，資料內容不得讀取、複製或寫回；執行與突變均映射到 owned lease，scope 納入設定與證據身分。套用前須顯示具體映射清單並確認。
+- 預檢診斷遺失或工具未完成不能冒充「下一個載入障礙」；保留前後檢查的獨立證據，顯示本次診斷不完整，不能沿用舊診斷冒充本次原因或把受阻當就緒。
+
+- 依使用者 2026-10-08 確認，綁定根目錄／來源雜湊的明確資源可在匯入前實體建立：空白暫存目錄、純文字 fixture、結構化 SQLite schema／seed。本節窄例外取代下文對「受測應用」一律禁止檔案與檔案 SQLite 的限制；生成測試直接 I/O、網路、shell、共享 DB 與未宣告資源仍禁止。
+- 資源不得複製正式資料、改寫來源／`__file__`、猜 schema、呼叫未宣告初始化函式或代寫 expected。相對路徑綁計畫根目錄；突變副本僅映射同一批准資源。
+- 每個新 worker 重建 seed；同一 Trace worker 的 import／call 沿用，baseline／mutant／新 case 獨立。suite 內方法的公開 API setup／cleanup 由 AI 測試安排，不宣稱方法級自動隔離。
+- 資源 schema／seed／來源批准納入計畫身分；不同設定不共用觀測、審查或品質證據。外層必須在 owned 子樹結束後核對並清理自己的 lease；清理失敗、缺 schema 或初始化失敗不能算通過／oracle／killed。詳見 `docs/isolated-test-resources.md`。
+
+- 依使用者確認，2026-10-07 重構的正式 LLM 完整流程以 `ai-reviewed-loop-v1` 固定為「AI 分析 → Writer 撰寫 → 工具執行驗證 → Reviewer 同意 → 突變量測 → 品質不足交 AI 修訂 → 重新執行及審查」。本節取代先前允許工具自動補測、直接修正 expected 或未完成審查仍進入突變的分工；安全、身分核對與品質門檻保持不變。
+- Reviewer 只有回覆契約有效且沒有待處理 finding，才允許該版候選進入突變。有效 finding 交 Writer；無效／矛盾回覆僅在既有限額內修正審查契約，仍無效就保留可執行成果並停止該候選的完整流程。審查不可用、預算耗盡或取消，均不能改成同意。每次 AI 修改測試後必須重新執行、重新審查；同一候選與同一完整證據的審查快取仍可使用。
+- AST、Trace、受限計算、數值邊界及狀態實驗只向 AI 提供有來源／輸入身分的證據或待驗證提案，不在正式 LLM 候選中自動附加 host 測試、合併 Trace 基線或改寫 expected／assertRaises。Writer 與 Bug Fixer 才能產生正式測試修訂；模型修訂仍受相同結構、範圍、passing 案例保護及執行 gate。
+- 已通過執行的第一份最小模型測試仍立即保存 immutable executable checkpoint，但該 checkpoint 不等同審查同意或品質通過。未啟動的突變保存 null／未執行，不能補成 0、100 或沿用其他候選的分數。
+- 通過案例保護涵蓋生成、Reviewer 交 Writer 修訂及跨 Tier；不得只檢查方法名稱與執行仍通過，還須保留原輸入、精確 expected／比較、例外與共享設定。無法證明任意改寫等價時明示拒絕，不以放寬斷言換取通過。失敗方法可依證據修訂；新增案例、可證明的標準 unittest 斷言強化及更嚴格數值 tolerance 仍可接受。
+- Reviewer 的機械事實必須綁定目前候選及來源；只有完整、同 typed 呼叫且可重播的隔離觀測支持 expected 事實。拒絕明確矛盾的回覆後只可要求有界重新審查，不能把刪去錯誤 findings 的結果算批准；獨立需求、未知語意及不同輸入不由文字規則猜測。
+- 補測任務是否完成必須核對原指定 mutant ID 或 line／branch；其他覆蓋增加只屬全局進展，不能替代指定缺口完成。來源、引擎或候選集合不同及不完整量測維持 unavailable；未解決任務保留其觀測，沿用原總預算與停滯限制。
+- Reviewer 同意證據必須綁定同一 run、source、target 與候選的 `approvedCodeHash`，保存為 `reviewApproval.testHash`；`completed` 只可用於零 findings 的已批准候選。審查受阻終態為 `review-blocked`，沒有已核對突變時保存 `mutationStatus=not-measured`。保留的前一輪品質與本輪審查阻擋須分開呈現。
+- 結果須分開標示 AI 產物、工具證據、審查決定與品質量測；新流程因審查受阻時明示原因及突變未執行，不套用舊 Demo 的量測達標標籤。舊報告保留原始 workflow／policy 與讀取相容性，不改寫為新流程成果。
+- 數值技能保留 Python 布林數值語義與 typed 輸入，可核對單呼叫內建 TypeError／ZeroDivisionError、正常回傳及計算步驟後提供修訂證據；例外不符、重綁定、複合 scope 及不可證實運算保留未知，不能由工具默默改寫候選或略過 gate。
+- Bug Fixer 回覆格式／合併契約失敗，可使用既有一次性 Writer 接手額度，傳入原候選與實際失敗；不直接降 Tier。接手仍走結構、範圍、保留 passing 案例、執行及總預算檢查；取消／傳輸錯誤不能偽裝成格式修復。
+
+
+- 依使用者 2026-09-30 澄清，正常流程必須包含突變測試，預設 `validationMode=full`，正確性優先、速度優化延後。`execution` 僅供明確選用的單元測試執行診斷，不驗證整個專案可正常運作，也不可代替完整品質驗收。以下要求 Trace oracle、coverage、mutation、Reviewer 與 Tier 分支的規則適用於 full，不能用來將 execution 未量測的項目補成通過。已保存的明確模式選擇保留，介面必須顯示是否包含突變；切回 full 必須重新執行。
+- execution 保留靜態語境、同環境匯入預檢、明確初始化 fixture、結構／AST／簽名／目標 binding 與斷言檢查、隔離執行及修復範圍限制。可提出來源支持的確定性關係、可達 literal 或同測試控制之 Mock 行為作為待執行測試假設；不可憑空發明需求、依賴 API、例外、環境常值，或 mock／複製受測目標。測試通過只驗證實際案例，不證明完整需求正確。
+- execution 的受限算術工具只提供來源支持的假設給 AI 修訂，不直接替換測試。此模式沒有同輸入 Trace 核對，不得將算術假設標成已觀測 oracle；AI 產物仍須經實際執行與原有範圍 gate。
+- 模式在執行前固定並記入 manifest。只有同一版 source/test/run 的真實目標呼叫、至少一個未略過且成功的案例、完整且成功的隔離紀錄均核對後，才可標示「執行驗證通過」。空測試、全 skip／expectedFailure、匯入受阻、來源變更與缺少證據不得算通過。批次重新讀取證據；結果不得冒充完整品質通過。
+- execution 的 Auto Writer 仍須通過生成資格；未合格時提示測試連線或手動 Tier，不啟用 Trace fallback。Reviewer、覆蓋率、突變與深度 Trace 延後，未量測保存 null／deferred；full 的政策與 gate 不變。既有程式／函式兩層結果及原檔不變規則仍適用。
+
+## 通用性與語境
+
+- `python_scripts/dynamic_tracer.py`、`python_scripts/ast_extractor.py` 與基礎提示詞不得硬編碼任何業務領域關鍵字、固定閾值或特定回傳結構。
+- 技能必須由 Skill Dispatcher 根據目標原始碼與 AST 選取 Skill Cards；不得把某個專案的規則帶進其他專案。
+- full 的數值技能僅可把受限計算結果當待核對證據；提供可 assertion 的計算核對結果前須有同版來源／相依與同一組 typed 輸入的完整、可 assertion 隔離 Trace。不得以算術工具輸出取代 Trace，或把計算一致當作獨立需求驗證。證據交 AI 修訂，正常回傳與例外依原輸入分開核對；AI 修訂須保留 passing 方法、輸入及原品質 gate。
+- Semantic Analyzer 的 JSON 回覆必須先經 schema／佔位值清洗，才可傳入 Writer、Reviewer 或報告；模型不再負責選取技能 ID，舊 required_skills 僅保留讀取相容性；空白、`<...>` 佔位符、未知 assertion style 與不完整的分析結果項目不得污染測資策略或技能購物車。分析師提出的突變「候選」只是待驗證假設，不得視為事實。
+- 語意分析的回覆至少要含有一個正式 top-level schema 欄位才可視為分析結果；任意 JSON、provider metadata 或錯誤 envelope 都必須拒絕。正式 full 的初始 Analyst 未回覆或無法通過本地 parser 時停止，不以 AST 技能卡代替 AI 分析後直接進 Writer；AST 仍保留為診斷與技能選擇依據。
+- 供應商支援 JSON Schema 時，Semantic Analyzer 與 mutant triage 必須帶最小任務 schema；供應商 schema 只提供傳輸層結構保證，所有回覆仍需通過本地語意／分流 parser 和 execution quality gates。不得因 schema 成功就把模型候選升格為事實。
+- Writer 一律生成純 Python；其資格不決定 Analyst 的 JSON 能力。Analyst 使用獨立的短計畫 JSON 契約，本機 Ollama 帶共用 schema，Custom 保留相容 JSON mode，Cloud 使用共用 schema；明確格式拒絕才可移除服務格式參數，保留相同提示、證據與當次 deadline。HTTP 成功但計畫無效只由 Analyst 補正一次，不暗中改文字再問；本地語義與品質 gate 不放寬。
+- Semantic Analyzer 必須收到受預算限制的目標模組 imports、引用 globals、class bases 與 `__init__` 簽名／賦值；這些只可用於 import、constructor、dependency injection 與 Mock 策略，不能作為回傳值、例外或外部 side effect 的 assertion 事實。
+- AST 提供的 imports、相依與引用 globals 必須遵守所選函式的 Python lexical scope；參數、區域重綁定、巢狀 callable、`nonlocal` 與 comprehension target 不得誤認為模組常數或模組 import 相依。只有可靜態證明未遭 shadow 的模組 binding 才可進入 Prompt。
+- 來源碼中的 `return` 表達式只可提示可能的結果形狀與路徑；除非測試輸入可明確到達 literal return，否則不得把 `return helper(value)`、attribute 或運算式直接轉化為 expected value。精確 assertion 仍須來自可 assertion Dynamic Trace 或同測試控制的 mock side effect。
+- Prompt 詳細程度與 Tier 2 分治策略必須依已探測的參數量、Context 與已解析 Tier 決定；不得以供應商、模型品牌或名稱片段建立白名單／黑名單。
+- 本機輸入預算必須使用當次 wire `num_ctx`，不得按 2B／3B／13B 等參數量另設小上限。明確設定及真正手動保存值優先；自動模式在模型上限已核實時選其一半（向下取整且至少 1），不把舊自動捕捉值或舊資格容量當作手動選擇。上限未知時才沿用保存／合格容量、同模型實際分配／Modelfile `num_ctx` 或保守 fallback。自動選擇是請求設定，不冒稱實際 allocation；兩者與模型上限分開顯示。連線探針與生成請求使用同一選擇，容量變更須重驗各角色，批次維持啟動時快照。使用者可手動修改或保存 0 清除；未知上限不能由 fallback 證明手填值可用。
+- 相同請求內可引用完全相同且完整的 source／setup 欄位，引用位置必須唯一；各相依身分、來源雜湊與觀測不得合併。structured small／large Writer 使用相同完整必要證據投影。初次 seed 可選完整、可重播且無同呼叫衝突的一案，原證據產物保留；結構重試與修訂必須恢復全部原觀測及完整候選，超額仍在傳輸前停止。
+- 本機初始 Analyst 短計畫輸出上限為 1,024 tokens，full 初次 Writer 單測試 seed 上限為 1,536 tokens；小容量均不超過原三成預留，輸入上限採同一 `num_ctx` 減輸出預留，wire 同步設定 `num_predict`。不增加使用者容量、不按模型名稱特化；其他角色與擴充保留原政策。輸出因長度中止不可當作完整回覆。相同呼叫站 setup 可群組但保留全部位置；相同完整資源 schema 可引用但每個資源保留自己的來源、種子與狀態，不代表共用資料庫或 assertion oracle。
+- local/full Writer 修訂須顯式提供當次完整候選及宿主結構化工作量。基礎輸出為 `max(1536, ceil(候選 token 估量 × 1.25) + 256)`，小候選再加 `512 × max(findingCount - 1, missingScenarioCount)`，最多原三成預留且不得降低本角色 learned floor。Reviewer 工作量須綁定同候選與同一份有效 findings，使用後消耗；明確單一結構／執行修補採 `{1,0}`。未知／非法工作量、大候選、未知候選、execution及遠端保留原政策，不從 prompt、自然語言或其他 checkpoint 猜測。每個候選容量的輸入、wire `num_predict`、增容與診斷使用相同工作量。finding 數量不是新增測試數量保證；結構／Trace修訂不得重包為seed，分區及passing基線仍完整，擴充重試不能按短片段縮限。這是有界估量，非完成保證，原期限／計數及全部 gate 不放寬。
+- Analyst 的初問與最多一次格式補正預先保留兩個使用者單次 API 額度；每次邏輯請求仍不超過該額度，整個階段受啟動時固定的階段／target deadline 限制。HTTP 重試、格式／思考量回退與排隊不得重新取得額度，傳輸失敗或取消不啟動格式補正。舊直接呼叫未指定單次額度仍共用原 deadline。
+- 耗時紀錄只保存固定欄位與安全數值：排隊、每次 HTTP 等待／讀取／總耗時、狀態，以及 Ollama 回報的 load／prompt_eval／eval／total duration、token 數與完成原因。缺值為 unknown／null，不把客戶端等待推定為網路或 GPU 耗時，不保存 provider 原文、憑證或端點；逐輪與失敗報告呈現同次事件。
+- Writer 的輸出契約必須對所有 provider、模型與 Tier 使用相同的純 Python code fence；包括 Tier 3 Scaffold、Tier 4 與 Self-repair。不得依模型名稱插入或移除 `<thinking>` 等分析標籤，以免分析文字混入可執行測試。
+- 產生測試前必須保留必要的語境：目標函式、imports、引用的模組常數、類別與 `__init__`、相依函式、呼叫站與動態追蹤結果。
+- AST 已取得的目標與建構子參數型別註記必須以「輸入形狀提示」完整傳給 Writer、Semantic Analyzer 與 Reviewer；型別註記不得單獨推導回傳值、例外或 assertion oracle。
+- `__init__` 語境只可包含建構子本體實際執行路徑中的 `self` 賦值；不得把巢狀 helper、lambda、內部類別的 `self` 賦值誤列為初始化狀態。
+- 當 selected class 沒有自己的 `__init__` 時，AST 只可從同一模組、無 decorator／class keyword 且以簡單名稱可解析的繼承鏈提供有效建構子語境；匯入 base、動態 base、metaclass、cycle 或無法證明的 MRO 不得猜測。繼承簽名與父類別 `self` 賦值僅是 setup 指引，仍須依真實 caller literal 或隔離執行驗證，不能直接建構測試 oracle。
+- 多重繼承只要含有任何無法解析的 base，就不得跳過它採用後方本地 base 的 `__init__` 當作有效簽名；Python MRO 可能先解析未知 base，系統必須保守視為未知。
+- 生成、Mock Scaffold、Reviewer 與救援程式必須使用同一個可匯入的目標模組路徑；不得以檔名匯入而建立與 package 模組不同的第二個模組實例。
+- 一般函式在任何模型角色請求前必須以相同 Python／匯入環境預檢正規目標模組與 coverage；核對來源實體，載入副作用仍受阻擋。環境不成立時保存具體原因並停止，不以 Tier 降階或模型修復處理。
+- 模組預檢位於所選目標 AST 之後、相依／呼叫點探索與深度 Trace 之前。失敗快取限定同一分析／批次；新分析必須重新檢查已修復的相依，暫時工具失敗與取消不得當作可重用環境診斷。
+- 初始化設定每次操作最多確認、套用一份清單並實際重新預檢一次，之後保存明確終態；新障礙不得自動引發下一個初始化確認視窗。每次明確掃描刷新本 execution 的既有失敗快取，不干擾其他執行。比較逐項障礙及來源位置，不能只以受阻數量或設定 ID 判斷改善；批次轉入設定須沿用本批確認的來源範圍，零目標／未重檢不等同就緒。
+- 呼叫站搜尋必須以目標模組／匯入關係確認，不得只依同名函式全域比對。
+- 直接匯入的函式別名也必須在該呼叫行仍解析到目標 binding；函式參數、local／closure／`nonlocal` binding、同 scope import 與模組層後續重綁定都必須排除，不得把同名 callable 的參數注入 Trace。
+- 對 `import package.module` 的呼叫站，只有與該 import 完整 binding path 相同的 `package.module.target(...)` 或 `package.module.Class(...).method(...)` 可補充 Trace 事實；相同 root 下的其他 attribute chain、動態 import 與不明 re-export 一律不可視為目標。
+- 使用者選取 `Class.method` 時，AST、Dynamic Trace、Mock Scaffold、複雜度與突變測試必須全程解析為同一個明確類別成員；不得退回同名頂層函式或其他類別方法。
+- 生成測試的結構驗證在目標為 `Class.method` 時，必須確認呼叫透過已匯入的目標類別、目標模組別名，或由其直接建立的實例；不得把其他物件的同名方法當作測試證據。
+- `Class.method` 的呼叫站語境必須解析直接匯入、模組別名與明確 `Class(...).method(...)` 結構；建構子字面值與方法字面值必須分開傳遞，且不得把未能靜態驗證的實例呼叫當作目標證據。
+- 呼叫端可將同一 lexical scope 中直接以目標類別建構的局部變數辨識為實例；條件式、外層 scope、屬性鏈、factory 或重新賦值後無法證明型別的變數一律不可當成 Trace 事實。
+- 對已選取 `Base.method`，呼叫站僅可把未覆寫該 member、單一可解析基類且無 class decorator 的直接繼承子類別視為同一目標；複數繼承、覆寫、metaclass／decorator 或無法證明的 MRO 一律不得產生 Trace 事實。
+- 函式選單、全檔案與批次掃描只能列出可獨立執行的頂層函式與直接 `Class.method`；不得把函式內局部 helper、巢狀類別或巢狀類別方法建立為分析任務。
+- Tier 路由的複雜度評估只能根據 Python AST 結構與可解析的匯入／呼叫關係；不得以業務、資料庫、網路或檔案等名稱關鍵字推測風險。
+- 動態追蹤執行目標函式時，必須對目標函式的 stdout 與 stderr 進行重定向隔離，確保追蹤輸出永遠為純淨 JSON，不受目標程式碼中的 print 或日誌干擾。
+- Dynamic Trace 不得執行被測模組的檔案寫入、刪除、子程序、shell 或網路副作用；被阻擋的操作只能列為診斷，不得轉化為 LLM 的例外 assertion 事實。
+- 例外事實以 AST／Trace 的確切 identifier path 或已驗證 `exception_qualname` 解析，不得要求類型名稱以 `Error`／`Exception` 結尾；診斷句子及 `call_assertable=false` 仍不得成為 assertion oracle。
+- 含記憶體位址、循環結構、非有限數值或遭截斷 repr 的 Trace 結果僅能作為診斷語境，不得轉換為 Tier 1 或 LLM 的精確 assertion oracle。
+- Trace 若實際讀取未控制的時鐘、隨機／熵或程序身分，該呼叫的回傳及例外均只能作為診斷，標記 `call_assertable=false` 與 `uncontrolled-ambient-read`。涵蓋目標、setup、helper、async／generator 及應用模組初始化；不能因連續數次值相同就升格為固定 oracle。需要精確斷言時使用同測試明確控制的 mock／輸入，仍走所有執行與品質 gate。
+
+## 測試生成安全
+
+- 通用初始化建議只能依真實隔離例外、原始 AST 與已載入 callable 身分產生；不得硬編碼框架名稱或以一般 module-import 失敗猜測替身。自動外部入口只接受回傳值未使用的直接模組頂層呼叫，綁定觀測行號及已確認來源版本；來源變更後須重新預覽。應用 helper／callback、需要回傳值、缺套件／API、逾時與歧義來源保持受阻。突變副本行號只能依相同未變更 AST 呼叫重新定位，不能擴大替身範圍。
+
+- 使用者可透過 `llmUnitTest.importFixtures` 明確宣告匯入前測試設定；禁止修改受測原檔或刪除初始化 AST 來取得通過。只有綁定來源雜湊之模組頂層外部操作可被替換，一般函式執行仍受原隔離規則限制。預檢、Trace、unittest／coverage 與突變 baseline／mutant 必須共用同一份設定；來源變更拒絕舊設定，報告保留設定 ID 及實際 mock 證據。使用 fixture 時僅採已支援該契約的共用隔離突變執行器（內建或已驗證 Mutatest AST adapter）；不可宣稱真實目錄、正式設定或 GUI 啟動已驗證。
+
+- 正式 unittest、coverage 與突變試驗必須使用 `generated_test_runner.py` 的執行防護；沒有明確 mock 的檔案／網路／shell 與非隔離 SQLite 操作須失敗，遭吞掉的安全例外也不能算通過。工具載入／traceback 的必要來源讀取與 coverage 自身寫檔須和應用執行分開。
+- 突變觸發隔離阻擋時列為執行錯誤，不得算成 killed；內建／外部引擎都必須拒絕含這類錯誤的品質分數。獨立 `:memory:` SQLite 可用，共享 URI、ATTACH／VACUUM INTO、extension loading 與替換隔離 authorizer 不可用。
+
+- LLM 回應必須先通過 unittest 結構檢查與 Python AST 解析，才可寫入 `loop*_test.py`。
+- 結構驗證必須接受可追溯的合法匯入別名，但不得允許測試碼重新定義被測函式或其匯入別名。
+- `unittest.TestCase`／`IsolatedAsyncioTestCase` 類別可使用明確由標準庫 `unittest` 匯入的直接名稱或別名；驗證器必須追溯該 import，不可因模型選擇慣用拼寫而誤拒，也不可接受未證實來源的同名類別。
+- 結構驗證必須確認 assertion 直接驗證目標呼叫、目標的回傳值，或 `assertRaises` 區塊中的目標例外；不得將無關 assertion 視為行為測試。
+- 行為驗證只能採用可執行的 Python 語句；註解、docstring、字串或 Markdown 中出現的目標函式與 assertion 文字不得視為測試證據。
+- 標準 mock 呼叫／await 斷言可作為行為測試，但 AST 必須證明 Mock 的標準庫來源、目標使用點 patch 或參數傳入，以及同測試內 target 執行與斷言順序。僅有同名 assert 方法、未使用 mock、重綁定或未 await 的目標不得通過。
+- Trace 的 SQLite 僅可使用受保護的獨立 `:memory:` 連線；檔案、共享 URI、ATTACH／VACUUM INTO 與 extension loading 均不得提供 oracle，安全例外被目標吞掉也不例外。
+- Reviewer 的相同測試／完整證據可在同一目標分析內重用；連續兩次契約失敗後停止額外審查，必須保留未完成狀態並阻擋該候選的突變。審查完成與審查同意分開解讀：合法 finding 仍須 AI 修訂，不能只因完成解析便進入量測。rollback 必須同步保留候選的審查狀態及品質證據，scorecard 不得拼接跨輪次最高分或將其他版本的同意套給新測試。
+- 生成測試不得直接啟動 shell／子程序、直接連網、直接檔案 I/O、動態執行程式碼或做破壞性檔案操作；外部行為必須使用 `unittest.mock.patch`／`mock_open` 模擬。
+- 生成、Reviewer 與 Self-repair 的目標函式呼叫必須符合 AST 擷取的簽名；未知 keyword 或過多 positional 引數只允許用於明確的 `assertRaises(TypeError)` 行為測試。
+- 上述簽名規則同樣適用於被測函式的合法匯入別名，不得因 alias 而略過驗證。
+- Markdown、分析文字、空內容、原始碼複製或沒有 `test_` 方法的內容均不可當作測試檔。
+- Reviewer 與 Self-repair 必須使用相同驗證規則；失敗回應只能寫入報告，不可覆寫有效測試。
+- Reviewer 與 Self-repair 階段必須提供與生成端同等完整度的語境（目標原始碼、imports、引用常數、Class 定義、相依、真實 Trace 數據與證據觸發的技能卡），禁止在缺乏常數與依賴定義的狀態下進行盲目修復。來源碼與技能策略只可選擇路徑／setup，不可取代精確 Trace assertion 事實。
+- 涉及外部模組副作用或跨模組返回值測試時，必須使用標準的 `unittest.mock.patch`；嚴禁透過竄改本地變數進行無效的偽 Mock。
+- 生成測試的標準 `patch` 字串或可解析 `patch.object` 不得替換所選目標或其類別，即使同檔另有真實 Trace 基線亦不例外。已知直接 unittest 類別中、沒有 decorator 的測試方法若要求額外必填參數，須於結構階段交 Writer 修正；無法證明的 decorator 注入仍由隔離執行判斷。
+- 動態追蹤只提供可呼叫性的基礎 I/O 事實；複雜邊界與多分支策略由 Semantic Analyzer 產生。
+- Tier 1 在模型已通過資格探測，或使用者明確選擇 Tier 時，必須由 LLM 根據目標來源碼、完整 AST 語境、可 assertion Dynamic Trace 與證據觸發的技能卡選擇測試組織；LLM 產物須通過結構、隔離執行、Reviewer 同意、coverage 與 mutation gate。正式 full Auto 不再啟用未驗證模型的 deterministic fallback；歷史或離線 Trace 產物維持原 provenance，不得稱為 LLM 生成成果。
+- LLM 證據導向 Tier 1 與 Tier 2–4 都必須將可安全 assertion 的 Dynamic Trace I/O 保留為角色可讀證據；測試情境與程式由 AI 撰寫。不得用自動附加 Trace 補足模型未寫的案例；已執行成功的模型基線仍受保留檢查。deterministic Tier 1 由 Trace 建構的既有 fallback 保留獨立 provenance，不得稱為 AI 主導閉環成果。
+- 模型 context 預算不足時，Prompt 必須以完整段落優先保留目標函式、可 assertion Dynamic Trace、類別建構語境、已驗證相依事實與證據觸發的技能卡；低信心的語意候選、補充策略與 few-shot 範例可先縮減。不得截斷規則、code fence 或將候選建議升格為 execution fact。
+- Tier 1 fixture scorecard 必須以機讀 `llm-evidence-bound` 或 `deterministic-fallback` provenance 分開評分；同一份彙整含有兩種模式而未選擇模式時，必須拒絕形成單一品質結論。舊報告缺少 provenance 時不可計入 LLM 成績。
+- 若要宣稱 Tier 1 LLM 已通過發行品質驗收，必須使用 scorecard 的 `--model-identity <provider/model>` 與 `--require-tier1-llm-release`；每個 Tier 1 corpus fixture 都必須是同一個模型識別、實際 Tier 1、`llm-evidence-bound`、無執行中斷且 coverage／mutation 均達各自門檻。deterministic fallback、混合模式、不同 provider／模型、缺報告、未計分或 Tier 不符一律不可替代。
+- Tier 2 分治合流的每一份模型子回覆都必須先通過 Python/unittest 結構與 Trace assertion evidence gate，兩者缺一不可；不合格子回覆只能對該子任務帶著原因重試，不得合併污染其他已通過子測試。
+- Tier 2 合併器必須以每個已驗證子回覆的標準庫 `unittest` import 解析其 `TestCase`／`IsolatedAsyncioTestCase` base 與 alias；不得只認固定 `unittest.TestCase` 字串而靜默遺失合法子測試，也不得接受未追溯到標準庫 import 的任意 base class。
+- Tier 2 依 caller 分治時，每個子 prompt 與其 Trace assertion gate 只能接收 source literal 可精確匹配該 caller 的 Trace I/O；repr、動態值、近似值或未解析 caller 一律不可借用其他 caller 的 oracle。分治完成後僅合併已驗證的模型子產物，不做全域 Trace 測試 augmentation；尚未涵蓋的已驗證行為作為 AI 補測證據。
+- 若目標為 instance method／property 且 caller 具有已驗證 constructor literal，Tier 2 caller partition 必須同時精確比對方法 args／kwargs 與 constructor args／kwargs；相同方法引數但不同實例 state 的 Trace 結果不得混用。Trace 若缺少可驗證的建構語境，該 caller 子任務必須保守不取得該 oracle。
+- Tier 2 合流不得把不同 caller context 的 `setUp`／`tearDown`／Mock 狀態塞進同一個 TestCase；每個已驗證子回覆必須保留為獨立且名稱唯一的 TestCase，只可去重共用 imports。
+- 每份中斷報告必須寫入 provider-neutral 的機讀失敗分類；分類只用於後續 Tier／模型品質分析，不能改變驗證 gate、重試或把失敗轉成通過。至少區分 API、格式、AST／Trace、執行驗證、coverage、mutation、環境與 timeout。
+- Mutant triage 回覆必須包含 `verdicts` 陣列及每筆可辨識的 mutant、verdict、reason；`KILLABLE` 只有附帶完整 `kill_test` 才能成為下一輪提示。等效／可殺計數必須由已驗證 verdicts 重算，不得信任模型宣告的 summary 欄位。
+- 已通過資格的 Tier 2–4 測試，對頂層函式必須保留所有可安全 assertion 的 Dynamic Trace I/O 方法；LLM 可以增加情境、Mock 與突變修補，但不得移除或覆寫已驗證的行為 oracle。
+- 已通過資格的 Tier 2–4，對可安全建立的 class method 或 property 也必須保留可 assertion 的 Dynamic Trace I/O 供 AI 使用；constructor literal 與每筆方法輸入綁定同一觀測，不能猜測依賴或混用狀態。是否新增測試及其 `TestCase`／`setUp` 由 Writer 決定，再經執行與審查；工具不覆寫或附加模型 fixture。
+- Dynamic Trace 可使用受限、語法／型別中立的數值尺度組合作為探索輸入，但任何測試 oracle 都必須來自實際執行結果；不得將探索值或結果解讀為特定領域規則。
+- Dynamic Trace 對直接 AST `and` 條件可合成同時滿足多個不同參數之 literal／長度／集合子條件的單一探索輸入；只能在每個子條件皆可靜態證明且不衝突時使用，必須優先受限於 probe 預算，且仍不得將該輸入推定為任何輸出 oracle。巢狀 callable 的條件不得進入 selected target 的探索。
+- Dynamic Trace 可從明確 `typing.Literal[...]` annotation 擷取有限 scalar 值作為探索輸入；只接受字串、數字、布林與 `None`，不得評估 annotation 中的 call、attribute 或任意表達式。這些值僅用於實際執行 Trace，不是 output oracle。
+- 每一項新增 Trace 輸入推導能力，都必須新增中性 corpus fixture，並至少驗證 AST／Trace 取得預期輸入、deterministic Tier 1 unittest 可執行，以及符合該 fixture 的 mutation 門檻；不得只以單一 helper unit test 宣稱品質提升。
+- 每一項新增類別建構語境（包括可安全解析的繼承 `__init__`）都必須有中性 corpus fixture，端到端驗證有效 constructor signature、caller literal、Dynamic Trace、deterministic Tier 1 unittest 與 scoped mutation；corpus 不得回讀舊的子類別空 `__init__` 而略過有效建構子。
+- corpus 的 Python 整合驗收必須使用與 extension 相同的工作區 `.venv` 解析邏輯；不得在測試程式硬寫系統 `python`，避免本機套件遮蔽乾淨環境的依賴問題。
+- 語意分析師提出的 input hints 只是候選；在傳給 Writer 前必須以 AST 目標函式 signature 過濾，絕不得讓 dependency 的參數、回傳 key 或 caller 局部變數成為 target kwargs。目標呼叫站僅能提供候選輸入，不是相依行為或輸出 oracle。
+- Semantic Analyzer 的 scalar input hints 可在 AST signature 完整、每個 required 非 variadic 參數都有安全 literal／source default 時，轉為有上限的 Dynamic Trace 候選；只接受 `None`、布林、有限數字與無 expression 的短字串，禁止 eval、collection、call、attribute 或變數名。再次 Trace 必須與既有 I/O 合併保留，且新增結果仍須由真實執行決定 assertion／例外；候選本身永遠不是 oracle。
+- 相對 import 的 caller 解析必須先依 caller 所在 package 與 `ImportFrom.level` 正規化為絕對模組路徑，再與 target module 比對；不可只以短模組名相符就收集 caller。跨模組 caller literals 必須透過 corpus 實測傳到 Dynamic Trace。
+- `from . import module` 後的 `module.target(...)` 只能在該 relative alias 完整解析後精確匹配 selected target module 時視為 caller；不得把 package 的未知 attribute 或同名成員當作 module fact。
+- 已解析的 module alias 仍須在呼叫行通過 lexical scope／module binding 歷史檢查；函式參數、區域 assignment、`nonlocal`、或較晚的 module rebind 都使該 alias 失去 caller 證據資格。
+- 模型資格探測的 provider 請求與隔離 Python unittest 執行均不得低於 30 秒；同一 selected `.venv` 必須用於探測與正式執行，避免將慢速但可用模型誤判為不合格。
+- Writer、Reviewer 與 Bug Fixer 的模型資格必須分別探測與保存；Writer Python 可執行不代表 Reviewer JSON 或單方法替換合格。Auto 只能呼叫各自狀態為 verified 的角色，手動 Tier 仍保留既有 gate。
+- AST／Dynamic Trace 的分支探索可正規化純 literal 的反向比較（如 `3 < value`）與 parameter-first literal membership（如 `mode in ('a', 'b')`）；反向 membership、非 literal collection、helper call、複合 predicate 與巢狀 callable 一律不可產生輸入事實。
+- `match/case` 只可擷取直接目標參數、無 guard 的 scalar literal／literal-or pattern 作為輸入探索事實；guarded case、capture／mapping／class pattern 與可變匹配一律不可當作可保證到達的分支。
+- 模型若對完全相同、可 assertion 的 Dynamic Trace 呼叫直接寫出 `assertEqual` 或 `assertIsNone`，其 assertion value 必須與該 Trace 相同；`assertEqual` 的 actual／expected 兩種參數順序與可選訊息都必須檢查。`assertTrue`／`assertFalse` 只在 Trace 精確回傳 `True`／`False` 時判定矛盾，因為其他 Python 值的 truthiness 必須由隔離執行判定。初次 Writer、Tier 2 分治合流、Reviewer 與 Tier 4 Self-repair 的每個模型產物都必須套用此 gate；矛盾候選必須在寫檔／執行前拒絕並以事實原因重試。此 gate 不得拒絕未 Trace 的候選輸入或經額外轉換後的 assertion。
+- Tier 1 若 AST 指出目標為一般 coroutine，必須用標準 library event loop 執行已驗證的呼叫後再 assertion／`assertRaises`；async generator 仍須以受限收集邏輯處理，不得把 coroutine 或 generator 物件本身當作結果 oracle。
+- 相依函式的具體回傳值與例外類型，只有在 Python Dynamic Trace 驗證後才可作為測試事實；模型的語意推論只能當作策略建議，缺乏事實時應依原始碼或 `mock.patch` 處理。
+- Tier 1／Tier 2 的模型生成測試不得先直接呼叫相依函式來計算 expected value、或建立未被目標呼叫使用的 setup；若相依行為決定目標路徑，必須在目標模組使用點以 `mock.patch` 明確控制，並以目標函式呼叫作為測試主體。
+- 若模型在同一個測試方法中將非 target callable 的結果存入變數，該變數至少必須實際傳入 target、參與 assertion 或注入 mock；完全未使用的結果是無效相依 setup，必須在寫檔前拒絕。這個 gate 不得拒絕 target result、有效 target input 或 mock 設定。
+- 突變分數必須以相同隔離匯入環境下可通過的原始 unittest baseline 為前提；baseline 失敗不得計算 killed mutant 或宣稱高品質分數。
+- 內建突變 fallback 對選取的 `Class.method` 必須同時驗證限定 scope、隔離 baseline 與所有 mutant 執行；非同步實例方法的 mutation score 不得因 event loop、建構子或原模組匯入而失真。
+- 內建突變 fallback 新增常見 Python operator 時，必須以可區分原始與突變行為的中性輸入驗證 mutant 確實被殺死；不得只增加候選數量便將未執行、等效或無法觀察的 mutation 計入品質分數。
+
+## 憑證與外部服務
+
+- Python 的專案依賴必須安裝於工作區 `.venv`；未明確設定 `llmUnitTest.pythonPath` 時，AST、Trace、資格 probe 的隔離執行、驗證、coverage、mutation 與本機 Python 回歸測試必須優先使用該 `.venv`（Windows 為 `Scripts/python.exe`，其他系統為 `bin/python`）。明確的使用者／實驗室直譯器設定可覆寫自動選擇；不得保存固定磁碟、帳號或工作區絕對路徑。
+- API Key 只能放在 VS Code SecretStorage、CI Secret 或執行環境變數；禁止寫入原始碼、設定檔、報告與 Git。
+- 公開 CI 必須在不取得雲端模型 Key 的條件下掃描 tracked files 與可達 Git 歷史的高可信密鑰格式；掃描失敗只可輸出 pattern 類型與檔案／commit 位置，不得輸出疑似憑證內容。此掃描不可取代已揭露憑證的撤銷與重建。
+- Google API Key 必須走 HTTP Header，不可放入 URL。
+- Cloud 設定需分開保存「名稱、模型、Key」；名稱不可被當成模型 ID。
+- 模型 unittest 生成資格必須以無副作用的最小 fixture 在 isolated Python 中實際執行為準；不可僅根據 HTTP 成功或文字結構標記為可用。
+- 最小資格 probe 的被測 fixture 必須由隔離執行器提供；模型只需生成 `unittest` 類別與指定的 target call／assertion。可相容地接受舊式自含同值 fixture，但不得因要求模型重寫 fixture 而誤判其測試生成能力。
+- 最小資格 probe 可接受安全的 fixture 結果暫存、固定 expected scalar、`assertEqual` 訊息與 `-> None` 註記；允許集合必須為可靜態驗證的 unittest 語句，不能為了相容性執行任意模型 Python。
+- `python-unittest-v9` 的兩個固定 Writer 案例須各自將目標結果與固定 expected 連到同一斷言；純常數比較、目標與自身比較、未被斷言使用的呼叫，以及被重綁的結果不能認證。結果來源只在同一測試方法內使用；先前版本資格須重新驗證，不能因 HTTP 或 unittest exit code 成功沿用。
+- 正式 Writer、Tier 2 分治、Tier 3 Scaffold 與修復角色的完整 unittest code request 必須一律要求純 Python code fence，不得把整份測試檔包進 provider JSON／schema；本地 extractor、結構、隔離執行、coverage 與 mutation gate 是驗證依據，Reviewer 另依 findings 契約提供同意決定。初始 Semantic Analyzer 的 JSON 契約失敗會阻擋正式 full，不能以 deterministic AST 規則冒充 AI 分析；後續 mutant triage 失敗仍可保留既有實測缺口供 Writer，但不得把無效分析當成有效角色產物。
+- 尚未完成「測試連線」的 provider／model 視為尚未驗證；正式 full 的 **Auto** 必須在 Writer 與 Reviewer 各自 verified 後才進入 AI 閉環，否則明示資格受阻，不啟用 deterministic Trace fallback。使用者明確選擇 Tier 1–4 時保留其選擇，不因探測缺失強制降階；其模型輸出仍必須通過分析、結構、隔離執行、Reviewer 同意、覆蓋率與突變閘門。測試連線可讀取參數量與 Context，但不能取代角色資格與正式執行驗證。
+- 模型資格的儲存、查詢與套用必須使用同一個 provider／模型身分正規化規則；Google 的 `models/<name>` 與 `<name>` 是同一模型，不得因 resource prefix 讓已通過的 Cloud 探測在 Auto 路由中失效；不同 provider 仍必須嚴格隔離。
+- 測試連線的供應商發現與基本探針時限不得低於 30 秒；每一次結構化或純 Python unittest 資格生成必須有獨立、至少 60 秒的時限，禁止共用已消耗的 AbortController 而誤判慢速模型無法生成測試。
+- 正式 Semantic Analyzer、Writer、Reviewer 與 mutation triage 的模型生成請求必須對暫態傳輸錯誤及 `408`、`429`、`5xx` 採有限次數、帶 jitter 的指數退避；`400`、認證與權限錯誤不得重試。重試不得重設使用者選擇的總 timeout，取消後不得繼續發送請求，且不得依 provider 或模型名稱決定規則。
+- 結構化輸出拒絕或不完整回覆改走一般文字相容模式時，必須沿用原始 API 請求的 absolute deadline；不得以遞迴或新 controller 重給一次完整 timeout。若退避期間已到期，不得再送出下一次 provider 請求。
+- deterministic Tier 1 僅保留離線工具、歷史讀取與其回歸測試，不作正式 full Auto 的資格回退。其測試必須完全由 assertable Dynamic Trace 推導；Trace 不足或無法安全建構類別實例時停止，不暗中呼叫 LLM。工具驗證成績與 AI 閉環成績保持分開。
+- 若 `Class.method` 的成功 Dynamic Trace 使用了呼叫端已驗證的建構子字面值，Tier 1 必須以相同字面值建立實例後才可寫入 assertion；不得因建構子有必要參數而丟棄已驗證 Trace，也不得猜測建構子依賴。
+- Tier 3 Mock Scaffold 若有已驗證的 caller constructor literal，必須將其作為明確 setup 事實提供給模型，並禁止將該設定誤傳給被測方法；沒有事實時不得憑空補出 constructor dependency。
+- 正式 full Auto 的 Writer／Reviewer 資格不足時，在角色呼叫與生成前停止並保留診斷；不得為了繼續流程改走 deterministic、其他 Tier 或未合格角色。明確手動 Tier 的每一輪仍接受相同可執行驗證與 Reviewer 同意 gate，不得以模型宣稱取代證據。
+- 離線 deterministic 產物未通過 unittest／coverage 或仍有存活突變時，只能保留工具結果，不得繞過模型資格啟動 AI 修補，也不能標示新 AI 閉環完成。
+- Stub/Dummy 快速通道只能依函式本體的結構（`pass` 或單一安全 literal 回傳）或函式名稱中明確的 `dummy` token 判定；不得依短小行數或複雜度分數略過具有可觀察行為的程式碼。`dummy` 是使用者標記的雜訊／佔位約定，不是業務領域關鍵字。
+- Stub 快速通道必須依目標的 module／instance／static／class／property 綁定方式建立可執行 smoke test；有必要建構子參數時僅可重用已驗證 caller literal，沒有事實則記錄原因並略過，不得寫入必定失敗的 `Class()` 測試。
+- 名稱含明確 `dummy` token 的使用者標記函式，必須在複雜度、AST、Dynamic Trace、LLM 與突變測試之前直接略過；報告須清楚標示略過原因，且不得生成未驗證的 Smoke Test。
+- 覆蓋率儀表板的完成項目必須可直接開啟同一項的 `final_report.md`；開啟前需確認檔案存在且名稱正確，執行中項目不可假裝有可用報告。
+- 報告的擴充功能追溯資料必須使用可攜的 extension ID、版本、建置識別與執行模式；不得寫入使用者帳號、絕對檔案路徑或工作目錄。
+- 生成測試的預先驗證必須透過引數陣列、明確 `cwd` 與 `PYTHONPATH` 環境變數直接啟動 Python；不得依賴 `chcp`、`set`、`cd /d`、磁碟代號或 shell 字串串接。
+- 原生突變引擎（`mutatest`／`mutmut`）同樣必須使用引數陣列、明確 `cwd` 與隔離 Python 環境；路徑不得內插至 shell 命令。突變工具的非零結束碼必須保留 stdout／stderr 供報告與後續修復判讀。
+- 偵測到資料庫 driver 的函式必須以資料庫隔離技能卡生成測試：每個測試使用 mock、in-memory 或暫存資料庫；禁止碰觸預設／共享資料庫、猜測驗證例外，或裸用未匯入的私有連線 helper。
+- 生成測試結構驗證必須拒絕非隔離的 SQLite 連線與未匯入／直接呼叫被測模組私有 helper；`sqlite3.connect(':memory:')` 與標準 `mock.patch` 得以保留。
+- LLM 的 `assertRaises` 必須有目標函式 AST 明確 `raise`、可 assertion 的 Dynamic Trace 例外，或同一測試明確設定的 mock `side_effect` 作為事實依據；不得憑空猜測業務例外。簽名不符的 `TypeError` 測試依既有簽名閘門處理。
+- Mock Scaffold 必須追蹤被測函式呼叫的同模組 side-effect helper；helper 若到達 imported I/O boundary，必須 patch helper 的 module use point，避免因只看目標函式本體而遺漏資料庫連線。
+- 模型輸出可使用標準 Python／Py／未標記 code fence，或被 `code` 字串 JSON envelope 包裝的上述區塊；系統只能擷取含 unittest 證據的單一程式碼區塊後進行結構與 AST 驗證，不得把 Markdown 說明、無 `code` 字串的 JSON 或多段產物當作測試程式。
+- 供應商拒絕 JSON／schema 格式時，僅可針對明確的格式拒絕狀態（400、415、422、501）回退為純文字生成；401、403、404、429 與 5xx 等帳號、模型、配額或服務錯誤必須保留並清楚回報，不得偽裝成格式回退。
+- Provider 回覆文字必須依官方／相容協定完整讀取所有可執行 text segments，再交給結構化輸出與 Python 驗證；不得只取第一段而截斷 JSON 或測試碼，也不得把 tool、image、reasoning 或未知 segment 偽裝成程式輸出。
+
+## 角色分工與證據交接
+
+- Bug Fixer 可確定性擷取唯一 Python fence，略去區塊外說明；只有同一 TestCase 宣告且僅含唯一失敗方法的 class 包裝可去除。不得忽略 fixture、decorator、多方法或其他 class 修改。保存安全的正規化標記，合併後仍須經完整 AST 範圍／結構／隔離執行，不新增模型請求或把格式相容當作測試通過。
+- Reviewer 的 target-binding finding 若引用的是 AST 來源所列依賴使用點 patch，且並非目標或其擁有者，不得作為替換目標的證據；整份矛盾審查保持未完成，不驅使 Writer 移除合法依賴隔離。
+
+- `bug-fix-v4` 正式輸出為單段 Python fence，最多三個必要 import 與唯一失敗方法，使用真實換行；JSON 僅保留歷史解析相容性。角色探針與正式請求的輸出格式一致，仍須保留其餘測試、signature、decorator 與 fixture，且通過 Python AST 範圍檢查。隔離 fixture 問題交 Writer。
+- Reviewer 必須從有效程式行 ID 集合選取證據；空白／註解保留語境但無可引用 ID。不得任意把無效 ID 改成附近程式。審查與品質分析不得把提示詞欄位說明／模板回聲當成可操作計畫；合法 None 輸入情境與空泛的 None 字串要分開判斷。
+
+- Reviewer 是審查者，只輸出附有原文證據的問題清單；不產生完整測試檔。先前提及 Reviewer 輸出 Python／修復的規則，改適用於 Writer 修訂與 Bug Fixer。
+- 結構或審查問題交 Writer 修訂；只有唯一定位的一個實際 unittest 方法失敗交 Bug Fixer，多方法／fixture／import 失敗交 Writer。候選先通過結構、證據與隔離執行，再交 Reviewer；每次修改重新走相同 gate。測試通過但品質不足時交分析師與 Writer 補測，不啟動另一層 Self-repair。
+- Bug Fixer 必須可唯一定位失敗方法；模組匯入、fixture 或歧義方法名稱交 Writer，不得回退猜選第一個 test 方法。Reviewer 問題必須有測試原文、具體原因與可操作的測試修訂，不接受空泛佔位動作。
+- 分析師的品質分析包含存活變異體；只提出有測量依據的情境假設，不直接注入模型生成的 kill_test，也不能宣告等效或排除分母。
+- 完整歷史存於 role_events.jsonl；當次 Prompt 僅提供必要來源、測試與證據。證據超過預算時不可截斷成不完整程式；審查失敗或格式無效必須記錄為未完成，不能假裝通過。
+- 已知環境預檢失敗可依 interpreter、來源雜湊、模組與穩定匯入根快取；session output 目錄等暫時路徑不得使同一環境障礙重新啟動子程序。來源或匯入環境變更後必須產生新 cache key。
+- 正式 LLM 流程不合併 runner-owned Trace 或狀態實驗測試。舊 Trace 基線工具僅保留歷史結果讀取、明確 deterministic fallback 與獨立工具回歸用途；凡要執行其產物，仍須先通過結構／安全與獨立 Python unittest gate。工具本身失敗保留診斷，不能借模型候選掩蓋，或把 fallback 說成 AI 生成／審查同意的成果。async／generator 使用明確標準庫 import，不使用動態 `__import__`。
+- 每輪基線綁定同一版測試、案例識別、執行輸出、覆蓋與存活變異體；回滾時全部同步還原。原候選必須保留。
+- 可執行基線在成功執行後、審查與突變之前立即保存為獨立不可變快照；未測突變為 null，不得補成 0 或 100。完整品質基線另綁同一版 MutationRun，來源／相依改變後舊產物只供歷史閱讀，必須明示 evidenceValid=false。
+- Dynamic Trace 以新程序逐案執行，建構子與目標呼叫前後分開快照；未知物件、共享參照、循環與超出容量的值不得藉 repr／deepcopy hook 重建。blocked、setup_error、timeout 與 not_started 保留逐筆狀態，不能混入例外 oracle。
+- caller literal 全程使用有界 tagged input 傳輸，保留參數型態、dict／kwargs 順序及每案 constructor；typed 欄位無效時不能回退一般 JSON 猜測，分治比對與 Tier 1 實例建立必須使用同一筆呼叫條件。
+- 正式品質政策在量測前固定並綁定 hash；checkpoint、批次及 scorecard 必須依相同政策與同一候選證據重算，不能只採顯示分數或自行宣稱 passed。fixture 政策另綁 manifest 身分與原門檻，不得事後降標或升級舊結果；完整量測、政策達標、審查完成與整次執行終態分開保存。
+- 依使用者 2026-09-30 指示，新執行採 `standard80-v1`：突變分數至少 80%，目標行覆蓋維持 100%、分支完整覆蓋，且仍須完整執行／量測與 Reviewer 完成。存活突變保留在分母與報告；已達門檻不再只為追求 100% 重複生成。歷史 `strict100-v1` 及 fixture manifest 的原政策保留，不回溯改標舊報告。
+- Trace／預檢／正式 unittest／mutation 共用版本化 runtime policy；所有違規持續記錄，即使被目標捕捉亦不得通過。只保留必要 import／traceback／async plumbing 例外，不准任意一般讀檔或 loopback。
+- 正式 coverage 使用原生 statement／branch 與來源實體核對；目標呼叫證據綁本次 source/test/run 與 coverage hash。單行定義被匯入不等於目標執行，舊文字 parser 僅作歷史相容。
+- 突變引擎依使用者選擇固定為 builtin 或已驗證 Mutatest AST adapter；模型請求前預檢版本與可用性，失敗不得靜默改用其他引擎。Mutmut 尚未支援。內建新執行使用 builtin-ast-v2，舊 v1 僅保留證據讀取／重建；不同規則版本或候選集合不能直接比較。
+- 共用隔離執行器最多 4 個獨立 trial，預設 2；共用階段 deadline，新預設 60 秒，使用者已選時間不覆蓋。KILLED 必須有 guarded runner 的實際測試方法失敗證據；載入、fixture、隔離、缺紀錄與零測試不得算 killed。
+- 正式突變以 qualified function body 範圍、完整候選集合與精確計數驗收；工具錯誤、timeout、未測候選及未知外部格式不得當 killed 或完整通過。百分比只作顯示，抽樣 100% 不等於完整集合 100%。
+- 同一目標共用 wall-clock、logical request、transport attempt、估算輸入 tokens 及 candidate 預算。Tier／格式／傳輸重試不重設；每次實際傳送重計輸入估算，預算耗盡保留成果並明示未完成。
+- caller 探索排除具有本工具版本化 run manifest 的產物目錄，不以生成測試再次製造來源呼叫事實。完整快照保存於 artifact，角色 prompt 只投影斷言所需事實，不丟失安全／不可斷言標記。
+- 跨輪案例識別不可依 loop 檔名；純更名只能在測試 AST 與設定指紋一致時對應，不得猜測任意重寫的語意等價。
+- 來源或已解析相依的版本變更後停止沿用舊證據。函式紀錄區分來源結構、已驗證執行與待驗證假設，禁止自動把舊執行資料當成新版本的事實。
+- 連續三輪沒有改善已測量的缺口時停止相同策略重試並明示品質未達標；最後一輪結束後不再呼叫無後續用途的品質分析。結果目錄維持時分命名，同分鐘既有紀錄不可默默覆寫。
+- 一般函式開始 AST 前建立執行與進度紀錄，每個事件即時落盤；保存第一個與最近失敗，區分完成、取消與仍在執行。批次結果以專案相對來源路徑與限定函式名區分，同分鐘重跑建立新 attempt，不能因失敗報告存在而略過。
+- 批次在模型請求前保存已發現的目標清單，逐項保存進度；整批輸出根目錄不可與先前執行共用。`batch_manifest.json` 區分執行完成與全部通過，掃描失敗、缺報告或終態證據不完整不可當成完成；Dummy／Stub／Reviewer 未完成仍不可算通過。環境摘要只彙整結構化分類、缺模組與專案相對阻擋位置，不複製 provider 回覆或原始碼。
+
+## 閱讀入口、探針與斷言證據
+
+- 五個正式角色只能實作於 `src/roles/`；`src/prompts/` 放共用素材，不增加角色轉發檔。流程与 TypeScript／Python 對照維護在 `ARCHITECTURE.md` 與 `src/pipeline/pythonTools.ts`。
+- 角色提示詞與 provider schema 不得要求模型重新選取已由程式決定的技能；技能分配需記錄為確定性階段。
+- 探針資格必須匹配探針契約版本及不含憑證的端點識別；舊結果只可標記過期，不能未實測就升格為當前格式通過。版本僅在探針契約改變時更新，不因一般 UI 改動失效。
+- 精確 Trace 斷言以 Python AST 與可安全解析的 literal 驗證；不可移除字串內容空白或把註解視為程式。Mock、fixture、未知實例及不確定的流程必須保留未知，交執行驗證處理，不能套用不同設定的真實 Trace。
+- 正式 Python 工具不得以 `test_` 命名，以免被套件測試檔排除規則移除。
+
+## 品質、Git 與紀錄
+
+- 完整流程報告必須分開呈現指定／起始 Tier、逐輪起始策略、降級歷程與保留候選 Tier；起始路由不能標成全程實際策略。結構拒絕應顯示原因及 Writer 修訂路由，審查未完成與接受可執行候選均不可呈現為完整通過。
+- 依使用者 2026-09-30 要求，`final_report.md` 只顯示選定目標身分、模型、最終狀態與失敗原因、目標覆蓋率／突變分數，以及同一保留候選的測資與突變案例；不得累加其他函式、專案、歷史候選或模組整體分數。Dummy、未執行 Stub 與沒有測試目標的檔案不產生最終結果；保留 `workflow_report.md` 與批次機讀清單，不偽裝為通過。
+- 失敗／未完成或曾遇失敗的目標另存 `failure_report.md`，保留首尾原因、依序事件、各輪分析、修復／降級／回滾及證據連結。批次摘要只列已開始的非略過目標，失敗索引另列掃描障礙、取消及逐目標流程。缺最終報告的真實測試目標仍屬未完成；報告精簡不能放寬來源／測試／品質身分核對。完整 provider 回覆不寫入新報告與角色事件。
+- 實測比較突變可由有界 AST 算術反推產生數值輸入實驗；不得執行或求值任意來源表達式，不推定結果／例外。實驗經逐案隔離 Trace 後只補充 AI 證據，不直接產生正式測試；AI 候選仍經執行、Reviewer 同意及全套品質 gate。不支援的簽名、物件狀態與表達式保持未知。
+- 品質分析連續兩次契約無效後，停止同一目標後續品質分析請求，保存實測缺口指引；新目標重新計數。新隔離邊界觀測只交給 AI 作補測證據，不能直接跳到下一輪量測；Writer 修訂必須先執行並取得 Reviewer 同意。空任務、停用角色或條件式等價候選不得升格為通過。
+- 正式 LLM 流程不以 Trace 去重工具改寫模型測試；重複候選只作停滯／新穎性診斷，交 AI 決定修訂。歷史 Trace 合併工具保留原 AST 安全限制與已執行基線保護，不能轉為新流程捷徑。前置分支推導的等價候選必須明示其數值型別假設，沒有全域等價證據不得改動突變分母。
+
+- 初始化設定只套用於確認時綁定的相同實體受測根目錄。切換專案時保留但忽略其他根的規則，不要求舊專案仍存在，不將舊規則搬移到新根；新的來源照常接受隔離預檢。相同根的過期版本、非法路徑與未經確認的副作用仍須受阻。
+
+- 報告與結果卡必須優先顯示最終狀態；階段 passed、unittest OK、保留候選或高分不得呈現為完整通過。批次在模型前逐來源預檢，受阻先展示診斷，關閉提示則停止並保留未完成清單；使用者明確繼續時仍保留受阻目標失敗。初始化建議只能來自實測阻擋，使用正確相對來源、根目錄與雜湊綁定，預覽確認後套用並重新預檢；不可假造缺少的套件或 API，不修改受測原檔。
+
+- 結果路徑不得複製任意深度的來源目錄；以有界短名稱及獨立來源對照保存身分，同分鐘重跑仍不得覆寫。UUID 與完整內容雜湊保留於證據內容，縮短檔名不可放寬完整 hash 核對；既存檔案衝突須拒絕或另配名稱。匯出 ZIP 保留原始內容及相對引用，不重複包入外層長批次名稱，明示來源缺檔且驗證壓縮內容。
+- 結果固定以每個程式來源一個資料夾，內含各函式測試資料夾；不同來源的同名檔不可混合。來源對照必須核對完整身分，新增層級仍計入短路徑預算，批次清單與報告連結須指向實際巢狀目錄。
+
+- 整個專案的測試入口整合到檔案選單，預設 `all` 並使用上方受測專案目錄；指定檔案後才啟用函式選擇，切換範圍不得沿用舊函式或過期非同步選單回覆。
+- Tier 2 呼叫站分治只對有限的不同、可重現輸入建立子任務；相同 tagged 輸入（含建構子、型別及順序）去重。存在未知輸入或超過四組時使用單次生成，保留原始呼叫語境與已驗證 Trace，不刪除測試證據或降低品質 gate。
+- 選取來源的定義身分必須在 AST 階段與正式 runner 的唯一目標規則一致；重複定義等來源歧義在模型請求前停止，不能交 Writer／Bug Fixer 修復測試或修改受測原檔。
+
+- Python 相依補裝前必須列出綁定所選 interpreter、缺項、requirements／明確映射／同名候選與工具相依的安裝清單，由使用者確認該清單後才執行。取消、關閉或沒有確認皆不得安裝；後續發現新缺項需另行確認，不永久記住安裝授權。requirements 或引用清單變更後必須重新預覽。依使用者的直接補裝需求，沒有 requirements 或映射的外部必要缺項可預填 import 同名套件，明示尚未驗證對應；確認後嘗試 pip 安裝並重新檢查，不可只憑 pip 成功就判定環境就緒，也不可把候選自動保存為明確映射。清單不顯示套件來源憑證或任意 requirements 原文，直接宣告不冒充 pip 最終解析結果。
+- 未對應的缺項不得要求逐項輸入才能嘗試同名安裝；仍須提供修正安裝名稱的入口。使用者保存映射後必須重建清單再確認安裝，保存名稱不可視為安裝授權。只允許修改目前清單的可編輯項目，不接受網址、路徑或 pip 引數，也不可覆蓋 requirements 版本限制。既有專案映射須合併保留。專案相依檢查入口及結果置於專案資料夾旁，直接檢查已選專案；其他資料夾／單檔選擇仍須保留。
+
+- 修復回覆拒絕必須在降階／停止前逐次落盤，區分格式／合併、AST 範圍與重複候選。原因碼與回覆結構統計不得保存完整模型回覆、憑證或任意 tool stderr；scope 失敗採工具提供的穩定原因碼。最後錯誤不得覆蓋首次／最近修復診斷；報告須區分原測試未修改與已驗證基線是否存在。新增診斷不得默默放寬驗證或增加模型請求。
+
+- 跨檔相依來源須由預檢實際載入的模組 origin 與函式定義身分解析，且實體位於所選來源樹；不得以批次根目錄拼接猜測。未知、re-export／重綁定、動態來源與範圍外相依只保留診斷，不另行匯入或假造來源。
+- Reviewer 使用 `review-v8` 單一 `findings` 陣列，最多五項；以 `test_line` 引用本次完整 TEST_FILE 的行號，程式還原原文並依 category 決定嚴重程度，每項另有可核對來源的 basis。缺少情境、弱 assertion 與型別／風格不是 unittest 執行失敗，但任何有效待處理 finding 都須交 AI 修訂並重審，尚未得到 Reviewer 同意就不進突變。blocking 必須指出現有測試的具體錯誤。資格探針亦使用相同契約，舊資格不得直接升級。
+- Reviewer 明確違反所選 static／instance 契約、要求修改目標實作或 mock 目標本身時，整份審查保持未完成，不得刪掉錯誤 finding 後偽裝為空問題通過，也不得交 Writer 執行矛盾動作。有限語句檢查不是任意自然語言正確性證明，所有工具 gate 仍須保留。
+- 品質回滾及停滯判斷使用實測未覆蓋行／分支的個別身份與存活突變體；不能因缺口清單縮短而改變顯示文字，就將改善誤判退步。已知覆蓋變未知、新增未覆蓋行／分支、舊突變體重新存活及分數降低仍受保護。
+- 品質分析師 `quality-task-v3` 每輪最多一項任務，引用程式選定的量測證據 ID；模型不可自行發明證據或預期值。格式補正最多一次，與初次請求共用絕對 deadline；取消／傳輸失敗不再啟動格式重試。空任務只代表無建議，不能將剩餘缺口算通過。
+- Tier 3 scaffold 與其他 Writer 使用相同完整 unittest 檔案契約，scaffold 僅提供 setup 指引；不得再把完整模型回覆縮排塞入另一個 TestCase。修訂重複候選時必須保留最新診斷，不得以空白或過期輸出覆蓋。
+- Cloud 可使用 `llmUnitTest.cloudThinkingMode` 的 `minimal`（預設）或 `provider-default`；低思考量不改變品質 gate。只依實際、明確的不支援選項回應回退，與格式回退及傳輸重試共用原 deadline；不依模型名稱決定。HTTP 5xx／認證／配額錯誤不得冒充選項不支援，有限傳輸重試耗盡後不得透過 Tier 降階另開請求。
+- provider 明示截斷或非正常完成的輸出不可當成完整產物；錯誤 envelope／HTTP body 不寫入日誌或報告。只保存安全的角色、耗時、階段與分類。
+- 選取目標與模組整體的覆蓋範圍分開保存。scorecard 只在 run/source/test 身分與限定目標一致、實測行集合完整時採目標行覆蓋；未覆蓋分支仍阻擋通過，fixture 門檻不降低。舊報告無目標證據時保留原模組分數。實際 Tier 綁定保留候選，不取降階前的標頭。
+
+- 依使用者 2026-09-30 加速開發指示，開發期間不再以每次執行全套回歸作為提交前提。行為修改補上並執行直接相關的回歸測試；TypeScript／產品程式變更執行相應型別、靜態與建置檢查，純文件修改檢查差異即可。完整回歸延後至里程碑或 Demo 前安排，不因例行提交重跑無關測試。
+- 每次交付分開記錄已通過、失敗與未執行的檢查；未跑全套不代表全套通過，既有歷史驗證不能冒充本次驗證。這項調整只影響開發驗證安排，不停用產品執行時的 unittest、Trace、coverage、mutation、安全或品質 gate。
+- 2026-10-16 起，開發驗證使用 `test:related`（明確測試檔名／路徑篩選）、`test:fast`、`test:integration`、`test:full`；小修改先相關回歸及快速檢查，流程調整增加受影響整合，里程碑／Demo 前全套。快速與整合檔案清單互斥且聯集完整，未知新 Node 測試保守納整合，不按歷史耗時刪除或略過。空 related 或未命中 selector 必須失敗，`--list` 只證明計畫。舊 `test:unit` 仍代表完整驗證，不能悄悄改為快測。
+- 每次完成並驗證後都必須建立一次本機 Git commit，接著 push 至目前分支已設定的 upstream，供實驗室 pull 測試；commit subject 必須同時包含英文與繁體中文。此推送流程已由使用者明確授權。
+- 每個 commit 必須同步更新 `CHANGELOG.zh-TW.md`，以中文寫明改動、驗證方式與已知限制。
+- 推送不得擅自使用 force 或變更 Git remote；不得使用／揭露使用者提供的密鑰，除非使用者明確授權。推送失敗時保留本機 commit 並回報原因，不得宣稱已同步。

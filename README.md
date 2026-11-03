@@ -1,133 +1,306 @@
-# 🧬 LLM Unit Test Generation & Mutation Analysis System
+# LLM Unit Test & Mutation Analyzer
 
-> A VS Code extension that combines Large Language Models (LLM) and Mutation Testing to automatically generate high-quality unit tests for Python code, continuously improving test strength through a self-refining feedback loop.
+**閱讀專案請從 [專案結構與流程導覽](ARCHITECTURE.md) 開始**：角色入口、Python 工具對照、驗證流程與結果檔案都集中在此。
 
-## ✨ Core Features
+> A VS Code extension that turns Python source into **evidence-checked** unit tests. It combines AST context extraction, real execution traces, LLM-assisted strategies, coverage, and mutation testing instead of trusting generated code at face value.
 
-### 🔄 Four-Stage Automated Pipeline
+> [!WARNING]
+> This project is under active development. Run generated tests in an isolated project or environment first, review the produced test code, and never give the extension credentials you would not allow a local development tool to use.
 
-| Phase | Function | Description |
-|------|------|------|
-| **Phase 1** | Context Extraction | Uses VS Code API to get the target file, and Python AST to parse function signatures, arguments, and dependencies. |
-| **Phase 2** | Smart Generation | Calls LLM (Local Ollama or Cloud Gemini) to automatically generate unittest test scripts. |
-| **Phase 3** | Vulnerability Analysis | Executes mutation testing via mutatest / mutmut to identify surviving mutants and pinpoint code weaknesses. |
-| **Phase 4** | Iterative Optimization | Feeds surviving mutant data back to the LLM to strengthen Assert logic until the mutation score reaches the target. |
+## What it does
 
-### 🖥️ User Interface
+- Defaults to **full quality verification**: guarded setup → AI analysis → Writer → real execution and AI review of the same candidate → coverage and mutation → bounded AI revisions. Original application files remain unchanged.
+- `llmUnitTest.validationMode` defaults to `"full"`. The optional `"execution"` mode diagnoses whether generated tests execute and invoke the real target; it does not measure mutation or certify full quality. Existing explicit settings remain in effect, and changing modes does not upgrade older results. See [執行驗證操作說明](docs/執行驗證模式.md).
 
-- **Sidebar Control Panel**: Toggle model environments, manage API Keys, and select target files/functions.
-- **Real-time Logs**: Fully tracks the execution status of every LLM call and mutation testing run.
-- **Coverage Dashboard**: Dynamically displays the Mutation Score for each file.
+- Supports local Ollama, Google AI Studio, and OpenAI-compatible Chat Completions APIs.
+- Extracts module imports, referenced constants, class setup, constructor facts, dependency calls, and safe call-site literals using Python AST.
+- Uses controlled Dynamic Trace observations for assertions about the same inputs and setup. Models organize evidence-bound tests from source, AST, observations and scoped Skill Cards; full mode requires model-authored tests and review approval.
+- Uses AST/Trace evidence-bound Skill Cards for async code, generators, mappings, floating-point values, database isolation, and mocking. No domain-specific vocabulary is hard-coded.
+- Validates generated tests before scoring: target invocation, assertions, Python structure, safe mocking, isolated I/O, runtime execution, coverage, and mutation baseline.
+- Writes `final_report.md` so failures identify the responsible stage: model, AST, trace, validation, coverage, or mutation tool.
+- Shows the final outcome separately from coverage and mutation scores. Batch runs check module loading before model requests; blocked imports open a diagnosis before continuing. Use **檢查模組載入／初始化設定** for a source-bound setup preview and guarded recheck; see [匯入測試設定](docs/匯入測試設定_2026_09_23.md).
+- Proposes import initialization mocks from observed policy violations and verified call identities, without a framework whitelist. External entry proposals bind the source version and call line; confirmation and a fresh guarded check are required. Missing dependencies, APIs and application callbacks remain diagnostic failures.
 
-## 📦 Tech Stack
+## How the four Tiers work in full quality verification
 
-| Component | Technology |
-|------|------|
-| Extension Framework | VS Code Extension API |
-| LLM Engine | Ollama (Local) / Google Gemini (Cloud) |
-| Test Framework | unittest |
-| Mutation Testing | mutatest (primary) / mutmut (fallback) |
-| Semantic Analysis | Python `ast` Module |
-| Build Tools | esbuild + TypeScript |
+| Tier | Best for | Core approach |
+|---|---|---|
+| 1 | Traceable code; qualified or manually selected models | LLM organizes tests from source/AST/controlled observations/Skill Cards, followed by execution and AI review. |
+| 2 | Several clear call sites | Groups identical replayable inputs and splits only 2–4 distinct groups. Unknown inputs or larger groups use the standard full-context generation path. |
+| 3 | External dependencies | Supplies a Mock Scaffold and verified constructor setup. |
+| 4 | Complex code and survived mutants | Uses full context, reviewer validation, and bounded self-repair. |
 
-## 🚀 Installation & Usage
+`Auto` requires the selected model's applicable role qualifications; run **Test Connection** first. Explicit Tier 1–4 selections retain best-effort generation, with the same structure, execution, review, coverage and mutation gates. Legacy deterministic Trace builders remain available for internal tools and historical compatibility; they do not replace Writer in the full AI workflow.
 
-### Prerequisites
+In execution verification, all enabled Writers use the same source/setup prompt and execution gates. Auto requires the selected model's Writer qualification; use **測試連線** first or explicitly select a manual Tier for best-effort generation. This mode does not use the Trace fallback or the full workflow's Tier-specific generation branches. A failed assertion, blocked operation, skipped-only suite, source change, or absent real target invocation never becomes an execution pass.
 
-- [Node.js](https://nodejs.org/) v18+
-- [Python](https://www.python.org/) 3.8+
-- `pip install -r requirements.txt`
-- (Optional) [Ollama](https://ollama.com/) — For local model inference
+## Quick start
 
-### Development Setup
+### Requirements
+
+- VS Code `1.116` or newer.
+- Node.js `20+` for extension development.
+- Python `3.9+` for the analysis scripts. Python `3.12` is used in CI.
+- Optional: Ollama for local models.
+- Builtin mutation is available through the guarded executor. Mutatest 3.1.0 supplies optional external operators; an unavailable selected engine stops with a diagnostic instead of silently changing engines.
+- With no `llmUnitTest.pythonPath` setting, a standard workspace `.venv` is selected automatically (`.venv/Scripts/python.exe` on Windows, `.venv/bin/python` elsewhere). Set `llmUnitTest.pythonPath` only for a custom virtual environment or laboratory interpreter; that explicit setting takes priority for AST, trace, validation, coverage, and mutation commands.
+
+### Develop locally
 
 ```bash
-# Install dependencies
-npm install
-
-# Compile
-npm run compile
-
-# Press F5 in VS Code to launch the Extension Development Host
+npm ci
+python -m venv .venv
+# Windows: .venv/Scripts/python -m pip install -r requirements.txt
+# macOS/Linux: .venv/bin/python -m pip install -r requirements.txt
+npm run test:fast
 ```
 
-### How to Use
+Then open this folder in VS Code and press `F5` to launch an Extension Development Host.
 
-1. Click the 🧪 **Mutation Test Analysis** icon on the Activity Bar.
-2. Select the **Model Environment** (Local Ollama or Cloud API).
-3. If using Cloud mode, click **➕ Add Key** to set your API Key.
-4. Select the target Python file and function.
-5. Set the maximum loop count.
-6. Click **🚀 Execute Automated Test Loop**.
+### Use the extension
 
-## 📄 License
+1. Open **Mutation Test Analysis** from the VS Code Activity Bar.
+2. Choose a project directory and a separate output directory.
+3. Choose Local, Cloud, or Custom API.
+4. Configure a model and press **Test Connection**.
+5. Leave the file selection at **all (entire project)** to test the selected project, or choose a Python file and optionally a top-level function or direct `Class.method`. A file's function selection defaults to `all`.
+6. Select Auto or a Tier, then run the analysis.
+7. Open the completed function card in the coverage dashboard to view its `final_report.md`.
 
-MIT License
+All scopes use the same run button. File labels include their project-relative path so backup copies can be distinguished. Entire-project analysis follows the existing discovery rules and can include backup directories; select a file or a narrower project when those copies are outside the intended scope.
+
+Starting analysis does not install packages. **Check this project's dependencies** lists missing packages for explicit confirmation before installation and checks the environment again afterward. Dependency conflicts, incompatible APIs and import-time side effects need their specific diagnostics addressed. Configure [import fixtures](docs/匯入測試設定_2026_09_23.md) in the testing workspace to isolate supported initialization without editing the tested source.
+
+For a traceable function such as `increment(value)`, Tier 1 executes safe inputs and uses the observed behavior as its assertion oracle. When LLM generation is permitted, the model decides which supported behaviors and source branches to organize into tests; it may not invent assertions. For an instance method, it only reuses constructor arguments that were verified from a safe call site; it never invents a required constructor dependency.
+
+## Provider setup
+
+### Local Ollama
+
+- Capacity numbers have different meanings: `num_predict` limits output,
+  `num_ctx` requests context, and `model_info.*.context_length` is the installed
+  package's advertised capacity. The initial Analyst output cap is 1,024;
+  separately, Auto selects 1,024 context when a package advertises 2,048.
+  Neither means the whole Code Llama 70B family has a 1,024-token maximum.
+  The [Meta 70B Instruct card](https://huggingface.co/meta-llama/CodeLlama-70b-Instruct-hf)
+  describes fine-tuning up to 16K, while this specific
+  [Ollama 70b package](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)
+  advertises 2,048. Check the exact server tag, variant and package when these
+  differ. Current capacity validation still uses the package metadata;
+  entering a larger `num_ctx` does not override it, and a short probe cannot
+  prove long-context support. See the [Ollama parameter definitions](https://docs.ollama.com/modelfile).
+- Start the Ollama server and use its base URL, normally `http://127.0.0.1:11434`.
+- Select an installed model and run **Test Connection**.
+- If the model cannot enforce JSON output but can write Python, the extension retries with a plain-Python contract.
+- The local sidebar lets you save `num_ctx` for each Ollama endpoint and model. A positive `llmUnitTest.runtimeContextTokens` setting takes priority, followed by a saved manual choice. Otherwise automatic mode uses half of the verified model maximum: 16,384 selects 8,192. Old automatic 4,096 choices are refreshed; manual choices are preserved. With an unknown limit, reuse a saved or qualified runtime, the selected model's current `/api/ps` allocation or `/api/show` `num_ctx`, then 4,096 as fallback. Saving `0` in the sidebar clears the manual choice and restores automatic mode. User-entered values require a verified limit and cannot exceed it. Connection probes and generation requests both send the selected `options.num_ctx`; changing it requires fresh role qualification. Input budgets use the same context, with about 30% for output. The sidebar separates request capacity from observed allocation and model maximum; an active batch retains its starting snapshot.
+- After changing the effective context, run **Test Connection** again. Writer, Reviewer and Bug Fixer qualifications belong to that context; old local profiles without this binding require a fresh probe. Auto uses matching verified roles. Manual Tiers retain best-effort generation and all validation gates. A running batch keeps its starting setting. This setting does not affect Cloud or Custom API.
+
+### Google AI Studio
+
+- Save three separate fields in the sidebar: **API key name**, **API model**, and **API key**.
+- Select a model advertised by the API as supporting `generateContent`; do not guess a model ID.
+- The key is stored in VS Code SecretStorage and is sent in an HTTP header, never in a URL or report.
+
+### OpenAI-compatible Custom API
+
+- Provide the Chat Completions URL, model name, and optional API key in the Custom API section.
+- The extension first requests structured output when needed, then safely retries plain Python only for explicit format-rejection responses. Authentication, model-not-found, quota, and service failures remain visible errors.
+
+## Safety and privacy
+
+- Never commit `.env`, API keys, tokens, certificates, result caches, or local logs. See `.gitignore` and [PROJECT_RULES.md](PROJECT_RULES.md).
+- The public CI receives no cloud-model key. It runs TypeScript checks, Python checks, extension build, and a tracked-files plus Git-history secret scan.
+- Generated tests may use `mock.patch`, `mock_open`, or SQLite `:memory:`. They are rejected if they directly execute commands, access real files, use shared SQLite databases, or manipulate private target helpers unsafely.
+- A passing HTTP request does not mean a model is qualified. The connection probe asks for a harmless unittest fixture and executes it in isolated Python.
+
+## Quality checks and results
+
+New results use `batch / source-file folder / function folder`, with bounded names at both levels. `source.json` identifies the source file; `target.json` retains the exact source and qualified target, while `batch_manifest.json` maps every target to its nested report directory. Same-named files in different source directories stay separate. Coverage, invocation and Trace filenames use short sequences; full execution IDs and hashes remain inside the evidence. Very long output roots are rejected with a request to choose a shorter directory.
+
+For existing results that Windows Explorer cannot ZIP, use the standard-library export helper, then copy the single ZIP over RDP. It preserves source bytes and relative paths, verifies every archived file, and reports missing source reports. See [結果匯出與短路徑](docs/結果匯出與短路徑.md).
+
+Choose the development verification scope explicitly:
+
+```bash
+npm run test:fast
+npm run test:related -- --node reviewerCommunicationContract --python test_review_test_facts
+npm run test:integration
+npm run test:full
+```
+
+Start small changes with related regressions and fast checks. Integration runs
+the remaining worker/Trace/mutation suites; full includes every Node/Python
+suite, strict TypeScript, lint, Webview syntax, tracked/history secret scanning
+and the production build. Add `-- --list` to preview a tier. Fast and integration
+are disjoint test-file sets whose union is full; new Node suites default to
+integration. `test:unit` remains a full-verification compatibility alias.
+An empty related request or any unmatched selector fails. A focused/fast pass
+does not establish a full-suite pass. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Each analysis run creates an output session. The main `final_report.md` records the selected model, Tier, trace facts, validation failures, coverage, mutation baseline, survived mutants, and bounded repair attempts. A mutation score is only reported after the original baseline passes in the same isolated import environment.
+
+Coverage is a required quality gate, not an optional display value. If the Python interpreter used by VS Code cannot import `coverage`, analysis stops before scoring and reports the exact dependency command. Install `requirements.txt` using that same interpreter, then restart the Extension Development Host.
+
+To make a Tier 1 LLM release-quality claim for one exact provider/model, build a scorecard with its recorded model identity:
+
+```bash
+.venv/Scripts/python.exe python_scripts/fixture_scorecard.py <report-root> \
+  --model-identity cloud/gemma-4-31b-it --require-tier1-llm-release
+```
+
+The gate requires every Tier 1 fixture to have an `llm-evidence-bound`, actual Tier 1 report that passes its coverage and mutation thresholds. It never combines Cloud, Ollama, Custom API, fallback, or different-model results.
+
+## Current limitations
+
+- LLM quality varies. Tier 2–4 output is validated but cannot make an incapable model reason correctly.
+- Dynamic Trace deliberately ignores ambiguous call-site data flow rather than guessing values.
+- Select Builtin v2 or Mutatest in the mutation engine dropdown. Mutatest 3.1.0 supplies external AST operators; our shared guarded executor runs all trials. Install in the selected Python with `python -m pip install --no-deps mutatest==3.1.0`. Missing or unsupported engines stop before generation; no silent fallback. Mutmut is not yet supported.
+- The extension currently targets Python `unittest`, not pytest-specific test syntax.
+- Use test connection and cloud models with awareness of provider cost, network access, and your organisation's privacy policy.
+
+## Project status and contribution
+
+The public-release work is tracked in [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md). Before contributing, read [PROJECT_RULES.md](PROJECT_RULES.md) and run the local quality checks above. Contribution, security-reporting, and community documents are being added as part of the v1.0 release work.
+
+## License
+
+[MIT](LICENSE)
 
 ---
 
-# 🧬 LLM 單元測試生成與突變弱點分析系統
+# LLM 單元測試與突變分析器
 
-> 一款 VS Code 擴充功能，結合大型語言模型 (LLM) 與突變測試 (Mutation Testing)，自動為 Python 程式碼生成高品質單元測試，並透過自我精煉迴圈持續提升測試強度。
+> 這是一個 VS Code 擴充功能，將 Python 原始碼轉為**有證據驗證**的單元測試。它結合 AST 語境、實際執行 Trace、LLM 測試策略、coverage 與 mutation testing，而不是直接相信模型產出的程式碼。
 
-## ✨ 核心功能
+> [!WARNING]
+> 專案仍持續開發中。請先在隔離的測試專案或環境執行生成測試、人工檢查結果，且不要提供你不願交給本機開發工具的憑證。
 
-### 🔄 四階段自動化流程
+## 功能
 
-| 階段 | 功能 | 說明 |
-|------|------|------|
-| **Phase 1** | 上下文擷取 | 透過 VS Code API 取得目標檔案，使用 Python AST 解析函式特徵、參數、相依呼叫。 |
-| **Phase 2** | 智慧生成 | 呼叫 LLM（本地 Ollama 或雲端 Gemini）自動生成 unittest 測試腳本。 |
-| **Phase 3** | 弱點分析 | 以 mutatest / mutmut 執行突變測試，辨識存活的突變體並定義程式碼弱點。 |
-| **Phase 4** | 迭代優化 | 將存活突變體資訊回饋至 LLM，強化 Assert 邏輯，直到突變分數達標。 |
+- 支援 Local Ollama、Google AI Studio、OpenAI 相容 Chat Completions API。
+- 以 Python AST 擷取 imports、引用常數、class 初始化、建構子事實、依賴呼叫與安全的呼叫端 literal。
+- Dynamic Trace 的受控觀測可支持相同輸入及 setup 的 assertion。模型根據來源碼、AST、觀測與範圍限定的技能卡組織測試；完整模式要求模型撰寫測試與同一候選的 AI 審查批准。
+- 以 AST／Trace 證據挑選技能卡，涵蓋 async、generator、mapping、浮點、資料庫隔離與 mock；不硬編碼業務領域詞彙。
+- 生成碼必須通過目標呼叫、assertion、Python 結構、安全 mock、隔離 I/O、實際執行、coverage 與 mutation baseline 驗證。
+- 每次執行會產生 `final_report.md`，清楚區分模型、AST、Trace、驗證、coverage 或 mutation 工具造成的問題。
 
-### 🖥️ 使用者介面
+## 四個 Tier
 
-- **Sidebar 控制面板**：模型環境切換、API Key 管理、目標檔案與函式選擇。
-- **即時日誌**：完整顯示每輪 LLM 呼叫與突變測試執行結果。
-- **覆蓋率看板**：動態顯示每個檔案的突變分數 (Mutation Score)。
+| Tier | 適用情境 | 核心做法 |
+|---|---|---|
+| 1 | 可追蹤程式；合格模型或手動選擇 | LLM 依來源碼／AST／受控觀測／技能卡組織測試，再執行及交 AI 審查。 |
+| 2 | 多個清楚呼叫端 | 必要時以受限的分治 LLM 生成。 |
+| 3 | 外部相依 | 提供 Mock Scaffold 與已驗證建構子設定。 |
+| 4 | 高複雜度或存活 mutant | 使用完整語境、Reviewer 與有上限的自我修復。 |
 
-## 📦 技術架構
+Auto 要求所選模型具有當次適用的角色資格，請先按 **測試連線**。明確選擇 Tier 1–4 保留試跑，但所有候選仍須通過結構、執行、審查、coverage 與 mutation gate。歷史確定性 Trace builder 保留供內部工具與相容用途，不取代完整 AI 流程的 Writer。
 
-| 元件 | 技術 |
-|------|------|
-| 擴充框架 | VS Code Extension API |
-| LLM 引擎 | Ollama (本地) / Google Gemini (雲端) |
-| 測試框架 | unittest |
-| 突變測試 | mutatest（主要）/ mutmut（備援） |
-| 語意分析 | Python `ast` 模組 |
-| 建置工具 | esbuild + TypeScript |
+## 15 分鐘快速開始
 
-## 🚀 安裝與使用
+### 需求
 
-### 前置需求
+- VS Code `1.116` 以上。
+- 開發 extension 需要 Node.js `20+`。
+- 分析腳本需要 Python `3.9+`；CI 使用 Python `3.12`。
+- 本機模型可選擇安裝 Ollama。
+- 介面可選內建 v2 或 Mutatest；Mutatest 使用外部 AST 規則及共用隔離執行器，支援本次已驗證的 Windows／Python 3.13 環境。缺少工具或版本不符會停止，不再靜默回退；Mutmut 尚未支援。
+- 未設定 `llmUnitTest.pythonPath` 時，系統會自動選擇工作區標準 `.venv`（Windows 為 `.venv/Scripts/python.exe`，其他系統為 `.venv/bin/python`）。只有要使用自訂 virtual environment 或實驗室直譯器時，才需要設定 `llmUnitTest.pythonPath`；明確設定會優先供 AST、Trace、驗證、coverage 與 mutation 全程使用。
 
-- [Node.js](https://nodejs.org/) v18+
-- [Python](https://www.python.org/) 3.8+
-- `pip install -r requirements.txt`
-- （選用）[Ollama](https://ollama.com/) — 本地模型推理
-
-### 開發環境啟動
+### 本機開發
 
 ```bash
-# 安裝依賴
-npm install
-
-# 編譯
-npm run compile
-
-# 在 VS Code 中按 F5 啟動 Extension Development Host
+npm ci
+python -m venv .venv
+# Windows：.venv/Scripts/python -m pip install -r requirements.txt
+# macOS/Linux：.venv/bin/python -m pip install -r requirements.txt
+npm run test:fast
 ```
+
+接著以 VS Code 開啟此資料夾，按 `F5` 啟動 Extension Development Host。
+
+匯入受測模組時若會建立目錄、讀取設定或啟動 GUI，請使用工具端的 [匯入測試設定](docs/匯入測試設定_2026_09_23.md)，保持受測原檔不變。此文件包含車輛管理與爬蟲設定，以及實驗室 Python 相依衝突的處理步驟。
 
 ### 使用步驟
 
-1. 點擊左側活動欄的 🧪 **突變測試分析** 圖示。
-2. 選擇 **模型環境**（本地 Ollama 或雲端 API）。
-3. 若使用雲端模式，點擊 **➕ 新增密鑰** 設定 API Key。
-4. 選擇目標 Python 檔案與函式。
-5. 設定最大循環次數。
-6. 點擊 **🚀 執行自動化測試循環**。
+1. 在 VS Code 活動列開啟 **Mutation Test Analysis**。
+2. 選擇專案資料夾與獨立的輸出資料夾。
+3. 選擇 Local、Cloud 或 Custom API。
+4. 設定模型，先按 **Test Connection**。
+5. 選擇 Python 檔案與頂層函式或直接 `Class.method`。
+6. 選擇 Auto 或 Tier，開始分析。
+7. 從 coverage 看板開啟完成函式卡片，閱讀對應的 `final_report.md`。
 
-## 📄 授權
+例如 `increment(value)` 這類可追蹤函式，Tier 1 會實際執行安全輸入，並把觀察到的行為當作 assertion 事實。允許 LLM 生成時，模型負責從支持的行為與來源分支組織測試，但不能憑空產生 assertion。若是 instance method，系統只會使用安全呼叫端已驗證的建構子參數，不會猜測必要相依。
 
-MIT License
+## 模型設定
+
+### Local Ollama
+
+- `num_predict` 是輸出上限、`num_ctx` 是請求 Context，`model_info.*.context_length` 是已安裝套件回報的容量。初始 Analyst 輸出額度為1,024；當套件回報2,048時，Auto Context也會因取半得到1,024，兩者不能混稱模型上限。[Meta 70B Instruct模型卡](https://huggingface.co/meta-llama/CodeLlama-70b-Instruct-hf)記載最高16K微調，而[此Ollama 70b套件](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)回報2,048；不一致時須核對服務端同一tag、variant與套件。目前容量校驗仍採套件metadata，手填較大 `num_ctx` 不會覆寫該值，短探針也不能證明長Context支援。參數意義見[Ollama官方文件](https://docs.ollama.com/modelfile)。
+- 啟動 Ollama server，通常使用 `http://127.0.0.1:11434`。
+- 選取已安裝模型後按 **Test Connection**。
+- 若模型無法強制 JSON、但可生成 Python，系統會改用純 Python 輸出契約重試。
+- 本機側欄可依 Ollama 端點與模型保存 `num_ctx`。`llmUnitTest.runtimeContextTokens` 的正值優先，其次為側欄手動選擇；皆未指定時，自動使用已核實模型上限的一半，例如 16,384 選 8,192。舊自動 4,096 會刷新，手動保存值仍保留。上限未知時沿用保存或已核准容量，再讀同模型 `/api/ps` 實際分配、`/api/show` 的 `num_ctx`，最後使用 4,096 fallback。側欄保存 `0` 會清除手動值並恢復自動模式。手填值須有有效上限且不可超過。測試連線探針與生成請求都送出選定的 `options.num_ctx`；容量改變須重新驗證角色。輸入預算依同一容量計算，約 30% 留給輸出。側欄分開顯示請求選擇、最近觀測的實際分配與模型上限；執行中的批次維持啟動時快照。
+- 有效 context 改變後請重新按 **Test Connection**。Writer、Reviewer、Bug Fixer 資格各自綁定該容量；缺少綁定的舊本機 profile 須重驗。Auto 只使用相符且通過的角色，手動 Tier 保留試跑與全部驗證門檻。執行中的批次固定使用啟動時設定；Cloud／Custom API 不受此設定影響。
+
+### Google AI Studio
+
+- 側邊欄分別儲存 **API key 名稱**、**API model**、**API key**。
+- 請使用 API 清單中宣告支援 `generateContent` 的模型，不要猜模型 ID。
+- Key 儲存在 VS Code SecretStorage，透過 HTTP header 傳送，不會寫入 URL 或報告。
+
+### OpenAI 相容 Custom API
+
+- 在 Custom API 區塊填寫 Chat Completions URL、模型名稱及選填的 API key。
+- 需要結構化輸出時會先要求 JSON；只有明確格式拒絕才會安全回退純 Python。認證、模型不存在、配額與服務錯誤會保留為可見錯誤。
+
+## 安全、驗證與結果
+
+- 不要提交 `.env`、API Key、Token、憑證、結果快取或本機 log；詳見 `.gitignore` 與 [PROJECT_RULES.md](PROJECT_RULES.md)。
+- 公開 CI 不取得雲端模型 Key，會執行 TypeScript／Python 檢查、extension build，以及 tracked files + Git 歷史密鑰掃描。
+- 生成測試可使用 `mock.patch`、`mock_open` 或 SQLite `:memory:`；若直接執行命令、碰觸真實檔案、使用共享 SQLite 或不安全操弄私有 helper，驗證器會拒絕。
+- 連線成功不代表模型合格；測試連線會要求模型生成無副作用 unittest fixture，並在隔離 Python 實際執行。
+
+開發時依改動範圍選擇驗證入口：
+
+```bash
+npm run test:fast
+npm run test:related -- --node reviewerCommunicationContract --python test_review_test_facts
+npm run test:integration
+npm run test:full
+```
+
+小修改先相關回歸及快速檢查；流程調整增加受影響整合，里程碑／Demo 前跑完整驗證。快速入口包含嚴格 TypeScript、lint、明確低成本 Node／Python 清單與 Webview；整合入口執行其餘 worker／Trace／突變／批次案例；完整入口另含全部測試、追蹤檔與歷史密鑰掃描及 production build。可加 `-- --list` 只列計畫。快速與整合的測試檔案集合互斥且聯集完整，新 Node suite 預設納整合；`test:unit` 保留完整相容入口。related 的 selector 使用測試檔名／路徑，可重複；空選取或未命中即失敗，局部通過不能宣稱全套通過。詳見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+每次分析的 `final_report.md` 會記錄模型、Tier、Trace、驗證失敗、coverage、mutation baseline、survived mutant 與修補嘗試。只有原始 baseline 在相同隔離匯入環境通過後，才會報告 mutation score。
+
+Coverage 是必要的品質閘門，不是可省略的顯示欄位。若 VS Code 實際使用的 Python 無法匯入 `coverage`，分析會在計分前停止，並提供相同直譯器的安裝指令。請用該直譯器安裝 `requirements.txt` 後重啟 Extension Development Host。
+
+若要針對單一 provider／模型宣稱 Tier 1 LLM 已達發行品質，請用 report 中的模型識別建立 scorecard：
+
+```bash
+.venv/Scripts/python.exe python_scripts/fixture_scorecard.py <報告資料夾> \
+  --model-identity cloud/gemma-4-31b-it --require-tier1-llm-release
+```
+
+此 gate 要求每個 Tier 1 fixture 都有 `llm-evidence-bound`、實際 Tier 1、coverage 與 mutation 達標的報告；不會混合 Cloud、Ollama、Custom API、fallback 或不同模型的成績。
+
+## 已知限制
+
+- Tier 2–4 的輸出會被驗證，但無法讓能力不足的模型具備正確推理。
+- Dynamic Trace 遇到不明確呼叫端資料流會保守略過，不會猜值。
+- 以所選 Python 安裝外部 AST 規則：`python -m pip install --no-deps mutatest==3.1.0`。這個模式不啟動舊版 Mutatest CLI，不安裝其舊 coverage 相依。預檢會核對 API；不相容時停止並說明原因。
+- 目前支援 Python `unittest`，尚未支援 pytest 專屬語法。
+- 使用雲端模型前請評估費用、網路與組織隱私政策。
+
+## 專案狀態與貢獻
+
+公開發行進度見 [CHANGELOG.zh-TW.md](CHANGELOG.zh-TW.md)。目前 `test/fixtures/python/` 是內部回歸資料集，不是公開模型排行或已完成的跨 Tier 驗收。貢獻前請閱讀 [PROJECT_RULES.md](PROJECT_RULES.md)，並執行上述本機品質檢查。v1.0 發行工作正逐步補齊貢獻、安全回報與社群文件。
+
+## 授權
+
+[MIT](LICENSE)
+
+Mutation trials default to 2 isolated workers (1–4) and a 60-second shared stage budget. Existing explicit time settings are preserved. Builtin v2 adds numeric boundaries, operator alternatives, strings, containers, and indices. Scores from different operator versions have different denominators; existing v1 reports remain readable.
+
+突變預設 2 個隔離程序（可選 1–4）、60 秒共用階段預算；已保存的明確時間選擇維持原值。新版內建增加數值鄰界、運算子、字串、容器與索引變異；舊 v1 報告仍可讀取，但不同版本的分數分母不可直接比較。

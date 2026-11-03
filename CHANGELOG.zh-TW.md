@@ -1,0 +1,2589 @@
+# 中文變更紀錄
+
+本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
+
+## 2026-10-30
+
+### 可比較但不洩漏內容的模型能力觀測
+
+- 每個目標的流程報告現在會由同一執行身分的模型傳輸事件，彙總完成、逾時、因輸出長度停止、已回報輸出 token、生成計時與量測輸出速率。摘要只接受協定白名單的數字欄位；不保存或展示 prompt、模型回覆、端點、路徑或供應者原文。
+- 批次 manifest 與工作流程報告同步彙總已驗證逐目標的相同數字，讓不同未見專案或重跑批次能以相同欄位對照。格式錯誤或數字溢位的摘要會被省略，不會污染總計；批次摘要也不混入未完成或身分不符的目標事件。
+- `skill_ab_summary.py` 現在會驗證並呈現兩組批次的能力總計；舊版沒有該欄位的 manifest 仍可讀取，但會明示沒有可比較的能力觀測。負數、未知欄位或不支援版本會拒絕，且 A/B 輸出繼續聲明未重新驗證品質證據。
+- 這是跨專案、重複驗收可比較的運輸觀測，不是品質分數、模型資格、容量宣稱或後續請求的保證；既有來源綁定、隔離、實跑、Reviewer 與品質門檻均未放寬。
+- 驗證：TypeScript 型別、lint、測試編譯；能力摘要／報告過濾 4 項、目標報告 6 項與 batch journal 5 項回歸皆通過。原先系統暫存目錄的原子重新命名受限，已在可寫入的測試暫存目錄重跑報告回歸；未執行新的實驗室模型批次驗收。
+
+### 本機模型回應本文的硬性逾時
+
+- 模型請求的期限現在涵蓋 HTTP 標頭之後的串流或 JSON 回應本文讀取；若本機供應者沒有隨 `AbortController` 立即關閉本文，系統會取消本文並以同一個既有期限結束該目標。這不會提高 token 上限、接受截斷輸出或延長重試額度。
+- 驗證：TypeScript 型別、lint、測試編譯，以及 Ollama 串流、請求進度和輸出復原時間的 47 項相關回歸通過；未執行新的實驗室模型批次驗收。
+
+### 可審核的文字 fixture 讀檔需求
+
+- 預檢現在可辨識頂層、靜態可解析的 `open(...)` 與 `Path.read_text()` 讀檔需求，建立來源雜湊綁定的空白文字 fixture 建議。建議只包含邏輯路徑與來源證據，絕不讀取、複製或保存原始檔內容；使用者必須在資源設定預覽中自行提供測試資料後才可套用。
+- 驗證：TypeScript 型別、lint、測試編譯與讀檔提案解析／合併回歸通過；Python 靜態規劃器的文字讀檔、動態路徑及寫入模式針對性回歸通過。既有較大 Python 整合回歸在受限 Windows 暫存目錄的檔案權限與非 ASCII 路徑下於建立 fixture 前失敗，未將該環境結果誤判為產品失敗。
+
+### 批次逐目標容錯與可判讀終止階段
+
+- 批次中的單一目標若耗盡模型、驗證或修復額度，現在只會留下該目標的失敗證據並繼續下一個獨立目標；使用者取消仍會立即停止序列。這避免第一個小模型截斷使後續所有函式永遠停在 `pending`。
+- 批次完成後若有任何非環境目標失敗，狀態維持 `failed`；不會因所有目標都已取得終態而誤標為 `completed`。排程前或預檢期間的例外則只記錄受限、宿主擁有的終止階段，不保存例外或模型原文。
+- 驗證：更新批次隔離整合測試；相關 batch journal、輸出恢復與 Writer 預算回歸通過。快速驗證已執行型別、lint 與測試編譯入口；未執行全量、跨平台或新的實驗室模型批次驗收。
+
+### Python 啟動路徑隔離與批次預檢續跑
+
+- Python 工具啟動時把既有 `PYTHONPATH` 轉為受限的路徑資料傳遞，清除會影響直譯器啟動的 Python 環境設定；應用程式搜尋根只在隔離政策已建立後加入。這避免專案內同名模組在預檢、Trace、正式測試或突變子程序啟動時覆蓋標準函式庫。
+- 新增共用路徑解析，保留正規套件根與明確來源根，排除套件內層目錄。突變每次只攜帶其複製出的來源樹，依宣告順序排列；找不到複本即失敗，不回退讀取原始受測模組。涵蓋裸模組、巢狀套件與兩者混合的實際 mutation 回歸。
+- 初始化靜態規劃若只因未解析的本機匯入而不完整，保留其診斷與未核准狀態，改由既有受控預檢決定選定模組能否載入；不產生靜態初始化或資源核准。其他不完整、來源缺失與不安全診斷仍維持阻擋。
+- 批次在初始化重新檢查後只要有可執行目標，即先清除暫時的環境受阻結果，再以實際執行結果結束；全數無法執行時才維持環境受阻。未放寬任何生成、Reviewer、native 或品質 gate。
+- 驗證：相關 Node 13/13、Python 60/60；快速 Node 769/769、Python 42/42、型別、lint、Webview 語法與 production build 通過。Mutatest 在 Python 3.13 仍輸出已知 AST deprecated 警告，但測試成功。未執行全量、跨平台或新的實驗室模型批次驗收。
+
+## 2026-10-29
+
+### 未使用 setup 的 AST 局部修訂與零參數提示
+
+- 核對車輛 `15_28`：269目標中首項失敗、268待處理，環境受阻0。兩次候選hash相同，未使用engine先被結構檢查拒絕，沒有進入局部方法修訂、native、Reviewer或品質量測；屬有界兩次生成後停止。修訂傳輸26.125秒、其中生成6.916秒，不能把後者當完整請求時間。原文複製與語言理解的因果尚未實測證明。
+- 未使用相依結果新增 `writer-unused-dependency-setup` 與名稱；只對此拒絕補做唯讀AST綁定檢查。若同時取得精確未綁定名稱、class／line及唯一AST測試方法，full與execution沿原額度局部修訂，保留兩項診斷。多方法未定位、其他結構失敗與工具錯誤仍拒絕；名稱全部合法時也保留原結構拒絕，未放寬執行gate。
+- 合併問題的execution略過只補import的窄修復。通用英文指引點名未使用變數，要求移除無效setup、依來源使用點控制及核對真目標行為；不供fixture、expected或call count。完整來源、初始化宣告、被拒候選與原安全／審查／品質門檻保留，未新增業務、套件或模型品牌分支。
+- 只有已知參數宣告一致為空的頂層函式省去參數物件提示與預設types匯入；未知、格式錯誤、宣告衝突及類別／建構情境保留原指引。這是提示相關性調整，並非禁止來源支持的helper或刪除證據。
+- 驗證：相關Node111/111，包含full／execution局部修復、綁定合法但setup仍拒絕、多方法scope拒絕與完整來源保留；full正向案例實跑native、同候選Reviewer及builtin突變。快速Node769/769、Python42/42、型別、lint、Webview語法、production build與追蹤檔／可達歷史密鑰掃描通過。初輪新增fixture缺欄位與execution提示識別錯誤已修正並重跑；全量、跨平台、新13B及整批品質本次未驗收，六項通用化首要目標仍未全部完成。
+
+### 修訂輸出契約一致性與唯讀模組宣告
+
+- 對照車輛 `14_00`：最後實測預檢24列均載入、受阻0；269目標中首項失敗、268項待處理。名稱修訂收到HTTP200／stop，但抽取後語法不合法、沒有方法或斷言；完整回覆已遮蔽，不能判定本次回覆語言或還原具體內容。
+- 共用修訂語境改為只提供完整唯讀證據，移除內嵌「重寫完整檔案」指令；完整檔案、方法替換及新增片段由外層任務單獨決定。原基線／AST範圍、修訂額度及拒絕後停止政策維持，沒有新增格式重試或整檔回退。
+- 已分類的模組物件初始化保留完整原文，改以唯讀宣告文字區塊呈現並提供canonical模組lookup；不是測試setup配方，不重播初始化、不推定執行期型別或expected。未知欄位與分類保留，檢索helper的全域名稱不借用目標模組身分；沒有專案、資料庫套件或模型品牌特例。
+- 去密診斷只對「較長文字與短識別字／空參數呼叫重疊」採局部遮蔽，移除提示內私有識別字與literal詞彙，保留可讀的其他文字；完整／部分來源行與混合來源仍整行遮蔽，憑證仍整份遮蔽。先遮蔽路徑及完整token再裁切，避免切斷私有名稱造成前綴外洩；六行／1200字元、非完整及不可執行限制不變。
+- 驗證：提示／診斷相關36/36；修訂範圍／預算及正式full、execution整合43/43，包含native、同候選審查與builtin突變正向路徑。快速Node767/767、Python42/42、Webview語法、型別、lint及production build通過；追蹤檔與可達歷史密鑰掃描通過。全量回歸、跨平台、新實驗室13B及整批品質本次未驗收；六項通用化目標仍未全部完成。
+
+### 集中式 skill 目錄、來源依賴導航與小模型驗證
+
+- 將26項規則卡移至 `skills/`，每項一個 `.txt`，由 `catalog.json` 管理ID、版本及用途；23張文字指引保留，更新共用依賴／資料庫／HTTP三項。選取邏輯仍由Dispatcher執行，事件記錄skill版本；不掃描任意工作區或自動執行Python檔。正式Python工具保留受控入口，說明見 `skills/README.md`。
+- AST新增 `dependency-skill-facts-v1`：僅追蹤唯一目標實際讀取之穩定模組import／factory／alias來源語法，綁目標與hash；作為參數使用的資料庫物件及模組HTTP client也可選卡。重綁、參數／區域遮蔽、動態namespace、變動成員、相對來源及過深／循環鏈不猜測，不提供runtime型別、expected或patch授權。
+- 依有效來源呼叫契約先交付 `DEPENDENCY_FIXTURE_PLAN_V1`，明列實際模組lookup及來源參數，再由模型依原scope撰寫；未新增模型角色、請求或重試。完整來源／契約、局部AST、隔離native、同候選Reviewer及品質門檻維持。方法修訂尾端明示必須交付程式，英文步驟說明仍拒絕。
+- 修正URL字串斜線誤觸除法規則，以及已證明HTTP client的open/read被誤當檔案I/O；獨立檔案呼叫與未知receiver保留既有指引。新增版本化資產、來源漂移／錯誤權威、未使用匯入及遮蔽防護，並經正式入口驗證HTTP模組client局部修訂、真正目標執行及精確request參數。沒有業務或模型品牌分支。
+- 新增 `test/skill_ab_summary.py` 彙整兩組批次manifest宣告，保留pending／failed差異及模型、範圍、模式可比事實；不重驗品質、不補造缺失分數，未完成實驗室A/B。
+- 驗證：相關Node60/60、Python24/24；相容性Node53/53、Python115/115。最後精確lookup增量再經相關Node40/40、Python24/24。快速Node765/765、Python42/42、Webview、型別、lint與production build通過；原49項Python順序仍保留，完整盤點追加至54檔。歷史密鑰掃描與差異檢查通過。初輪沙箱暫存身分與舊測試清單預期問題均已以原生重驗及清單相容性更新處理。
+- 本機既有 `qwen2.5-coder:3b-instruct` 中性HTTP正式execution首輪未控制網路而被隔離；加入精確lookup導航後另一次獨立實測在原Writer修訂額度內通過，保留hash `5070558f7fb7e5f811cde12bbbe5fc7c05db3690c334ed5abe8b9db5a5b234d8`，實際patch `sample.CLIENT.open`並比對受控bytes。這不是受控A/B、full品質或13B／資料庫／整批驗收；全量Node／Python、跨平台及獨立VS Code Mocha本次未重跑，六項首要目標仍未全部完成。
+
+## 2026-10-28
+
+### 局部名稱修訂診斷與模組綁定／副作用提示
+
+- 對照實驗室 BMI `14_53` 已完整通過與車輛 `15_00` 的首目標失敗：後者環境受阻0、局部full修訂確實送出，但回覆以 `invalid-edit-python` 拒絕且未保留可診斷內容；268個未執行目標不算失敗。舊回覆未保存，不能反推具體語法或包裝根因。
+- 局部名稱修訂拒絕後，獨立盤點精確抽取內容並核hash，保留語法類型／行／欄及既有完成傳輸診斷，沿用六行／1200字元內的去密節錄與中英文報告。可解析片段卻合成失敗、獨立盤點的解析限額／不可用仍按工具故障typed停止，不誤報為模型語法；多fence不擇一採用，也不增加請求、續期或回退全檔。
+- 共用Writer及方法修訂提示明列區域賦值不會替換目標所讀的模組全域物件；禁止重播初始化或預先呼叫相依來製造call history，要求依來源使用點控制、還原及核對真正消費的物件／參數。未新增業務、套件或模型品牌特例，不自動產生fixture、expected或執行批准。
+- 本機已安裝的 `qwen2.5-coder:3b-instruct` 前置診斷暴露 `class Name: wrappers` 文字歧義；改用AST方法ID明列 `OUTPUT_CLASS_HEADERS_V1`，不生成方法內容或降低owner檢查。分開system/user的前置實驗owner修正後仍原樣回覆；另用擴充套件正式 `buildOllamaPromptEnvelope` 核對時則以 `unsupported-edit-response` 拒絕。均未進native，不能宣稱3B或實驗室13B已成功修復；前置封裝實驗不當正式流程證據，各次獨立診斷不增加產品重試次數。
+- 新增full／execution的語法錯誤、多fence拒絕與診斷報告回歸；中性模組初始化案例經正式execution入口局部修復，移除目標副作用後即使仍回None也會失敗。既有full成功案例仍要求native、同候選審查與builtin突變。同步更新舊純函式測試對returnFlow metadata的預期，不修改產品門檻。
+- 最終相關Node59/59、Python AST合成17/17通過；快測Node765/765、Python42/42通過。完整Python52檔共864項，861通過、3依環境略過；完整Node276檔共1737項，1701通過、36失敗、0略過，仍非全量綠燈。36個失敗名稱均與上一輪重疊，最先7筆另以 `4c6f1a2` 的變動執行模組重播重現，其餘共用工具沿用目前工作區，非完整舊checkout；修正舊returnFlow測試預期後，上一輪37筆中的1筆已通過。
+- 型別、lint、Webview及生產建置完成收尾驗證；實驗室13B新版本、車輛整批、跨平台及獨立VS Code Mocha仍待驗收。本機固定回覆、單方法模型實驗及舊BMI通過不代表新的車輛整批已完成，六項通用化目標仍未全部完成。
+
+### 補齊 full 名稱修復、封住局部拒絕後重寫與保守綁定分類
+
+- 修正 Gemini 增量的三個缺口：局部名稱修復僅接 execution、範圍拒絕後仍退回完整 Writer、重綁及可變 literal 被誤稱為常數。共用 AST 機制接入 full 種子原本的一次修訂，依 Checker 的 class／method／line 及當前被拒候選建立計畫，不再以方法名稱正規表示式定位。
+- 方法修訂獨立輸出 scope，避免 full 請求包裝覆寫為完整 seed。越界、無修改、位置不明及局部修訂仍無效都 typed 停止，不另開整份重寫或 Tier；保留原有較窄的標準 helper 匯入修復、原目標額度、完整證據與同候選 native／Reviewer／品質門檻。
+- 模組分類重用來源契約的穩定綁定分析；可變容器、控制流／增量／定義／匯入／刪除／global 重綁與動態名稱維持 unknown。移除缺分類資料的字串猜測，呼叫結果與 literal 只提供來源語法，不推定執行期型別或外部需求答案；中英文報告亦改稱「模組全域綁定」，不將所有物件與未知值統稱常數。沒有新增專案、函式、套件或模型品牌分支。
+- 新增 full／execution 正常修復、越界回覆及原樣回覆的正式入口整合；正常 full 案例要求新 native、同一合成候選的 Reviewer 批准及真實 builtin mutation。另涵蓋同名不同 TestCase 的精確 owner、未知位置拒絕、可變容器及重綁。
+- 驗證：相關 Node 25/25、Python 95/95 通過；最終 Node 25/25 重新通過，保守分類含 comprehension／預設值 named expression 與 class global 重綁另重驗 3/3。完整 Python 清單 52 檔完成 863 項，其中 860 通過、3 項依環境略過；型別、lint、Webview 及 production build 通過，最後的報告文字調整另經型別、lint 及生產建置。
+- 全量 Node 清單 276 檔完成 1,728 項：1,691 通過、37 失敗、0 略過，不能宣稱全量綠燈。失敗紀錄含父／子案例，涵蓋舊單種子測資、重複 Writer 預期、介面／診斷文字、容量及其他整合；與 `89db1a9` 的入口或本次變動的執行模組／AST 抽取器逐項重播比對，其餘共用工具仍沿用目前工作區，並非完整舊 checkout。相關 BMI 固定回覆整合仍實際通過 Mutatest 行 10/10、突變 39/39、保留 8 方法及局部輸入重驗。
+- 實驗室真實模型、跨平台及 VS Code 獨立 Mocha 尚未執行；本機固定回覆不代替模型驗收。驗收順序與限制見 `docs/通用化首要目標_2026_10_27.md`。六項通用化目標尚未全部完成。
+
+### 模組全域物件與初始化宣告區分、名稱錯誤局部方法修復與重複候選停止
+
+- 針對車輛專案批次暴露之首個目標（模組已具備頂層實例化物件，模型卻將初始化宣告複製至測試方法並引發名稱未綁定，且重複回傳相同無效候選）實作共用改善，不加入 `init_db`、`engine`、車輛專案、SQLAlchemy 或特定模型特例。
+- **區分模組全域物件與初始化宣告**：
+  - 在 `ast_extractor.py` 新增 `is_literal_constant` 與 `classify_module_binding`，以 AST 精準分類模組頂層指派為 `literal-constant`（常數）、`existing-object`（呼叫實例化物件）、`object-reference`（物件別名引用）與 `unknown`。若存在動態執行（`eval`/`exec`/`globals`/`locals`/`*` 匯入）或在函式內以 `global` 重新賦值，保守維持 `unknown`。
+  - 在 `unittestWriter.ts` 與 `dependencyMockContract.ts` 依分類分流：常數維持 exact values 提示；已實例化物件明確標註「已於模組頂層建立，禁止在測試方法中複製初始化程式碼，請透過模組屬性存取或於使用點 patch」，避免模型誤將宣告當作測試 setup 重寫。
+- **將明確名稱錯誤接到局部方法修復**：
+  - 擴充 `validate_test_bindings.py`，在名稱未綁定時回傳失敗方法的精確行號 `line` 與 `className`。
+  - 在 `orchestrator.ts` 串接：當檢查器能唯一定位測試方法且非單純來源相依修復時，以當前被拒候選為基線建立 `WRITER_METHOD_EDIT_V1` 局部方法修復計畫。
+  - 注入由 AST 事實構建之 `NAME BINDING EVIDENCE`（明確指出符號為既有模組物件、常數、匯入或未定義），要求模型僅回傳修正後的測試方法，由宿主 AST 局部替換，保留其餘方法、fixture 與簽名。
+  - 若模型回傳未變更內容（`edit-no-method-change`），明確拋出 `沒有有效修改：測試修訂未變更方法內容，停止重複修復。`。
+- **改善相同無效候選之修訂停止處理**：
+  - 在 `testCandidatePipeline.ts` 中，當 Writer 修訂產出已嘗試過之完全相同候選（`!feedback.consider`）時，不再進入無效重試迴圈，立即 `break` 退出修訂。
+  - 在修訂失敗原因中明示 `沒有有效修改：測試修訂產生了相同候選，停止重複修復。`，同時完整保留既有診斷細節與 `已使用一次 Writer 接手` 標記，沿原額度停止，不重設期限、不增加嘗試次數、不重跑已知無效測試。
+- **驗證**：
+  - 新增 `moduleGlobalBindingAndMethodRepair.test.ts` 4 個單元測試，全數通過。
+  - 全量快測 Node 764/764 通過（97 檔案，0 失敗、0 略過），Python 快測 42/42、`test_ast_pipeline` 87/87、`test_writer_retrieval` 6/6 通過。
+
+## 2026-10-27
+
+### 套件匯入探測與副作用函式的共用修正
+
+- 針對 BMI `21_21` 與車輛 `21_29` 分析後的兩項問題修正共用流程，不修改受測專案及歷史結果。BMI 原實驗室三輪保留7方法、目標行10／10與 Mutatest39／39；車輛269目標中3項共用受阻模組，首個實際測試把內層 Mock 回傳當外層回傳而失敗，其餘265待處理，不借 BMI 成績宣稱整批成功。
+- 安裝根內的 Python source 套件在自身匯入時做精確 loopback／port 0 bind，核實 loader、spec、globals、實際匯入 frame 及磁碟編譯 code 後，於 native bind 前回固定 OSError，讓套件選擇隔離環境無網路能力；沒有開埠或發送請求。不按套件／專案／模型名稱豁免；應用、匯入後呼叫、偽造 filename、其他地址／port、connect／DNS／sendto／raw bind 仍鎖存違規，吞例外也不算通過。
+- `source_setup_call_contract` 增加可選 returnFlow，分開普通函式正常完成的 None、含值 return 與 unknown，另列直接丟棄呼叫結果的站點；排除內層 scope，async／generator／decorator 保留 unknown。來源 hash、目標、欄位形狀及界線核驗後交給 Writer 與 Fixer；不把依賴 Mock.return_value 當成外層結果，不依失敗輸出自動改 expected，None-only 不足以驗證副作用。
+- 相關 Node35／35、Python46／46通過；中性模組依賴與參數依賴兩種來源形狀均先重現錯誤，再以固定修復回覆通過真實執行與同候選重新審查，刪除副作用呼叫會使修正測試失敗。額外 runner／可靠性整合45／45通過；初輪單獨選取的既有測試缺少自身匯入路徑，已修正並重跑同兩檔。新增整合初次缺必要 event 介面，已補齊並通過後續編譯及整合；初次探測測試的 stderr 編碼也已統一 UTF-8。
+- 已安裝 requests2.34.2／urllib3 2.3.0 於 Python3.13.2 的實際匯入、正式預檢、Trace 與 native runner 通過，全程未發送網路請求；使用者 site-packages 與 interpreter 安裝根皆納入來源證明。此驗證不安裝套件，不證明真實通知或外部網路整合。
+- 原生快測 Node760／760、Python42／42、型別、lint、Webview 語法、正式建置及追蹤檔／可達歷史密鑰掃描通過。未跑完整274檔 Node／52檔 Python、獨立 Mocha、跨平台或新的真實 LLM 車輛整批；固定回覆不代表模型已能自行修正。六項通用化目標仍依原驗收條件接續，隔離、保留情境、native、同候選 Reviewer 與品質 gate 保持。
+
+### Gemini 改進審查與後續修正
+
+- 檢查 `c5753ce`、`e40da17`、`51ce87a`，保留多 TestCase setup 投影、具體輸入差異回饋及 auto 選項。新增回歸先重現4項失敗：auto 吞取消／期限／程序錯誤、無效 probe 被冒當不可用、任意 Mutmut 算子版本獲准，以及多 class 提示預設第一個 owner。
+- auto 與明選共用目前可執行的適配器資格；Mutatest 仍須3.1.0及目前v2算子，Mutmut 尚未完成適配不能憑任意字串授權。正常不支援仍可依序探測／降級，取消、期限、程序或無效 DTO 保持原失敗，明選不默換。修正先前「任何拋錯皆安全回退」的描述。
+- 移除多 TestCase 裸方法自動塞入第一個類別及逐行文字縮排；改要求明列正確 fixture owner 與原 class header，歧義交原有限補正。AST merger 保留 literal 值及原文，不能因包裝而改寫多行字串。
+- 純 missing-scenario 新增綁定本次已執行／被審的完整候選（包含當輪品質新增方法），原完整 findings／basis 跨拒絕重試保留。新增專用輸出範圍去除全檔指令衝突；空新增／改舊方法不進 native，合併工具故障 typed 停止；焦點／重放、成功情境、native、同候選重審及品質門檻不變。
+- 驗證：提示／引擎相關 Node30／30通過；受影響5檔整合初輪44／45，唯一失敗是 BMI 舊攔截階段預期，改核更早 AST 拒絕後單檔1／1及 Python 合成43／43通過。Reviewer 正式流程已涵蓋拒絕後原封包補正，無效片段不進 native；初次新增摘要工具的 import 遺漏已修正並通過後續型別檢查。
+- BMI 品質家族整檔7／7（無略過）通過，新增案例證明純缺情境使用當輪完整4方法候選後新增第5方法，舊品質家族原文不丟失；原方法局部替換、錯焦點攔截與重新審查仍通過。固定回覆搭配真實 Mutatest 量測行10／10、突變39／39、8個保留方法；不代表新的真實 LLM 驗收。
+- 最終原生快測 Node760／760、Python42／42、型別、lint、Webview語法及正式建置通過；Git 差異檢查及追蹤檔／可達歷史密鑰掃描通過。未跑完整274檔 Node／52檔 Python、獨立 Mocha、跨平台或新真實模型驗收；未降低產品 gate。
+- 下列舊增量紀錄為當時快照：局部新增降低輸出工作量，不能保證消除 length／語法失敗，也不能將固定回覆或只進入修復迴圈稱為完整模型驗收。混合 finding、一般 fixture 修訂及其餘通用化目標仍待接續。
+
+### 審查缺情境之局部 AST 增補（目標 2 增量）
+
+- 在 `orchestrator.ts` 擴充 Reviewer 修訂流程：當 Reviewer 回饋僅包含 `missing-scenario` 缺情境時，以當前通過之測試碼為基線（`reviewAdditionBaseline`），將修訂提示切換為極窄的單一 Python 測試方法增補模式（`isAdditionMode`）。
+- 模型僅需產出專注於缺情境的新測試方法，由宿主透過 `mergeWriterTestAddition`（`python_scripts/merge_test_snippets.py`）進行 AST 局部合併與重複過濾，縮小輸出範圍以降低全檔重寫造成的負擔；未證明所有模型不再截斷或產生語法錯誤。
+- 獨立記錄 `writer-review-addition` 審查增補事件，避免污染品質補測迴圈計數；候選方法庫與清單完整綁定。
+- 整合驗證 `bmiPreservationIntegration.test.js`（涵蓋 weakened 與 dropped 雙場景）通過；全量快測 Node 758/758 及 Python 42/42 通過。
+
+### 突變引擎 auto 自動探測模式
+
+- 在 `package.json`、設定檔與 UI 側邊欄新增突變引擎 `auto` 選項（優先順序：Mutatest 3.1.0 → Mutmut → 內建 AST 引擎）。
+- 在 `mutationExecution.ts` 與 `mutationSelection.ts` 擴充 `SelectedMutationEngine` 與 `selectMutationEngine`：當 `requested === 'auto'` 時，依序安全探測 `mutatest`（需符合 3.1.0 且通過 AST 算子自我檢查）與 `mutmut`，若皆不可用或拋錯則自動降級為零相依之內建 `builtin` 引擎。
+- 維持既有「明選引擎不默換降級（Engines are never silently switched）」原則：使用者明確指定 `mutatest` 或 `mutmut` 時，若預檢失敗仍嚴格停止並回報明確診斷碼。
+- 更新繁中與英文 i18n 提示，Webview 下拉選單提供 `auto` 選項並在測試報告與日誌中誠實保留 `requested` 與 `actual`。
+- 新增 `mutationSelection.test.ts` 4 個單元測試，涵蓋 auto 探測成功選取 mutatest、mutatest 缺失選取 mutmut、兩者皆不可用回退 builtin、以及探測拋錯安全回退；快測 758/758 及側欄設定測試通過。
+
+### 多 TestCase 最小 Setup 投影與具體輸入差異反饋
+
+- 擴展 `merge_test_snippets.py` 的 `project_addition_context` 與 `testMerger.ts` 的 `projectWriterAdditionContext`，支援至多32個 `unittest.TestCase` 類別骨架與合法 `setUp` 投影；隱藏舊 `test_*` 方法與具體數值，避免多 class 基線回傳 `addition-context-unsupported` 退回整份基線造成跨案例輸入複製污染。有害反射、全域污染、Mock patch 或未授權夾具仍維持保守退回全基線。
+- 在 `qualityTaskEvidence.ts` 新增 `qualityFocusInputMismatchDetail` 與 `formatQualityFocusInputMismatch`，計算並格式化要求呼叫與模型實際寫出呼叫之具體差異；在 `focusedWriterAdditions.ts` 與 `orchestrator.ts` 遇到 `quality-focus-input-mismatch` 時，將「要求呼叫 vs. 實際寫出呼叫」直接注入契約修正提示，阻斷小模型跨案例複製輸入的盲目重試。
+- 在 `orchestrator.ts` 的 `composeFocusedWriterAdditions.merge` 增加多 TestCase 下裸方法（bare test method）自動包裝至基線 target class 之容錯合併，並於 `buildWriterCaseAdditionPrompt` 增補多 class 目標提示。
+- 相關回歸 Node58／58、Python43／43通過；全量快測 Node754／754、Python42／42、Webview 語法、型別檢查與 lint 通過。本機 Ollama 實跑 `qwen2.5-coder:3b-instruct` 驗證，成功走過真實端到端 AST、提示容量、沙箱執行與 Bug-fixer 修訂迴圈。
+
+### 來源綁定的 Writer 局部方法替換
+
+- 新增只解析 AST 的 edit_test_methods.py 與 Node 交接器，計畫綁 baseline／plan hash、原 finding 行號、方法身份及 UTF-8 範圍；模型只回指定方法，簽名／decorator／async 保持 AST 一致。Python 核方法外 AST，Node 獨立重組位元組；範圍外原文、其他方法與 fixture 保留，不生成測值、expected 或執行批准。
+- 接入無 missing-scenario 的正式方法內審查修訂，完整原 findings／basis 與基線不裁切，拒絕片段沿原計畫及額度補正。補測家族合成後仍重跑精確 focus／參數重放，保留成功情境、native、同候選 Reviewer 與品質順序。缺情境／混合 finding、一般結構／fixture 路徑仍待後續局部化。
+- 工具與提示相關 Node25／25、Python17／17，以及驗證入口 Node16／16通過，涵蓋多 TestCase／同名方法、Unicode／CRLF、header、過期基線、非法整檔及範圍外修改、偽造 DTO、無副作用與完整提示。Python 完整清單追加至52，原49模組的順序雜湊保留，新增兩個 suite 依既有規則列入整合；初次 Python 套件匯入與舊清單預期已修正。
+- 四檔正式整合 Node13／13通過。方法範圍擴張先拒絕再沿原計畫修訂；補測家族的局部 AST 合成雖成功，額外未授權輸入仍由原 focus gate 在 native 前拒絕，修正後重新實跑、審查與突變。固定回覆 BMI 真實 Mutatest 行10／10、突變39／39、保留8方法，不代表新模型驗收。
+- 最終原生快測 Node753／753、Python42／42、型別、lint、Webview與生產建置通過。初輪快測751／753的清單預期失敗已由入口16項及最終同套快測處理；沙箱暫存清理限制以原生重驗處理，未修改產品發布行為。未執行全量、獨立Mocha、跨平台或新實驗室模型驗收；第二項仍有缺情境／混合與一般修訂路徑待接續。
+
+### Writer 完整審查交接與候選範圍綁定
+
+- 修復 Reviewer issues 雖含 basis，但 Writer 修訂仍被通用3500字元摘要截斷的交接缺口。正式有效 findings 以 writer-review-feedback-v1 完整封包傳送，綁當前測試 hash、全部問題／依據、AST 方法清單與是否允許補充情境；不符時 typed 停止。純結構／執行文字沿原有界摘要，原完整提示容量、期限、成功情境保護與同候選重審不改。
+- 超過3500字元的五項完整 finding、候選／回饋／範圍不符及既有輸出預算相關13／13通過。兩檔正式整合首次4／5，Reviewer 新斷言誤用帶尾端換行的模型草稿 hash；改為核對提示中完整正規化候選後，該檔1／1重驗通過。其餘stop／length／多finding及父案例4／4通過，原請求次數與配對額度不變；固定回覆不代表真實模型驗收。
+- 原生快測 Node753／753、Python42／42，型別、lint、Webview與生產建置通過。沙箱快測740／753，其13項皆暫存rename的EPERM，由上述同套原生重驗處理，未更改產品檔案發布行為。初次測試 selector／新測試型別與行號亦已修正。Writer 仍回完整測試檔，局部方法替換與第二項完整驗收尚未完成；未執行全量、獨立Mocha、跨平台或新模型驗收。
+
+### Reviewer 結構化依據契約與資格遷移
+
+- 正式協定升為 review-v8，每項 finding 加上 kind／ref／field／value 的 basis。候選限定事實 ID、明列 scalar 欄位白名單、位置關聯與精確值由本機核對；host-fact／unknown gap／未驗證語義／宿主獨立需求分開，不以欄位一致冒充任意理由已正確。新增完整規格 `docs/reviewer-evidence-basis.md`，更新首要目標、架構及角色入口。
+- 各傳輸共用巢狀 schema 與同一 parser；舊 reader 保留但正式請求不可缺 basis。資格身分升為 python-unittest-v9，不沿用舊角色判定，可選事先資格政策不變。拒絕依據只沿原一次同候選補正，沒有刪 finding、續期限或自動授批准；報告顯示有界、轉義及去密的依據與拒絕原因。已註冊的獨立需求不由觀測值或理由語言否定，未註冊的模型需求說法不能取得觀測守門例外；需求封包目前僅宿主介面，使用者入口仍待目標3。
+- 最終直接相關 Node150／150通過，涵蓋中文前提矛盾、跨方法引用、欄位白名單、未驗證語義、註冊需求與觀測相異、偽造需求、一次補正及報告去密。快測 Node752／752、Python42／42，型別、lint、Webview語法、生產建置及差異檢查通過；未執行全量、獨立Mocha、跨平台或新實驗室模型驗收。
+- 九檔正式整合首次28／31：Writer 邊界 fixture 因新 Reviewer 合法提前增容而違反其固定8192假設；將測試用註解的重複次數由500調為450，保留原請求次數、實際通過／失敗方法、完整來源及配對輸出預算斷言。stop／length／多finding與正式 Reviewer 四檔重驗10／10，產品額度及計數不變。其他已通過整合保留 seed／成功斷言、同候選審查與真實突變順序，固定回覆BMI行10／10、Mutatest39／39、保留8方法；不把這些數字當新模型分數，也未宣稱全跑九檔重驗。
+
+### 通用化首要目標與固定 expected 事實來源
+
+- 依使用者指示將六項工作列為首要目標，新增 `docs/通用化首要目標_2026_10_27.md` 的順序、驗收條件與進度，並在專案規則及架構入口連結；歷史計畫保留，六項未宣稱完成。
+- Reviewer AST 事實新增可選 `expectedOrigin`：有界 literal／區域 literal alias 為 static-literal，未知表達式為 unknown，不求值計算式、呼叫或屬性。Node 在工具及解析交接核對 provenance、型別與可重播快照；NoneType 對應 none，歷史缺欄位不推導新證明。固定語法、觀測一致及獨立需求正確分開。
+- 同候選已實跑、同呼叫核實時，完整「非固定計算值」否定與未指定值的固定替換建議退回原一次 Reviewer 契約補正；不交 Writer 擴寫、不刪 finding 製造批准。未知、未實跑、缺同呼叫、新案例及明確獨立需求仍可審查；保留原安全、品質、期限與計數。
+- 相關 Node56／56、Python52／52通過；正式流程與提示整合 Node8／8，加入固定值矛盾仍持續時只審兩次、seed 真執行一次、無 Writer 修訂且突變未量測；原有效建議路徑仍新執行、新審查後才跑真實 builtin 突變。快測 Node750／750、Python42／42，型別、lint、Webview語法、生產建置及追蹤／歷史密鑰掃描通過。初次相關回歸的兩項舊預期已修正；未執行全量、獨立Mocha、跨平台或新實驗室模型驗收。
+- 這是目標1的首個事實切片，完整結構化主張契約仍未完成，不能以 bounded 英文語句攔截當成一般語義驗證；其餘五項依首要目標清單繼續，未以局部交付縮小原目標。
+
+### BMI 新三批分析與模型 fetch 排序
+
+- 核對23:48／23:56／00:13三批來源與相同新build；13B已保留4方法、行9／10、Mutatest33／39，18.5邊界完整族已越過前次包裝抽取阻擋。下一族24邊界第2案反覆回舊18.49輸入，三次補正及普通修訂抽取hash相同，拒絕有實際候選證據；仍缺「體重過重」行與分支，未完整通過。詳見 `docs/BMI結果分析_2026_10_27_0013.md`。
+- 多TestCase使現行setup投影回完整基線，舊輸入重新進入提示是已確認的交接差異；是否造成照抄仍待對照實驗。34B兩次stop後語法拒絕，錯行遮蔽不足以確定具體語法原因；13B-code兩次length，raw恢復有改變形狀但仍未完成。三批均非總期限耗盡，不增加盲目重試或放寬品質gate。
+- `fetchLocalModels`取得Ollama標籤後，按完整模型名稱A→Z、忽略大小寫排序；初始載入、Refresh Models及儲存URL後fetch共用。保留原tag文字，側欄原選擇仍優先，無選擇才採排序後首項。本次未修改測試生成、補測、Reviewer或品質政策。
+- 既有相關側欄回歸23／23通過；直接fetch與渲染smoke確認混合大小寫排序、原payload不變及選中模型保留。快測Node750／750、Python42／42，型別、lint、Webview語法及生產建置通過。未執行全量、獨立Mocha或新的模型批次；上述模型結論來自使用者提供的三批真實結果，不是本機固定回覆推估。
+
+## 2026-10-26
+
+### BMI 補測包裝抽取根因與修正
+
+- 22:21／22:38／22:45 三批顯示不同阻擋：34B 的 tuple 近似斷言觀測 unknown 且局部修訂擴寫；13B-code 兩次 length 沒有完整候選；13B 已通過 seed 審查並完成 Mutatest 24／39，卻在第一個補測案例連續三次結構拒絕。只有一個初始 seed 是 host 任務切分，補測失敗才使它成為唯一成果，不能解釋成模型只能寫一案。詳見 `docs/BMI補測抽取根因_2026_10_26.md`。
+- 中性最小重現證實：有效 Python fence 前後附一句說明時，初始抽取可取出程式碼，舊補測抽取卻保留 Markdown，AST 合併回 `invalid-python-structure`。改為共用詞法抽取器及 addition 模式，辨識完整 TestCase／裸方法，保留多行字串原值。多 fence、未閉合尾段及無 fence 說明仍拒絕，原 AST 基線、觀測族、native、同候選 Reviewer 與品質 gate 不變；不增加重試、token 或模型特例。
+- 相關 Node69／69、Python42／42 通過；正式固定回覆整合的補測帶前後說明，完整三案合成並保留 seed，真實 Python／Mutatest 達行10／10、突變39／39、保留8方法。首次整合在 Windows sandbox 暫存路徑受阻，改以原生權限重驗通過。另修正回歸中一項中性說明字串本身可被 Python 解析時的原因碼預期。
+- 快測首次發現三項舊預期未跟上既有 Python51模組及 Local wire cap；只更新回歸斷言，保留原49模組順序雜湊，不改產品清單／預算。重跑 Node750／750、Python42／42，型別、lint、Webview語法及生產建置通過。未執行完整開發回歸、獨立 Mocha 或新 Codellama 實測；固定角色回覆不能當真實小模型驗收。歷史原文未保存，包裝缺陷雖可重現，仍不能宣稱當時每份 fence 內 Python 都有效。
+
+### BMI 審查矛盾、局部修訂與格式恢復期限
+
+- 三批新結果確認13B已能生成可執行種子，但Reviewer把合法float／字串判為無效；13B-code的重複外框恢復又因剩餘5825秒不足完整6000秒而被擋，34B則兩次完整stop但抽取後語法失敗。新build已載入，三者皆未完成Mutatest量測，詳見 `docs/BMI三批分析與修復_2026_10_26.md`。
+- 對同候選已成功執行、同呼叫觀測核實且可重播的純量，精確同型機械否定回原有一次Reviewer契約補正；不刪finding或改成自動批准。未知、未執行、具體替代值、獨立需求及不同型別仍可審查；加入原生AST解包float／str及正式流程回歸。
+- 有效審查沒有missing-scenario時，Writer局部修正綁定既有AST方法集合；提示不把規則卡當新增案清單，方法增刪／改名在執行前拒絕，下一次仍保持同範圍。合法缺情境補測、原通過情境保護、期限／計數及原品質門檻不改。
+- 改提示的格式恢復在規劃與正式送出前均使用原期限剩餘額度，至少留30秒或較小的單次設定，不再要求重新具備完整單次上限；不借舊提示速度、不續期限。同提示輸出增額仍保原實測／完整額度政策。
+- 語法診斷節錄優先取抽取後錯行附近並明示座標範圍，保留六行／1200字元、完整提示／來源與秘密遮蔽，不保存provider原文。必要相關案例71項最終通過，包含新增正式流程與既有修訂／增額；首次sandbox hardlink受阻以原生權限重驗，另修正兩項測試fixture及送出前第二道時間檢查。TypeScript、lint、生產建置、Webview語法通過，未跑全量開發回歸。
+- 實作期間真實本機3B在同完整來源hash的BMI生成並原生通過種子；Writer總172.094秒，其中提示處理142.506秒，Reviewer在179.575秒有效上限前未收到HTTP標頭，終態review-blocked／timeout、突變未量測。來源未改，未冒稱完整品質或Codellama實驗室驗收通過。
+
+### BMI 輸出預算、完成回覆診斷與種子格式修訂
+
+- 分析 `bmi_2026_10_26_11_57`：三次請求皆 HTTP200／stop，最終停在 Python 候選盤點，並非本批 API 超時。空候選修訂規劃預留2458輸出 tokens，卻未送出 `num_predict`，實際生成4522 tokens、耗時1405秒；修正所有有效 Local 原預留分支，使規劃與 wire cap 一致。Cloud／Custom 不套用本機 cap；原動態增額、完整證據、期限與計數限制保留。
+- Python 方法盤點新增版本及候選 hash 綁定的診斷介面，區分語法類型／行欄與程序、限額、DTO 或身分失敗；後者 typed 停止，不再交 Writer 修工具。既有陣列 CLI 與情境指紋相容，UTF-8 方法名稱可處理，盤點不執行候選。
+- 完整回覆被語法盤點拒絕時，也在失敗報告保存詞法統計、hash及安全節錄（至多六行／1200字元），排除提示／來源重述與秘密；明示 completed 後拒絕，與 length 截斷分開。不保存完整 provider 回應，也不補造舊批次缺失原文。
+- 初始 seed 格式補正沿用同一案例及完整必要證據，只追加短格式指引，避免無候選時切換成膨脹的全量修訂語境；原有限嘗試、真目標、oracle、隔離、Reviewer及品質 gate 均保留。
+- 必要相關 Node／真 Python 案例42項最終通過，包含正式格式恢復至審查／突變、連續拒絕診斷及工具失敗不補問。原資格整合 fixture 明確指定嚴格政策並補齊固定探針兩案，未改產品可選資格預設；sandbox hardlink 限制以原生權限重驗。TypeScript、lint、生產建置及 Webview 語法通過，未跑全量開發回歸。
+- 本機真實 `qwen2.5-coder:3b-instruct` 在與實驗室完整來源 hash 相同的 BMI 完成生成、原生驗證、Reviewer與 builtin 突變，單輪45.8333%，終態 round-limit，尚未達80%門檻。Codellama13B／34B、指定 Mutatest 及完整車輛仍待實驗室重測；不借單案宣稱完整品質或泛化完成。證據與限制見 `docs/BMI結果分析_2026_10_26_1157.md`。
+
+### 參數 Mock 結構修復與小模型窄任務驗收
+
+- 修正 execution Writer 對「把函式參數當模組屬性 patch」只能重寫整份測試的瓶頸。新增來源綁定的封閉結構選項：原 Checker、完整來源 hash、唯一目標／測試、qualified 標準 patch、唯一參數傳入及來源單層成員皆須可核實；AI 選取後，將錯誤 patch 改為新的標準 MagicMock assignment，原 alias 繼續傳入目標，原有設定與斷言對準該成員。不產生測值、expected、次數或新斷言。
+- scope 內只整理必要縮排及成員前綴，多行字串內容、註解、空行和 scope 外位元組保留；Python 重規劃、Node 獨立重組及 source／test／plan／candidate hash 均核對。未知、重綁、escape、動態展開及 fixture hook 不推導；ABSTAIN、期限／計數及 full 原契約保留，套用仍非通過。
+- 必要相關回歸28／28通過，包含新 adapter、原 clock／receiver／import、真實 native frame／完整隔離、錯誤預期值仍失敗及多行 literal 保留。TypeScript、lint及生產建置通過；未執行全量開發回歸。
+- 真實本機 Qwen3B 的結構選取請求估算854輸入 tokens、耗時約5.786秒，修後 `database.py::_add_column_if_missing` 原生驗證通過；相同來源的中文目錄副本另行重取 native／隔離證據後亦通過。完整8檔／215目標由107增為109執行通過、106失敗，8檔來源未改；讀回109份通過證據皆有效。兩個新增成果屬同一來源模式，不能宣稱兩種泛化成功、整車完成、Codellama驗收或完整品質達標。
+
+### 資源與 Mock 提示衝突及 execution 固定說明精簡
+
+- 移除共用資源規則「declared resources, not mocks」及 execution 的「without host-declared resources」限制，統一為宿主資源準備應用 I/O、測試可控制來源支持的相依及呼叫端參數。明示參數不是模組 patch 位置，Mock 案例不等於真實資源驗證；不改原批准、schema／seed、runtime、Checker、斷言、真目標或隔離 gate。
+- execution Writer 的固定 system 說明由普通無資源時2550字元縮為1574字元，保留原角色標記及關鍵契約；完整來源、必要 setup、候選及觀測未裁切。查明既有2000-token中性案例原本已超額，精簡後同完整來源可容納；不是提高預算或省略證據。初始 seed 仍使用獨立契約。
+- 關聯回歸40項最終通過，含跨角色資源文字、不可直接 I/O、2000-token完整證據、原生 Mock／import 修訂與修復範圍；TypeScript、lint及生產建置通過。未跑全量開發回歸。
+- 車輛剩餘8目標均已嘗試，完整8檔／215目標現為107執行通過、108失敗，來源未改。兩份歷史 clock 草稿重驗及code-completion對照仍未通過，包含模組參數誤patch、錯誤fixture及缺有效斷言；本輪提示修正後的3B案例亦仍未通過，不宣稱通過率提升、Codellama驗收或整車完成。首要工作仍是讓模型形成正確的最小單元案例，並核對未證明的Mock關聯，不能用放寬gate代替。
+
+### 來源綁定的 clock Mock 設定修復與呼叫診斷
+
+- execution 的 Writer 可針對 Checker 已核實的 immutable datetime/date patch 問題，選取 `REPLACE setup-1 WITH source-1`。工具核對完整模組、唯一目標與未重綁的來源使用點，把既有方法 patch 改為 canonical class 綁定，並同步原 Mock 成員前綴；只複製原 literal fixture 與斷言，不產生 expected、次數或新測資。完整目標、失敗方法及整個替換 scope 交模型判斷，其他位元組鎖定；未知或歧義回原有限修訂，不延長期限。
+- 來源片段修復的合法 `ABSTAIN` 現在記為模型放棄選取，回原角色流程，不誤報格式失敗。非法指令、取消、來源漂移仍不套用。選取／套用事件不是執行批准，候選仍需原綁定、範圍及原生隔離驗證；full 流程保持原契約。
+- 唯一實測 once 斷言收到多次呼叫時，在修訂尾端重申同 hash 的對應來源呼叫拼字，提醒區分 setup 歷史與 target 呼叫，按控制輸入修正精確參數、順序與次數，不用 `assert_any_call` 掩蓋錯誤。靜態呼叫站數不當執行次數；多行 literal 導航整段保留，不拆斷字串。
+- 必要相關 Node／真 Python 回歸30／30通過，包含新設定修復、hash／別名／反射拒絕、合法放棄、多行 literal 及真正 native frame／完整隔離證據。TypeScript、lint、生產建置通過；未執行全量開發回歸。
+- 真實 Qwen 3B 在995輸入 tokens、10輸出 tokens 的窄任務選取設定修復，HTTP200／stop，總耗時約3.536秒；clock 阻擋解除並進入原生測試，下一項仍因來源 UPDATE／INSERT 兩次 execute、測試卻要求一次 SELECT 而失敗。新呼叫提示已在正式 Fixer／Writer 請求送出，但模型仍原樣返回，不能宣稱該目標已修好或做出效能比較。全8檔來源未改，215目標暫為107通過、100失敗、8待生成；未完成整車／Codellama實驗室或完整品質驗收。
+
+### 初始單元草稿的結構修訂接續
+
+- 真實3B車輛 `export_trip_records` 揭露：AI選取的 import 修復已套用，下一項 immutable clock setup 拒絕後卻退回缺 import 的舊稿，讓兩個問題互相循環。execution 現在可在沒有基線且尚未原生執行時，以最新完整但未批准的結構草稿接續 Writer 修訂；不提升為可執行成果，不改 full、scope 拒絕或 native 嘗試後的保護。
+- 新增7項必要回歸，包含真實Python的「缺import→import修復→clock修復→有效斷言／原目標frame／完整隔離」；加上相關既有案例，共21項已核對通過。其中1項既有產物hardlink回歸首次受沙箱EPERM阻擋，以原生權限單獨重驗通過；未執行全量開發回歸。TypeScript、lint及生產建置通過。
+- 真3B重驗確認 import 修訂已保存並交接，原循環消失；但模型對下一項 immutable datetime patch 仍原樣回覆，該函式尚未通過。車輛來源8檔未變，當次範圍215目標為105通過、88失敗、22待生成；繼續產生剩餘單測，不冒稱整車完成或完整品質達標。
+
+## 2026-10-25
+
+### 單一種子超出範圍與 from-import Mock 綁定
+
+- 真實本機 Qwen3B 首問續寫車輛函式時，在1536輸出cap寫出11個方法簽名／24個斷言，既有路由誤當成進度並增加額度，最終仍未生成候選。新增 host-owned `seed-scope-overrun`，用原有唯一恢復修正單一種子範圍；不延長期限、不採截斷、不放寬正式候選 gate。單方法與完整候選修訂保留原增額行為。
+- 支援同源且未重綁的絕對 `from import` 在應用 canonical 依賴位置隔離，只認來源使用成員；provider patch 不因此視為等價，target／owner、wildcard、重綁及動態來源仍拒絕。修正已辨識 namespace 的失敗文字，分開位置合法與尚未證明 Mock 觀察。
+- 必要驗證：輸出診斷 Node7／7、兩項正式流程整合及 Mock Python50／50通過；整合使用固定模型回覆配合真實Python、Reviewer契約及builtin品質執行，不代表原Codellama實測。TypeScript、lint、生產建置及Webview語法通過，未跑全量開發回歸。
+- 車輛既有 `update_vehicle_loading` 草稿重驗仍失敗：真目標在patch前已呼叫，且把兩次execute各寫成once斷言，不能只因位置合法就算成功。完整範圍仍8檔／215目標，當次快照105執行通過、86失敗、24待生成；同Codellama13B實驗室重測仍待使用者提供新結果。
+
+### 可選 Writer 首問程式碼續寫
+
+- 新增 `llmUnitTest.writerSeedPromptMode` 與命令「LLM Unit Test: 選擇 Writer 生成方式」，可保存 instruction／code-completion。預設保留指令模式；明選續寫後，Local Writer 在full／execution初始種子首問即以canonical無body外框及完整註解證據請模型續寫，不先耗用一次長指令失敗。Analyst、Reviewer、Bug Fixer及補測仍保持原角色請求，不依模型名稱建立例外。
+- 偏好在整批啟動時固定，修改設定只影響下次執行。若首問續寫仍重複，以原完整指令切回一次；保留原輸出floor、容量核算、期限／計數、明確stop與所有候選 gate。不把註解包裝重複嵌套，也不把新設定冒標為模型資格。
+- 必要相關 Node 回歸73／73通過，另三項正式流程整合通過，涵蓋首問raw、其他角色不受影響、一次反向恢復及真正Python／builtin品質執行。TypeScript編譯通過；同Codellama13B尚待實驗室驗收，未執行全量開發回歸。重測步驟見本次BMI分析文件。
+- 本次整合原有生成／Mock／候選重驗與突變WIP；相關Python55項案例已核對通過（其中3項首次受CP950解碼影響，改用既有UTF-8測試環境後重驗通過），另namespace22項、source contract24項已通過。package的TypeScript／lint／生產建置、Webview語法及密鑰掃描通過。車輛範圍仍為8檔／215目標，目前105執行通過、86失敗、24待生成；完整專案未完成，不借BMI整合回歸宣稱整車達標。
+- 內建頂層函式突變明確使用 `--activate-functions`：隔離載入保留原初始化函式，完成後只啟用同一來源／測試／變體hash綁定的選定函式body。須有baseline與逐變體activation證據才可計分；類別／修飾器／不支援目標不套用。Python API與CLI省略仍保舊行為，Mutatest擴充路徑保持其原副本模式，不切換引擎。中性整合已通過；車輛完整突變仍未驗收。
+
+### BMI 重複測試外框的恢復誤判
+
+- 新批 `bmi_2026_10_25_15_02` 的環境、兩批 Trace 與 Analyst 均完成；Writer 兩次 HTTP200，實測輸入3121 tokens，輸出4096／6144皆 length，重複行87/103及141/157。詞法雖見7／10個方法簽名，沒有可辨識 `self.assert*`，尚未形成候選；不能歸因於網路、覆蓋／突變門檻或計算失敗。
+- 修正方法簽名優先導致的恢復誤判：多個 fenced 測試外框、高度重複且無 unittest 斷言時，選原有唯一格式／seed raw 續寫恢復，不盲目擴張輸出。單方法長 setup、已有斷言、不完整樣本或缺少多外框證據維持原路由；沒有新增第三問、截斷採用、模型名稱特例或放寬品質 gate。
+- 必要驗證：TypeScript 編譯、6項輸出診斷回歸及1項正式 orchestrator 固定回覆整合通過；後者實際執行 Python、Reviewer 契約與 builtin 突變，核對同一原期限、一次 raw 恢復且無 output growth。固定回覆不是 Codellama 真實復測；本機僅有 Qwen 3B／CodeGemma 2B，同一 `codellama:13b-code` 尚待實驗室重跑。詳見 `docs/BMI結果分析_2026_10_25_1502.md`。
+
+### 持續生成全車單元測試與精確 setup 修復
+
+- 將來源片段指令擴至既有明確 patch 的 Mock receiver；AI 只能選來源消費鏈，不能更改斷言方法、次數、參數或其他程式。實測零呼叫或斷言 receiver 本身的 AttributeError 才能進入；後者須對齊唯一 native test frame 的行號及完整原文，目標／setup 內的例外、錯行與歧義仍拒絕。真3B修正備份 `delete_vehicle`、`delete_loading_level` 及 `add_loading_level` 後均取得實際目標與隔離成功證據。
+- 新增 Writer 專屬的未綁定名稱片段修復：以完整模組 hash／唯一目標 AST 核對來源 import／global，或明確標準測試 helper；AI 選一行方法內 import，完整模組不灌入提示、工具不載入應用、不猜 helper 答案。`parse_actual_finish_time` 已成功插入缺失 import，但後續預期值仍錯，保留失敗；不將 import 修好冒稱測試通過。
+- 修正同一測試同時缺少 `patch`／`MagicMock` 時逐項補正互相丟失的流程：靜態重用原 Checker 掃描全部未綁定名稱，僅同源標準測試 helper 可原子補入同一行 import；不同／未知來源回原 Writer，不保留未通過結構的中間候選或延長修訂次數。
+- Receiver 修復可沿已明確配置的獨立標準 Mock 身分追蹤 factory return value；配置／建構必須唯一且在實際 target 呼叫前，晚綁定、覆寫、constructor 遮蔽與多方法歧義仍拒絕。只有一個可證明的結構 receiver 差異時交 Writer 選片段，並以 `static-binding` 明示尚無 native 失敗；原實測失敗仍交 Bug Fixer，不製造 traceback 或改斷言次數。
+- 全模組來源僅供工具內 AST 核對同一目標與 global 宣告，綁定完整 module hash 後補齊消費圖的名稱資訊；不把來源已宣告的獨立 clock 呼叫當成未解析而放棄 connection receiver 修復。仍要求完整消費契約、不匯入應用、不把完整模組灌入模型、亦不增加 patch／oracle 授權。
+- 已證明未重綁的來源 module import，可在 canonical namespace 上明確 patch，且只認來源實際呼叫的成員斷言；未使用成員、未知／重綁來源及指回 target／owner class 的 package alias 仍拒絕。execution Writer 取得具體 namespace setup 選項，沒有替模型產生 fixture 值或 expected。相關 Python 共46項通過（22項 namespace、24項 source contract，後者含真實 unittest）；UI 生成改善仍待真模型執行，不冒稱整車通過。全範圍暫達105／215執行驗證通過，來源8檔保持。
+- 必要相關驗證：TypeScript 編譯及13項 Node／真 Python 工具回歸通過，含非法指令、取消、來源漂移、歧義、helper 拒絕、錯誤 traceback 位置、雙 helper 原子修訂、Mock 身分及來源宣告核對。真車輛單元生成暫達102／215，仍有失敗與待生成，完整範圍8檔未縮減；未執行 Reviewer、coverage、mutation 或全量開發回歸。
+
+- 同檔直接 helper 使用點修正後，真實 Qwen 3B 已為 `toggle_vehicle_selection` 加上正確隔離並保留真實目標與斷言，通過 native 呼叫及完整隔離執行；相同完整來源副本只移轉 AI 草稿，也在自己的 native 來源重新執行通過。生成進度由72增至74，後續新增案例已達81；全部8檔／215目標尚未完成，現行逐目標狀態以本機 `generation_manifest.json` 為準。
+- 真實 `is_admin` 失敗揭露混合存取的輸入形狀誤用：外層屬性物件的內層可能仍須字典。seed 與共用 setup 提示改為逐層區分 `.member` 及 `["key"]`，對 namespace 不可下標的實際失敗另附條件式修復提醒；不提供資料值或斷言、不把所有巢狀值一律轉為 namespace。
+- 真實備份刪除函式及既有新增函式的 Mock 失敗，源於模型把含換行的字串參數壓成單行。實測 call-argument 不符時提醒沿原來源保留精確空白／換行與型別，不抄錯誤訊息的 Expected，也不透過正規化兩側掩蓋差異；原 Mock 關聯與執行門檻保持。
+- 實跑發現單加提醒仍未修正，因為來源 call-setup 名單只含模組綁定呼叫，沒有 `cur.execute(...)` 這類區域 receiver。另增來源片段 hash 綁定的 `literalCallArguments`，只保留本目標內含換行／tab 的靜態字串參數拼字與位置，排除巢狀函式；不把區域 receiver 放入 module use points、不解析值或授權 patch。完整64事實／16KiB上限保持，提示僅另列少量完整字面值導航，原完整資料不裁切。相關真 Python 正反案例亦涵蓋此區域 receiver 與來源漂移拒絕。
+- 只執行必要相關驗證：TypeScript 編譯與5項選取的 Node 測試通過，包含真正 Python 的混合形狀／精確字串正反案例；錯誤預期及不同內容仍失敗。沒有重跑全量開發回歸、Reviewer、覆蓋率或突變，沒有宣稱完整品質通過。
+- 查明多次修復原樣返回確為模型輸出：原回覆 hash 與既有完整測試外框相符，並非解析器丟棄了修改。真3B在短任務中重打字串仍丟失空白，改回覆來源片段指令則可正確選取。新增限定 execution Bug Fixer 的 AST／hash 綁定單字串片段修復，AI只選已列出的來源片段，其他程式鎖定；重新規劃並核對位元組後仍走原修復範圍、綁定與隔離執行，不自動把來源回傳式當 expected。
+- 新工具使用 `-I` 防止應用 Python 路徑介入規劃，ASCII-safe JSON 保留中文與原測試位元組。3項必要 Node／真 Python 工具回歸通過，涵蓋精確套用、歧義拒絕、非法指令及取消；未擴大開發測試。真車輛備份 `delete_user` 已由 AI 指令修正並取得 native 呼叫與隔離成功證據，進度到90／215；其餘尚未完成。另修正外層請求包裝漏傳窄任務旗標，保留原期限／計數，只在此受限任務省略無法修改的資源 schema。
+
+## 2026-10-24
+
+### 優先生成可執行單元測試
+
+- `execution` 初次 Writer 改用獨立的一案例種子契約及無答案的 canonical 包裝，避免先要求完整 suite。來源支持的預期值在本模式明示為待實跑的假說；完整品質模式的觀測／Reviewer／覆蓋及突變要求保持。生成與修訂取得相同來源工具的完整 Mock 使用點名單及 `with patch(...)` 指引，配合無額外注入參數的種子簽名，不另附 decorator 方法骨架；仍不提供依賴值、輸入或斷言。版本漂移或取消不得繼續送出請求。
+- Local 執行模式也採成對的輸入／wire 輸出預算，初問1536起、較高 learned floor保留；完整修訂依原候選及工作量配置。沒有取消 Context、截斷拒絕、實際目標呼叫或隔離驗證。
+- 修正執行模式誤用 Reviewer 證據文字作 Writer 語境：改用正式 Writer 證據投影與 AST 規則分派，保留完整來源、setup、caller、相依及必要參數／receiver／return 消費形狀，移除審查行號指令及重複外框；不新增 Analyst 模型請求或假造 Trace。
+- 來源已證明參數方法呼叫時，setup 指引明確區分普通 lambda／函式與 Mock 呼叫紀錄；若測試要檢查 `.called`／`assert_called*`，須以 Mock 配置該方法。這不是放寬 AST 斷言關聯檢查，也不假設呼叫次數或預期回傳。
+- 修正已完成 unittest 失敗中的業務字串（例如回傳「超時」）被誤判為宿主逾時。執行模式保留 typed `CandidateValidationError` 的分類與階段，不再重新以訊息猜測；診斷分類不得作為模型／環境故障的排程依據。僅對這項實際阻斷補必要回歸，未擴大開發測試。
+- 車輛真實候選揭露集合狀態斷言誤拒：來源在 `if` 兩條正常路徑均修改同一輸入屬性時，AST 改取路徑交集，支援測試明確新建的標準集合及直接 mutator；單邊寫入、提早返回未寫入、迴圈、反射、同名自訂方法及參數重綁仍未知。明確 `unittest.mock.patch` 控制來源直接 helper 使用點時，可保留新建 SimpleNamespace 的狀態關聯；禁止 target／factory patch、未知替身及 `as` 重綁借用舊物件證據。只證明斷言相關性，錯誤預期仍須由隔離執行拒絕。此項相關 Python 回歸18／18通過，未重跑全量套件。
+- 真實 `_connect` 候選揭露回傳物件方法鏈的關聯遺失，造成 `connection → cursor → fetchone` 的實際觀察被誤拒。保守追蹤未重綁回傳物件的非反射方法回傳，維持 helper／常數／測試改寫後的撤證；錯誤預期仍在實跑失敗。最後同檔相關 Python20／20通過。
+- 新增分析命令的明確 `replayCandidate`：按原 run、事件 sequence、原文 hash、來源／目標及 provider／模型重讀已完成 AI 候選；預設不呼叫模型修訂，仍走原綁定與隔離執行。完整來源內容完全相同的副本可明確選擇只移轉草稿，所有 native 呼叫與執行證據重新取得，不借原通過或資源批准。七項相關 Node 回歸與 TypeScript 編譯通過；未新增側欄操作或跑全量套件。
+- 執行模式的 seed、Writer 修訂及 Bug Fixer 明示僅隔離非目標 helper，批准資源用來準備載入，不要求測完整 helper 圖。對真實 AttributeError 的同來源、唯一直接 helper，另提供精確 `with patch(...)` 非可執行 setup 指引；不供測資或斷言，不授權 patch，類別、歧義及未知來源不猜。提示同檔15項及 helper 指引3項回歸通過；完整品質模式提示政策保持。
+- 查明 UI 修復回覆不變的決策缺口：角色使用點名單原只列 `from import`，漏掉 AST 已檢索的同檔直接 helper，因而把可用的隔離點提示成「none supplied」。補入 depth1、唯一來源檢索且 snippet hash 相符的 helper，供各角色一致使用；不改 Python 的 import-origin 映射或 patch gate。helper 名單／精確修復指引最後4項回歸通過。
+- 真實 `hash_password` 揭露 SHA-256 被模型誤寫為 MD5 預期值。Python 只解析已失敗案例的 literal 輸入與簡單 `hashlib(...encode()).hexdigest()` 描述，宿主以內建 crypto 計算參考；不匯入或執行應用，也不由工具改寫測試。計算仍是未驗證假說，交 AI 修訂後沿原隔離執行核實；原始輸入位元組不寫入證據。相關 Python14／14、Node3／3及編譯通過。真實3B已採用參考修訂，來源未改並通過該目標的隔離執行；已保存候選 hash 與標準參考的來源關係。
+- Local 分析命令可明確指定正整數 `requestPromptBatchTokens`，傳為 Ollama `num_batch`，不更動 Context 或輸出 cap、預設不新增 wire 參數。以真實車輛生成比較 prompt evaluation 耗時，僅保留數字紀錄；尚未加入側欄選項，也不把未控制的前後負載比較宣稱為效能保證。
+- 依使用者指示先生成全車單測，不執行 Reviewer、coverage、mutation 或額外全量開發回歸。真實本機 Qwen3B 的全8檔／215目標清單已開始逐項生成，成功與失敗分別保留、已成功項目重核證據後續跑；原來源未改，進度以本機 `generation_manifest.json` 為準，尚不能宣稱整車完成。完整模式原有首敗即停政策未改。
+- 本機全範圍進度：已生成或重用 AI 草稿並重新取得實際 native 目標與隔離完成證據，通過由35增至69；後續真3B新生成的備份 `get_conn`／`close_dialog` 及工具輔助修復的 `hash_password` 也通過，暫為72／215。尚有36失敗及107待生成，整車未完成；草稿重驗沒有新增生成請求，並非借用舊成功布林或品質分數。
+
+### Getter receiver 核對及 Windows 突變副本
+
+- 靜態重放核對支援明確封閉的測試自有getter類別：無繼承／未知decorator、純量欄位與無參數初始化，property只拋指定內建例外。核對真正讀取的receiver，拒絕把property物件塞進一般屬性的錯誤；有效讀取覆寫與底層儲存分開。setter、動態setup／annotation、重綁與可變alias維持unknown，不執行類別；規劃／worker仍使用原有配方集，matched不是品質批准。
+- 完整車輛批次揭露Windows突變基線複製錯誤：38處CRLF被轉成CRCRLF，使未修改基線也失去來源摘要。改以原位元組複製測試／基線及寫入變異來源；選定目標列於自身初始化閉包時，只在可信runner的明確trial映射重綁實際突變摘要，原批准及其他相依漂移／多重映射防護保持。
+- 真3B單目標重跑確認兩次錯誤getter包裝被核對攔下，但模型尚未修好，保留突變4/12。兩次完整批次皆包含8檔／215目標；修正後第一目標的突變基線已passed（637ms），6個變異體全執行，3個SURVIVED／3個ERROR，不計為完整分數。依首個失敗即停保留214個pending；原應用來源未變，整個車輛專案仍未驗收完成。細節及後續設計方向見 `docs/參數物件受控補測.md`。
+- 驗證：getter整合Node2/2，相關Python53/53與額外突變Python41/41通過，均含實際Python工具執行；模型回覆固定的整合與真模型結果分列。最終快速Node745／Python42、TypeScript、lint、Webview語法、production build及追蹤檔／可達歷史密鑰掃描通過；各集合不相加冒稱完整回歸，F5／DGX、遠端CI及整車品質仍未驗收。
+
+### 參數物件重放核對與修復後基線盤點
+
+- Writer 同時取得完整觀測與 Host 綁定的同一份案例；末端重申屬性讀取例外、缺少或精確 None 控制，分開目標正常回傳與拋例外。可讀摘要只呈現同案例完整控制及已觀測回傳，超1500字元或不可完整表示時整段省略並引用原封包，不截斷原資料、不推算答案或代寫測試。
+- 新增 AST-only `--check-replay`，排除基線舊方法，只將可證明的控制矛盾交 Writer 有界修訂；自訂 property／未知 setup 保持 unknown 並繼續原實跑、Reviewer與品質門檻。核對 source／native 路徑、候選、目前完整基線及原觀測指紋；原 seed provenance 與增長基線分開。無新方法不能借原測試匹配；未知、工具錯誤與 matched 皆不是品質批准。
+- 修正 Bug Fixer 產生新執行基線後，新增方法名稱因缺 AST 盤點而在送出前中斷的問題。按該完整基線 hash 重新盤點，不猜方法、不借舊候選身份；來源與已通過情境保持，修訂仍重跑重審。
+- 真實 Qwen3B 車輛單目標曾達行14/14與突變11/12，但缺分支且遇到上述盤點問題，終態 failed；最終修訂重跑保留行10/14、突變7/12，因補測停滯結束。最新瓶頸是模型將 property 物件放入一般屬性，讀取未觸發 getter；自訂類別仍 unknown，不能將相同回傳值當作分支已覆蓋。各次 seed 不同，不宣稱效能提升或完整車輛驗收；細節存 `docs/參數物件受控補測.md`。
+- 驗證：相關 Node9/9、Python14/14；快速 Node745/745、Python42/42、TypeScript、lint及Webview語法通過。集合重疊不累加；完整開發回歸、F5、DGX、遠端CI與完整車輛批次尚未驗收。
+
+## 2026-10-23
+
+### 補測 Writer 獨立契約與成對輸出預算
+
+- 將新增方法改為獨立小契約，移除先請求完整suite再附文覆寫的衝突；保留來源、setup、完整已執行基線與觀測，修訂仍保留未批准草稿。精簡重複固定說明，不降低保留、隔離、Checker、同候選Reviewer或品質門檻。
+- 由宿主實際基線狀態標記 `single-test-addition`，不從提示文字、非seed旗標或模型名稱推定。Local Writer／新增修訂以1536為初始輸出預留，較小容量沿原預留、較高learned floor保持；生成前預算、各容量評估、增容與wire cap一致。遠端、其他角色與完整檔修訂保留原政策；一次恢復及原期限／計數不變。
+- 新增輸入／輸出成對、逐容量最小需求、learned floor、角色及provider邊界回歸；整合測試核對完整來源與基線、真正wire cap及兩輪實跑審查突變。測試接收器辨識新獨立契約，caller分區改驗新scope的實際cap，未刪除原保留與隔離檢查。
+- 真實Qwen3B車輛目標已完成seed與第二輪新增測試的實跑、Reviewer及builtin突變；第二輪Context9216、輸出cap1536、輸入6403／輸出195tokens，請求13.395秒。第三輪重複情境被拒，保留9/14行、4/12突變（33.33%），仍未達標且整批未完成。觀測要求getter例外卻被Writer改成None值，顯示下一步須核對物件配方重放，不能只比回傳值。前後負載／快取未受控，不據此宣稱效能提升比例。詳細分析另存 `docs/車輛補測契約與預算_2026_10_23.md`。
+- 驗證：最終相關Node31/31通過；額外BMI固定回覆配合真實Mutatest完成39/39與目標行10/10。快速Node745/745、Python42/42、型別、lint、Webview及production build通過；集合重疊不相加。完整開發回歸、F5、DGX、遠端CI及完整車輛批次尚未驗收。
+
+### 頂層物件參數的受控品質補測
+
+- 新增來源／seed／資源計畫綁定的參數物件實驗，從已通過 AI 候選靜態解析 SimpleNamespace、固定 Mock、常數 factory與 identity 配方，不執行測試來規劃、不求值任意 lambda或建立應用類別。只沿來源支持的屬性規劃缺少、假值或受控例外，獨立 worker 重推計畫、實際呼叫目標並核對 frame／profile，拒絕副作用、ambient read、漂移與不可重播結果。
+- 正式頂層函式補測接上新觀測與逐案 Writer 提示；原實例狀態實驗、數值突變探測及品質 gate 保留。嘗試與交接分開，未執行案例不消耗，完整案例不裁切；新增候選仍經保留、實跑、Reviewer及突變。新報告保存逐輪配方／觀測與固定原因碼，不保存 provider 原文。
+- 真車輛單例診斷發現冷啟動約7.5秒，原4秒 worker 額度尚未完成載入就中斷。改為原16秒工具階段一輪一例，外層20秒及原 target deadline不增加。實測中模型另有 Analyst HTTP200但首文字約163秒、180秒內未完成的逾時，尚未進入新補測；不能將該次算新工具驗收。整個車輛專案仍未完成。
+- 開發驗證清單新增 Python 參數物件回歸；保留原49檔順序雜湊，快／整合聯集涵蓋新50檔。舊固定49數量的回歸揭露後，改為保留原集合證明並驗證新增覆蓋，未移除舊測試。
+- 驗證：最後直接相關 Node18／18、Python9／9通過，含固定角色回覆配合真實 Python 的兩輪「seed→突變→物件實驗→AI新增→執行→Reviewer→突變」完整驗收。擴大相關測試38項曾有36通過及2項清單數量失敗，已由最後驗證確認修正，集合不累加。快速 Node743、Python42、型別、lint、Webview與production build通過；原49項Python集合雜湊保留。完整開發回歸、F5、DGX與遠端CI未跑。
+- 真車輛工具實測：同來源及批准資源、先前已實跑的 AI identity seed，在新16秒分配下約7.7秒取得一個完整觀測，確認目標frame與profile，單案提示約2029字元。這是實際應用工具驗證，尚不代表真模型已採用新增測試或整批通過。短模型探針HTTP200約9.9秒、其中載入約8.4秒；後續另以既有設定API300秒／目標1800秒開始正式模型重跑，結果尚待驗收，不回填為成功。
+
+### 無 Trace 種子範圍、方法內 fixture 修復與品質來源定位
+
+- 補充 `bmi_2026_10_22_23_26` 分析：兩次 Writer 為首問與格式補正，均 HTTP200／4096輸出、沒有測試結構；輸入3005／3140且Context8192，沒有輸入超額證據。當批 `codellama:13b-code` 與指令模型身份分開，build早於種子續寫修復；不得把舊批次當新續寫已失敗或宣稱該模型已恢復。分析另存 `docs/BMI重複輸出分析_2026_10_22_2326.md`，保留原結果。
+- 修正 seed 形狀檢查只在有可用 Trace 時啟用的缺口：Reviewer AST 工具新增 `targetCallSyntax` 語法下界，即使參數是未知物件，仍能辨識可定位的多個 canonical 呼叫站。Node 核驗行／column、數量與唯一性，legacy 缺欄位保持未知；不將此陣列加入 Reviewer 提示、不當執行次數或 oracle。無 Trace 的一個受控 fixture 仍實跑重審，多方法／多直接呼叫交 Writer。seed 範圍移至生成及修訂提示結尾，避免後附的品質／資源語境把修訂變成擴充整套案例。
+- 修正 Bug Fixer 把唯一失敗方法內既有 fixture 類別也判成外層 class 包裝。保留巢狀定義後仍須通過原 Python AST scope，其他方法、fixture、signature、decorator與新增 import 限制不變；新增裸方法及同 host class 包裝的 AST 回歸。seed 包裝增加明確 `import types`，避免依 SimpleNamespace 指引生成後漏 import；目標同名時不遮蔽。
+- AST 新增 `python-source-location-v1`，綁定來源片段摘要、起訖行與原文。Writer／品質 Analyst 可把 `line:259` 等量測 ID 對回目標來源；僅複製至多十個鄰近短行，長行改用完整原文列引用，未知／摘要或列數不符不推定位置。完整函式保持原樣，全檔版本仍走現有預檢／journal；位置不是 expected 或執行證據。
+- 真實車輛實測：本機 Qwen 3B、相同來源與既有批准資源，`get_plate_no_from_event` 從無可執行成果進展到 seed 執行與 Reviewer 同意、完成 builtin-ast-v3 突變7/12（58.33%）、目標行10/14。仍缺例外與分支，品質未通過；品質 Analyst 空任務、Writer 重複情境而保留基線。加入來源定位後重跑仍為58.33%，不能宣稱已改善補測成功率。現有品質實驗回報 `instance-target-required`，頂層函式的物件參數補測尚待實作，整個車輛專案未驗收；受測來源未修改。
+- 驗證：直接相關 Node27與Python52通過；修復／無 Trace 到真實 Python／Reviewer／突變整合 Node31通過；來源定位／Writer修訂最後 Node10與Python6通過，集合有重疊。快速 Node743、Python42、型別、lint、Webview與production build通過。首次來源整合揭露舊 fixture 禁止 seed 範圍文字，已改驗證恰一個結尾範圍且保留兩次上限；沙箱 EPERM hard link 的失敗未算產品失敗，正常本機權限重跑通過。完整開發回歸、F5／Mocha、DGX與遠端 CI 未重跑。
+- 補跑 AST pipeline 與 `test_validate_repair_scope`：Python100／100通過。第一次 selector 誤寫為不存在的 `test_repair_scope`，runner按契約非零退出且未跑測試；修正檔名後才計入上述成功數。
+
+### Writer 種子續寫恢復、可讀診斷及車輛物件形狀指引
+
+- 對 Local seed 完整 length 回覆中實測高度重複、沒有測試結構的情況，將唯一格式恢復改為可追溯的 `seed-code-completion-v1`：完整提示逐行轉為可逆 Python 註解，結尾接 canonical import／class／方法簽名。Ollama raw 請求省略 system/template；僅完整 stop 回覆可原樣接合，完整 Python fence 則保留原文。包裝不含測資、fixture 值、目標呼叫或斷言，不修縮排、不採截斷、不增加第三次請求或放寬原期限與品質門檻。其他角色、非 seed 及一般輸出增額政策保持。
+- 輸出診斷允許顯示程式明確指定的固定框架指令，避免每一行都被 `[withheld-prompt-content]` 遮住。動態 prompt 不加入公開集合，混合來源、憑證與位置仍先遮蔽；節錄維持有界、少於原文且不可執行。中英文 failure report 區分程式碼續寫與一般格式補正。
+- 新增通用 seed setup 指引：`parameter.member` 是屬性存取，與同名鍵字典不同；使用具體物件形狀及明確 callable 控制，不提供 fixture 值或 oracle。車輛 `get_plate_no_from_event` 實測第一批因把 page／事件當字典，回傳 None 與預期不符；加入指引後模型已改用物件，但仍有控制項回傳與預期不符，Bug Fixer 全類別回覆被拒，Writer 恢復亦未成功。兩批都未進突變，來源未修改，整個車輛專案仍未驗收。
+- 真實模型證據：本機 Qwen 3B 在修正前的現行生成流程完成同來源 BMI（source hash `5aca7912…`），保留7方法、目標覆蓋10/10、Reviewer 完成、builtin-ast-v3 突變83/96（86.46%）並通過 standard80。這證明原流程仍可生成，不代表本次續寫恢復已獲真模型驗收。CodeGemma 2B 的原指令／raw 續寫比較皆 HTTP200、正常 stop，但沒有測試斷言；首次 raw 實驗誤帶 system 的請求無效，已修正且未算成功。未宣稱 Codellama 13B、任意 base／2B 模型或車輛整批已通過。
+- 驗證：相關9檔56／56通過，最後 seed／物件形狀與診斷4檔28／28通過（範圍重疊不累加）；快速驗證 Node743／743、Python42／42、型別、lint、Webview通過。擴大相關回歸時發現原有資格耗時 fixture 未明確開啟可選資格；以 HEAD 原始 orchestrator 重播亦失敗，改為該案例明確 opt-in，保留原計數與期限斷言後通過。完整開發回歸、VS Code／Mocha、F5、DGX與遠端CI未執行；本機模型實跑使用編輯器API替身與真實產品工具，並非F5實測。
+
+## 2026-10-22
+
+### Writer 重複輸出格式恢復與可讀失敗診斷
+
+- 分析 BMI 22:45：Analyst 正常完成；Writer 兩次 HTTP 200，輸入均3014 tokens，輸出4096／6144 tokens後 length，分別約106／175秒。Context 已由8192增至10240；兩次各僅三種不同非空行，詞法方法／斷言數為零，尚未形成候選，無 Checker／Reviewer／突變量測。舊紀錄沒有原回覆，不能推測三行的內容；另於結果內建立衍生分析頁，原始報告與事件不改寫。
+- Local Writer／Writer 修訂遇到完整樣本、至少16非空行、80%以上重複且無可辨識方法／斷言時，既有唯一恢復機會改送固定格式修正，不再只加額度重送。保留完整必要提示與原品質門檻，不回灌原失敗回覆；提示改變後撤回先前的實測輸入與速度依據，重新核容量並要求完整單次時間。原最多兩次、階段／target期限及計數不變；已有測試結構及未知樣本仍採既有增額政策。
+- 正式 Local length 失敗保存 `model-output-preview-v1`：最多六種非空行的有界節錄、原行位置／字元數及樣本重複次數；先隱藏已知／疑似憑證、提示／來源重述與位置。總顯示預算最多1200字元且少於原文，不保存 provider envelope；complete／executable皆false，不作測試或續寫來源。低階資格探針預設不保存節錄。
+- 函式及逐輪 failure report、workflow新增逐次輸出診斷：實測輸入／輸出tokens、num_predict、Context、HTTP、請求／載入／推論耗時、詞法統計、hash、恢復決策與去密節錄。未知不借前次數字；明示詞法非AST、節錄不可執行、舊紀錄無法還原原文。逐輪失敗統計補入error／budget-exceeded，避免恢復成功後顯示沒有失敗事件。
+- 驗證：相關 Node 73項通過，含一次格式修正後完成真實 Python執行／同候選Reviewer／builtin突變，以及再次重複即停、隱私／雙語／宿主傳輸；快速 Node 743項、Python 42項及Webview語法通過，TypeScript、lint與production build通過。集合有重疊、不累加；模型回覆為固定fixture，未重跑`test:full`、F5／DGX或實驗室13B真模型，不宣稱已提高真模型通過率。
+
+### 事先角色資格可選化與連線探針診斷
+
+- 新增側欄「要求事先通過角色資格測試」及 `llmUnitTest.requireRoleQualification`，預設關閉並保存選擇。關閉時允許未測或先前探針失敗的模型直接嘗試正式生成，Context 增容也略過固定資格探針；不將未測角色標為 verified。開啟後，所有策略均要求同模型／端點／容量的 Writer 資格，完整流程亦要求 Reviewer；新容量仍須重驗。每次執行凍結政策並記錄至角色事件與認知檔。
+- 可選的是固定樣本的事先資格，正式候選仍須經 Checker 真實執行、同候選 Reviewer 核准、覆蓋率與突變量測，才可取得完整通過。首次終局失敗仍停止其餘批次排程；來源／隔離與完整必要提示門檻不變。
+- 主動「測試連線」的生成等待改採側欄 API 秒數，支援進度通知取消，Cloud／Custom 的完整 JSON body 仍受原期限限制。Local 沿用宿主傳輸與相同 `num_ctx`，逐角色記錄等待額度、耗時、安全原因、HTTP 狀態及固定樣本的 1024 輸出 cap；第一項失敗或不可用即停，後續標 not-run。傳輸、逾時、截斷、格式與隔離執行分開；未完成探針顯示「能力尚未判定」，不再一律標所有角色不合格。Python 固定樣本仍有獨立 30 秒上限，正式生成輸出額度不受固定探針 cap 取代。
+- 驗證：相關 Node 86 項通過；批次與非本機取消回歸另驗，嚴格／可選兩目標均完成實際 builtin 突變，審查失敗及新容量資格失敗均停止後續目標。快速驗證 Node 743 項、Python 42 項與 Webview 語法通過；TypeScript、lint、production build、追蹤檔／可達歷史密鑰掃描通過。集合有重疊、不累加為完整回歸；模型回覆使用固定 fixture、Python 工具實跑，未重跑 `test:full`、實驗室 F5／DGX 真模型或遠端 CI。
+
+### 整合先前未提交修改並同步交付
+
+- 依使用者要求一併交付原有 WIP：固定 Python 工具版本、側欄引擎選擇與保存回歸、宿主設定忽略規則；同時納入既有 AGENTS／AOCI 正式索引與治理設定、LF 屬性、CodeGraph 忽略邊界及歷史 CI 結報。本機索引資料庫、快取、日誌、憑證與建置產物仍依忽略規則保留在本機。
+- 修正 WIP 將 Mutmut 3.7.0 誤標為已完成隔離支援的文案。保留可選取及保存，明示適配器尚未完成、會在預檢停止；安裝套件不授予支援資格，也不默換引擎。Mutatest 3.1.0 繼續使用既有隔離適配器。
+- 驗證：相關 Node 20 項、Python 18 項通過；快速 Node 742 項、Python 42 項及 Webview 語法通過。重疊集合不累加；TypeScript、lint、production build、密鑰掃描與 diff 檢查通過。未重跑完整回歸、實驗室 F5／真模型批次或 Linux 的相依安裝。
+- 在新的暫存 venv（Windows／Python 3.13.2）按 requirements 安裝並執行 pip check 通過；未更動既有開發 venv。原 venv 額外安裝的 Mutatest 3.1.0 宣告 coverage<6，與既有 coverage 7.16.0 的 pip metadata 衝突仍存在，不能將新環境驗證解讀成原環境無衝突。
+
+### 測試重點共用閉環、明確 Context 請求與 seed 輸出空間
+
+- 側欄以「完整／邊界優先／覆蓋率優先／突變強化」取代模型尺寸 Tier；舊選擇顯示為完整，新流程不依模型大小分流或降 Tier 重問。四種重點只調整提示及實測缺口順序，共用種子、工具執行、同候選 Reviewer、覆蓋率與突變、有界修訂；既有品質門檻與角色資格保留。舊 API／歷史報告仍可讀。
+- 明確正整數 `runtimeContextTokens`／已保存的使用者容量，可以高於或缺少模型 metadata。修正手動值被較低宣告擋住的路徑，側欄、測試連線及正式角色請求採同一 `num_ctx`；保留原始宣告，不把手動值或固定短探針冒充上限／長提示實證。未知上限或手動超宣告時，不自動向更大容量外推；非法數值、過期角色資格與必要提示超額仍停止。
+- 新流程的 Writer seed 按完整提示剩餘空間分配最高 4096 的輸出 cap，扣除補正與 128 tokens 餘裕；正常 EOS 可提早結束，Context 與輸出／時間額度分開。Analyst 維持短計畫，原期限、請求次數及截斷回覆拒絕不變。
+- 來源使用點 Mock scaffold 改為各模型共用、每目標一次且只附初始 seed；仍是非可執行 TODO 指引，不推導答案、不自動替換目標或執行未完成骨架。報告與角色事件記錄測試重點；中英文同步。
+- 驗證：相關 Node 107 項通過；新增完整流程／截斷／中止及 Mock 組合 Node 20 項與 Python 42 項通過；快速驗證 Node 742 項、Python 42 項及 Webview 語法通過。上述集合有重疊，不累加為完整測試數。TypeScript、lint、production build、追蹤檔及可達歷史密鑰掃描通過，未執行完整 `test:full` 或實驗室 F5／DGX 長 Context 驗收。
+- 真模型限界：本機 `qwen2.5-coder:3b-instruct` 以 8192 Context／4096 輸出 cap 完成 BMI 單一 seed，實際輸出 113 tokens、正常 stop，單一測試實跑成功，約 10.3 秒。這不是完整 Reviewer／coverage／mutation 真模型驗收，不代表 2B、13B、70B 或所有小模型可用。完整新流程的執行／審查／突變回歸採固定模型回覆與真實 Python 工具。
+- 保留原有八份 WIP；重疊的五份 UI／翻譯檔依使用者明確授權合併，提交只取本次差異，原有 WIP 不納入。
+
+### 清除 VS Code 套件宣告警告
+
+- 移除 `activationEvents` 中冗餘的 `onView:mutation-test-view`；目前最低 VS Code 版本高於 1.74，宿主會從 `contributes.views` 自動產生啟用事件，保留相同 view ID 與註冊流程。
+- 為 `mutation-test-view` 補上 `icon: "$(beaker)"`，與既有 view container 使用相同的內建圖示，解除 `Missing property "icon"` 診斷，不增加圖檔或相依。
+- 驗證 manifest JSON、最低宿主版本、自動啟用條件、圖示與 lockfile 一致性，並核對沒有其他 manifest 欄位差異；`npm run package` 的型別檢查、lint 與 production build、追蹤檔／可達 Git 歷史密鑰掃描及 `git diff --check` 通過。這是宣告修正，未重跑模型／Python／突變批次、完整回歸或實驗室 F5；原有八份 WIP 保留且不納入提交。
+
+## 2026-10-21
+
+### BMI 21:16 輸出不收斂、種子外框與 Mock 簽名契約
+
+- 分析 `bmi_2026_10_21_21_16`：Analyst 成功，三次傳輸均 HTTP 200；Writer 的實際輸入都是 3203 tokens，可容於 8192 Context。先後輸出至 1536／2416 上限並以 length 結束，第二次增額受原 60 秒 API 額度限制。安全形狀統計為 4719／8120 字元、0 個 test_ 方法及 0 個 self.assert 呼叫；未保存原回覆，不能推定具體文字、複製來源或重複內容。沒有候選，Checker、Reviewer、coverage、mutation 均未執行，不能歸因品質門檻過嚴。
+- seed 使用精簡固定標籤資料包，保留完整必要來源、setup、helper、選中觀測、診斷與 construction rules，省去重複一般教學文字。新增 `formatWriterSeedPackaging`，只提供 canonical import、unittest class 及依 AST 選擇的同步／非同步方法開頭；不提供輸入、呼叫、fixture 值、預期值或 assertion。空外框不能通過驗證；輸出 cap、Context、期限、一次恢復與品質 gate 不變，擴充／修訂沿用既有流程。
+- Mock scaffold 重用 `ast_extractor` 的 method kind、receiver 與完整參數擷取，修正 property 呼叫方式、static 中名為 self 的真參數、positional-only／keyword-only／variadic 引數、keyword-only 建構子與局部名稱碰撞。未知繼承建構子保留 TODO；未知輸入與 mock return 不再預填 None。scaffold 仍為 executable=false 的 setup 提案，不授予執行或 assertion 證據。
+- F5 改為明確宣告的 `build:extension` 前置任務，執行 package、使用 `$tsc` matcher 並顯示專用建置終端機，避免依賴自動偵測任務。JSONC 與任務映射檢查通過；本機編譯錯誤未重現，尚待使用者提供實際第一段錯誤，不能宣稱已修好未知 compiler error。Debug Anyway 可能載入舊 bundle，不表示本次編譯成功。
+- 驗證：Mock／AST 相關 Python 2 檔 110／110（包含補齊中性 fixture 後的真實 binding 呼叫）；相關 Node 首批 4 檔 23／23，最後 seed context 調整後 5 檔 28／28（含輸出恢復、Reviewer 修訂保全及真實 Mutatest），最後 wire 斷言另驗 1／1。重疊批次不累加。最終 `test:fast` 通過型別、lint、Node 96 檔 742／742、Webview 語法與 Python 4 檔 42／42，均 0 略過；production build、追蹤檔／可達 Git 歷史密鑰掃描與 `git diff --check` 通過。
+- 真模型小範圍驗證：以與本批來源相同的 BMI、真實 AST 與單一受控 Trace，經正式 seed prompt／Ollama parser／seed contract／Python runner，`qwen2.5-coder:3b-instruct` 首次生成即通過單測實跑，testsRun=1、斷言觀測 verified，約 7.349 秒、113 輸出 tokens；`codegemma:2b` 正常 stop 但沒有有效測試。這是單一 seed smoke，並非原完整批次提示的受控效能比較，亦未驗收真模型 Reviewer、coverage、mutation 或所有 1B～5B 模型。開發機無法連到 DGX；原 13B BMI／車輛批次、`test:full`、VS Code／Mocha 與遠端 CI 未重跑。原有八份 WIP 保留且不納入提交。
+
+### BMI 種子截斷分析、獨立短契約與小模型實跑
+
+- 分析 `bmi_2026_10_21_20_27`：3 次模型傳輸皆 HTTP 200、Analyst 解析成功；Writer 先後耗盡 1536 與 2322 個輸出 tokens，均為 `done_reason=length`。實際輸入 3728 tokens 可容於 8192 Context，沒有網路逾時或輸入超額證據。無候選，Checker／Reviewer／coverage／mutation 尚未開始；原批沒有回覆形狀或 build 身分，不能推定重複內容或載入版本。
+- `writerPhases.ts` 的 seed 改用獨立短角色契約，直接要求單方法、單次真目標呼叫及完整 Python unittest，不再先要求完整套件再覆寫。依 AST `is_async` 選擇同步或 async harness／呼叫方式，估算與 wire 共用同一建構器；未知時保留條件說明。保留精確綁定、oracle、Mock 使用點、隔離與資源限制。structured seed 不附 optional topology、設計範例及較廣 Analyst 假說，完整必要來源、setup、規則與選中觀測仍保留，擴充和修訂流程不變。
+- `ollamaResponse.ts` 對長度中止新增 `output-shape-v1`，保存完整答案 hash／字元數及有界樣本的 fence、方法、assertion、重複行計數；不保存樣本文字或 provider 原文。角色事件只接受核驗後的數字／hash DTO，詞法統計不作候選批准。`run_manifest.json.report.build` 在產生候選前保存擴充版本、模式、bundle mtime 與可取得的啟動 bundle hash；不冒充 Git commit 或歷史批次版本。
+- 回歸：相關第一批 Node 7 檔 49／49，包含真實 Mutatest、種子保留、逐案新增及同候選審查後突變；最後 AST 指令調整後 Node 4 檔 27／27，包含實際 wire、截斷診斷／build hash 落盤、原期限與最多一次輸出恢復。兩批重疊不累加。最終 `test:fast` 通過型別、lint、Node 96 檔 740／740、Webview 語法及 Python 4 檔 42／42，0 略過；production build、追蹤檔／可達 Git 歷史密鑰掃描與 `git diff --check` 通過。
+- 真模型小範圍驗證：使用本機既有模型與新建中性純函式、受控 Trace、正式提示／Ollama parser／seed contract 及 Python runner。3B 探測曾出現同步函式誤用 await，因而加入 AST 分派；最終 `qwen2.5-coder:3b-instruct` 首次漏 import，模型依實際錯誤補正一次後，單測實跑通過、testsRun=1、斷言觀測 verified，約 10.977 秒（初問 50、修訂 55 輸出 tokens）。`codegemma:2b` 正常 stop 但未取得有效測試，拒絕且不執行。這不是所有小模型通過率或完整閉環驗收；真模型 Reviewer、coverage、mutation、原 BMI／車輛 DGX 批次、`test:full`、VS Code／Mocha 與遠端 CI 未執行。原有八份 WIP 保留且不納入提交。
+
+### 修正宿主傳輸整合、Mock 證據撤銷與側欄非同步狀態
+
+- 模型傳輸移除 caller dispatcher 與私有全域 Symbol 探查，保留 VS Code 原有 Proxy 查詢、系統憑證、TLS 與注入 fetch。使用本次非同步作用域的 Undici request-create hook 對最終請求套用原期限；時間欄位不支援時安全取消，不從 subscriber 拋出未捕獲例外。保留完整 body 原期限及中止，並增加並行作業隔離反例。Undici 7.30.1 僅作測試 Agent 的開發相依，修正 manifest／lockfile 漂移。
+- 修正 `mock_behavior.py` 在父路徑被覆寫後仍借用舊子 Mock 證據的回歸，保留明確 Mock 身分及其他仍可達的別名。`validate_test_bindings.py` 對 immutable datetime/date 的拒絕改為要求同來源、穩定且未重綁的 import；歷史依賴提示不能代替目前物件證明。補充重綁、條件、來源不符與仍可達子圖的正反例。
+- Mock 次數修復提示只描述累積 history，要求先核 setup 與來源依據；需要時在 target 前清除安排階段的呼叫紀錄並保留 fixture，不能一律改用 `assert_any_call` 弱化精確斷言。中性實跑證明 setup 累積與目標重複呼叫可能產生同一錯誤，但修復不能混為一談。
+- Cloud 憑證等待後重新核對 owner、取消與專案 revision，避免舊回應解鎖新分析。Custom 模型保存／恢復設定名稱與欄位，重複選單不覆蓋尚未保存的編輯；持久化狀態不保存金鑰、URL 或完整 provider 設定。
+- 驗證：相關回歸第一批 Node 6 檔 43／43、Python 3 檔 60／60；最後新增並行隔離反例後，傳輸／中止／修復整合 Node 5 檔 21／21、Python 1 檔 8／8，兩批範圍有重疊不累加。`test:fast` 通過型別、lint、Node 96 檔 736／736、Webview 語法與 Python 42／42，均無略過；production build、追蹤檔與可達 Git 歷史密鑰掃描、`git diff --check` 通過。
+- 本機 VS Code 1.142.0／proxy-agent 0.45.0 的實際宿主包裝無網路重播確認：憑證 Agent 重建後，最終請求得到原期限餘額，且 Proxy 查詢保留。這是宿主函式重播及 localhost 回歸，未宣稱真 F5／DGX 長排隊或新模型批次已通過；`test:full`、VS Code／Mocha 與遠端 CI 未執行。原有八份 WIP 保留；Webview 原先啟用 Mutmut 的差異不納本次提交。
+
+## 2026-10-20
+
+### 修復回饋例外視窗、Mock 綁定診斷、鏈式 Provenance 與 v3 存活突變指引
+
+- 更新 `repairFeedback.ts`、`dependencyMockContract.ts`、`roleContracts.ts` 與 `bugFixer.ts`：修正 `summarizeRepairOutput` 在超長 `FAIL:`／`ERROR:` 區塊（如附帶數十筆 `Calls: [...]` 清單的 `AssertionError`）只取尾端而切掉測試方法與例外列的問題，改為保留區塊標頭、例外診斷視窗與尾端摘要；新增 `executionFailureRepairGuidance`，針對多次呼叫 `AssertionError`、0 次呼叫、`expected call not found` 及不可變 `datetime`／`date` 屬性 `TypeError` 按需注入具體修復指引，未命中時不增加提示長度。
+- 更新 `isolatedResourceContext.ts`、`validate_test_bindings.py` 與 `mock_behavior.py`：在角色規則明示 `HOST_ISOLATED_RESOURCE_CONTEXT` 為提示詞區段而非可匯入模組並於靜態檢查攔截；新增目標參數誤作模組屬性（如 `@patch('main.page.update')`）、不可變 `datetime.datetime`／`datetime.date` 屬性 patch、同模組 helper 與 `moduleSource` 使用點不符之精確修復提示，並在未定義名稱為受測目標本身時直接提示 `from {module} import {owner or target}`；於 `mock_behavior.py` 支援跨 `setUp` 與測試方法的 `mock_children` 鏈式子 Mock provenance 追蹤，且避免同方法上非使用點的額外 1-arg `@patch` 連坐註銷合法的使用點 `@patch`。
+- 更新 `qualityAnalyst.ts`：修正 `qualityStrategyHints` 正則表達式以支援 `builtin-ast-v3` 單引號格式化的存活突變描述（如 `mutation from 'LtE' to 'Lt'`、`mutation from '0' to '1'`、`mutation from 'return_value' to 'None'`）並擴充涵蓋 `Eq`/`NotEq`/`In`/`NotIn`/`Is`/`IsNot`、`call_statement_omission`、字串常數、條件反轉與算術／一元運算變異。
+- 驗證：相關定向迴歸 Node 8 檔 53／53、Python 2 檔 35／35 通過；`npm run test:fast`（含嚴格型別檢查、ESLint、Node 快測 96 檔 736／736、Webview 語法檢查、Python 快測 4 檔 42／42）全數通過，0 略過；`npm run package`（production build）與 `secret_scan.py` 通過。完整開發回歸（`test:full`）、VS Code／Mocha、遠端 CI、DGX 與真實模型新批次尚未重跑；原有七份其他 WIP 與 Webview 啟用 Mutmut 選項的未提交差異保留且不納入本次提交。
+
+### 模型傳輸 300 秒逾時覆寫、雙時間設定與相依 Receiver 指引
+
+- 新增 `modelTransport.ts`：以 `getNativeGlobalDispatcher` 直接取得 Node 內建的 `Symbol.for('undici.globalDispatcher.1')`／`Symbol.for('undici.globalDispatcher.2')` 全域 dispatcher（無須安裝外部 `undici` npm 套件），將單次模型請求的 `headersTimeout` 與 `bodyTimeout` 依呼叫端期限放寬（最高 86,400 秒），避免超過 300 秒的長耗時推論遭 Undici 預設值提前切斷；若宿主或測試已替換 `globalThis.fetch` 則原樣委派，且完整保留 `AbortSignal` 取消與串流期間期限。`requestTiming.ts` 與 `modelRequestTimingPresentation.ts` 新增白名單傳輸原因碼（如 `UND_ERR_HEADERS_TIMEOUT`）擷取與中英雙語呈現，不記錄供應商回應內容。
+- 新增 `executionTimingSettings.ts` 並更新 `SidebarProvider.ts`、`webviewContent.ts` 與 `orchestrator.ts`：將「單次 API 等待上限（1–86,400 整數秒）」與「每個函式總時間上限（0.001–86,400 秒，精確至毫秒）」分列並即時顯示有效單次上限；啟動時先驗證單位與範圍、合併既有 `targetBudget` 其他計數限制並凍結本次執行快照，非同步保存期間若執行權移轉、變更目標或取消則中止啟動；宿主設定持久化失敗時僅記錄錯誤而不中斷啟動，補齊 Webview `appendLog` 警告顯示與模型／環境選擇跨重繪保留與預設選取。同步更新 `test/extract_script.js` 支援在獨立 VM 語境解析 `webviewContent.ts` 的相對 TypeScript 匯入。
+- 更新 `dependencyMockContract.ts` 與 `mock_scaffold_generator.py`：新增 `formatFixtureReceiverGuidance` 與單次呼叫次數指引，在 optional topology 因預算省略時仍於初次壓縮與修訂提示保留 `dependency-fixture-contract-v1` 的受消費 receiver 路徑（如 `connect.return_value.cursor.return_value`），並在 Tier 3 scaffold 避免將需繼續呼叫方法的回傳物件設為 `None`，同時明示不可對同一 mock 堆疊多個 `assert_called_once_with`。
+- 驗證：相關定向迴歸 Node 17 檔 95／95、Python 4 檔 51／51 通過；`npm run test:fast`（含嚴格型別檢查、ESLint、Node 快測 96 檔 736／736、Webview 語法檢查、Python 快測 4 檔 42／42）全數通過，0 略過；`npm run package`（production build）與 `secret_scan.py` 通過。完整開發回歸（`test:full`）、VS Code／Mocha、遠端 CI、DGX 與真實模型新批次尚未重跑；原有七份其他 WIP 與 Webview 啟用 Mutmut 選項的未提交差異保留且不納入本次提交。
+
+## 2026-10-19
+
+### 中止清理與側欄結果狀態
+
+- 修正 Sidebar bridge 與 abort command 在取消請求時重複、提前送出 `analysisFinished`，但真正取消的 owner 收尾時反而不通知的問題。現在只先送 `analysisStopping`，保留執行預約；目前 HTTP／子程序及報告、資源清理完成後，唯一 owner 才發布完成。停止期間拒絕重啟，取消後不發布晚到結果、不排程下一目標；環境提示延遲關閉也不能重複解鎖。執行／停止期間的 Tier 切換由 UI 與 Host 雙重防護，非同步設定完成後再次核對，避免晚到重建側欄而遺失中止按鈕。沒有改動 transport queue 的實際完成條件、期限或品質 gate。
+- 結果卡將檔名／函式名與分數分列，移除逐字斷行規則，工具列可換行。檔案分組以 file-key 保留手動收合，重建前讀取 live details 狀態，忽略已移除節點的延遲 toggle；覆蓋率、結果及報告更新、平鋪／分組切換都不重新展開。全展開／全收合同步新群組預設，切換專案重設；沒有宣稱跨 Webview 重載永久保存。
+- 新增公開 Sidebar 訊息→命令→HTTP AbortSignal→批次收尾整合回歸，核對零提前 finished、停止期間不重啟、唯一 finally 通知、cancelled 及下一目標 pending；保留真實 Python 程序樹取消、Ollama stream、queue、首錯即停與初始化續跑回歸。新側欄重播直接執行交付的內嵌腳本，涵蓋中英文、延遲 toggle、checkbox、報告動作、專案隔離與停止中環境事件。
+- 相關驗證 11 檔 43／43；快測 Node736／736、Python42／42，均無略過。最後 Tier 防護補丁後，再驗取消整合1／1及UI三檔13／13，重新通過型別、lint、Webview語法與production build；差異檢查通過。完整回歸、VS Code／Mocha、F5視覺操作、DGX與真實模型新批次未驗收；本機固定回覆與腳本重播不代替實驗室驗收。原有七份其他 WIP 摘要未變；Webview 中原先啟用 Mutmut 選項的未提交差異保留且不納入本次提交。
+
+### 09:39 車輛批次分析與後續優先序
+
+- 此批使用 2026-10-18 22:29:39（台灣）的舊建置，215 目標處理 4小時21分，4通過、23保留基線、188失敗；不能用來否定後續即停修正。787次模型傳輸皆HTTP200／完成，沒有網路超時；15次Writer輸出截斷，與Context超額不同。215次Analyst解析成功，只有27目標走完審查及突變；188份未完成審查不能說成Reviewer拒絕。
+- 候選主要卡在目標名稱／import綁定、替換受測目標的Mock、依賴參數型別／呼叫次數錯誤及重複修訂。27次品質實驗均因僅支援instance而不適用於模組函式；下一步優先固定canonical binding與窄Mock契約，再補模組層存活突變的可核實引導。完整分析與證據索引見 `docs/車輛結果與可行性分析_2026_10_19.md`；未改原報告或受測來源，閉環可行不代表任意Python專案零人工必達標。
+
+## 2026-10-18
+
+### Auto 先決條件與首個目標失敗即停
+
+- 分析22:30／22:34車輛批次及兩份匯入檢查：前者選到含爬蟲的父資料夾，仍有網路／檔案載入副作用，且Auto資格失效、模型請求為0；後者7個模組載入成功，19次正式請求仍因漏import、缺assertion、Mock row形狀及單次超時而失敗。所有請求容量均可容納，六份完成的Analyst回覆都解析成功，沒有正式Reviewer或突變量測。首個目標確定失敗後仍排程約10分18秒是主流程問題，不能全歸因3B模型。
+- 分析入口完成同次唯讀metadata探索後，與逐目標共用端點／模型／設定快照／num_ctx解析，提早檢查Auto資格：full需Writer及Reviewer、execution只需Writer。缺資格直接結束並釋放UI與環境鎖，不掃描批次、初始化、Trace或發送角色請求；保留手動Tier及明確單一dummy／靜態惰性stub的診斷政策。
+- 修正兩條吞錯誤路徑：外層目標失敗保存報告後傳回排程器；full內層已保存失敗或恢復可執行基線，也在報告與清理完成後傳回原錯誤，保持retained-after-failure／review-blocked原分類。整檔與批次於首個終局失敗停止，後續目標保持pending；原有單目標有限修訂、明確局部環境續跑、來源與品質gate、期限及計數不變。
+- 新增公開命令整合回歸，核對未探測／缺Reviewer／錯端點／舊容量／舊契約的早停、Writer-only execution、手動Tier、失敗報告、pending目標、analysisFinished與再次啟動；既有execution／Context快照回歸改核提早阻擋及首錯即停。相關回歸分批9檔30項通過，最後核心修補後再驗即停／Context／批次報告3／3；快測Node736／736、Python42／42，型別、lint、Webview及production build通過，無略過。完整回歸、VS Code／Mocha、DGX及真實模型車輛重跑仍未驗收，原有八個WIP保留且不提交。
+
+### 對齊 v3 與受控 patch 的回歸契約
+
+- fea0b13完整開發回歸的Node階段共1518項：1513通過、3失敗、2略過，來源與原有八個WIP摘要未變；因Node非零，後續完整Python及其他步驟未執行。兩項突變整合仍要求v2版本文字，另一項patch事實測試仍要求沒有回傳綁定的舊最小DTO；產品輸出已是目前v3與受控patch契約。
+- 僅更新三份回歸測試的預期：突變資料與報告明確核對v3；patch斷言精確核對targetResult、呼叫行與既有literal，同時保留unknown並禁止借用returned觀測。沒有修改產品邏輯、生成的車輛測試、來源、候選集合、品質政策、worker預設或期限。
+- 四檔相關回歸12／12通過，包含正常工具路徑的受控patch隔離執行；兩項固定回覆突變整合各完整執行96個候選，83 killed／13 survived、0 timeout／error，同候選審查及完整批次reader核對均通過。快測Node736／736、Python42／42、型別、lint、Webview及production build通過，均0略過。這是中性工具回歸，不是真實模型驗收；提交時修正後完整開發回歸仍待執行，VS Code／Mocha、遠端CI、DGX與新版215目標批次未驗收。原有八個WIP保留且不納入提交。
+
+### 受控 patch 回傳綁定與保全回歸排程
+
+- 車輛_now_text的測試已成功隔離執行，原AST工具卻在with patch之前停止追蹤，Reviewer只收到unknown斷言而缺少目標回傳綁定。現在僅辨識同目標模組下、單一literal路徑、無額外參數且不覆蓋目標／祖先／子成員的標準預設patch；在區塊內保留真目標回傳綁定與有限Mock設定。區塊觀測一律unknown，不借用未patch的Trace，也不把綁定傳出context。重綁Mock、未知寫入／回傳鏈與控制流仍停止追蹤。
+- 六項新中性回歸納入既有Python測試檔，與原44項共50／50通過；匹配及矛盾的未patch觀測都不能授證。正式Node整合以正常工具路徑真實執行中性案例，再核同source／run／target／test的隔離與呼叫證據；TypeScript reader及提示投影保留0 verified／0 contradicted／1 unknown／0 returned-call，獨立需求finding仍可審查，沒有產生批准。
+- 本批保存的車輛_now_text兩項測試已重讀native路徑、目前來源／依賴／候選摘要、runner結果、隔離事件及coverage原生資料摘要。靜態比較由0變2個回傳綁定，兩項觀測仍unknown；0模型請求、不重跑車輛，也不計為真模型重審或品質通過。
+- 3210e64完整開發回歸因BMI保全fixture的30秒突變階段partial而中止，來源清單未變；同版單檔及保存產物重現失敗。兩個worker下76個候選全數開始，50 killed、25 survived、1 timeout，最後一項僅餘0.942秒。保留相同來源、測試、76項candidate IDs與原30秒期限，產品已支援的四個worker在23.176秒完成：51 killed、25 survived、0 timeout／error，正式fresh／stored reader均接受。fixture因此明傳mutationWorkers=4，產品預設及當前車輛批次仍為2；原timeout紀錄沒有重分類，51／76也未達80%品質門檻。
+- 主線相關Node28／28、Python50／50，快測Node736／736、Python42／42，均0略過；型別、lint、Webview及production build通過。修補後完整開發回歸待重新啟動，VS Code／Mocha、遠端CI與DGX未重跑。八檔／215目標真實7B批次仍使用6813034的固定副本，未包含後續兩項診斷修補，整批品質尚未驗收。原有八個WIP摘要維持不變，不納入本次提交。
+
+### Writer 名稱修訂的有界多缺漏診斷
+
+- 車輛真實候選同時漏掉測試 helper 與來源全域名稱，原工具每次只回報第一項。現在保留原首錯判定、reasonCode、method與Writer路由，僅在已拒絕的候選中補列最多七項名稱／方法診斷，補充名稱文字總長限1200字元且不截斷識別字；未知控制流、動態命名空間及巢狀表達式仍不猜測。不自動加入import、改斷言、安裝套件或增加修訂額度。
+- 本批保存的兩份_connect失敗候選靜態重播：首錯MagicMock不變，額外指出DB_NAME，兩份仍被拒絕，來源與候選摘要未變；0模型呼叫、不執行目標。中性整合確認一次Writer修訂能同時收到多名稱，完整修訂仍須真實隔離執行，僅補部分名稱仍失敗；首次測試錯把AST首錯順序預期為date，已修正測試以保留既有TEST_YEAR首錯，沒有改動判定順序。
+- 相關Node4／4、Python14／14，快測Node736／736、Python42／42，均0略過；型別、lint、Webview及production build通過。完整Node／Python、VS Code／Mocha、遠端CI與DGX未在此修補後重跑。已啟動的八檔／215目標真實7B全批仍使用6813034的固定副本，不含這項後續診斷；全批仍在執行，尚不能宣稱完整品質通過。原有八個WIP摘要維持不變，不納入提交。
+
+### builtin v3 副作用突變與車輛真實模型重測
+
+- 車輛的 `logout`、`reset_and_refresh` 只有狀態寫入與獨立呼叫，builtin v2 對兩者都產生零候選。新增有獨立版本的 `builtin-ast-v3`：保留全部 v2 候選及順序，再對選定函式本體的普通／await 呼叫敘述產生單點 `pass` 替換；不變異巢狀 callable、裝飾器或預設值，也不重複執行引數。正式擴充明確選用 v3；未指定版本的 Python／CLI 呼叫保留 v2，相容歷史重建。v1／v2 報告仍可讀，零候選依然不可採分數，未改動品質門檻、引擎選擇或原期限。
+- 中性回歸實際執行同步及具必要建構子的 async 方法：強斷言偵測兩個省略變異，弱斷言留下兩個存活變異，serial／parallel 候選身分一致；Python、TypeScript reader 均核驗真實歸因。主專案相關 Node10／10、Python29／29，快測 Node736／736、Python42／42，均0略過；型別、lint、Webview 與 production build 通過。獨立副本曾讀到舊 out，該次9項結果不採為 v3 證據，已指定新 out 重新編譯並重跑以上10項。
+- 載入修補的完整 Python 回歸已在 v3 套用前完成：769項中764通過、5略過，tracked／history密鑰掃描通過。原沙箱暫存目錄導致大量權限錯誤，獨立 TEMP 的沙箱版本亦中止；相同 async 基線在沙箱20秒超時、本機約1.1秒通過，因此採本機原隔離與期限下的結果，不調大 timeout。這份769項結果不是 v3 套用後全套通過；v3 後完整 Node／Python、VS Code／Mocha、遠端CI與DGX尚未重跑。
+- 使用者批准車輛來源的三處更名後，先說明用途、待原來源模型對照結束才套用精確差異並備份；保留兩版函式本體與原公開綁定順序。正式探索確認215個唯一目標、0歧義。過期隔離計畫被拒絕，重新規劃後逐項確認七項既有操作及 schema 相同，僅來源摘要與備份 app 入口行號更新；七個含函式模組實際隔離載入成功。這些外部資料目錄變更未納入擴充提交，也不是GUI或整體品質驗收。
+- 固定新版管線的521項產物後，以真實本機7B模型重測兩個副作用目標，共12次生成請求：`reset_and_refresh` 完成同候選執行及 Reviewer 核准，目標行2／2、v3突變2／2 killed，完整品質通過；`logout` 仍因審查後修訂與通過案例保全受阻，未計通過。重讀保留檔及現行來源摘要、審查批准與完整突變證據均一致；來源與固定管線摘要未變，設定／SecretStorage寫入0。原本測試腳本的長輸出前綴使較長函式名在建立 journal 前受240字元預留限制擋下，已改用有完整身分對照的短雜湊目錄，不放寬產品路徑檢查。215目標全批尚未驗收。
+- 原有八個主專案WIP摘要維持不變，不納入本次提交。真模型的一個新通過案例與中性回歸不代表整個車輛專案已完成。
+
+## 2026-10-17
+
+### 車輛完整批次結果與候選載入錯誤的 Writer 修訂
+
+- 固定管線全批已完成八檔／212目標，耗時6小時47分18.359秒、實際Ollama生成呼叫1189次：6完整通過、24保留可執行成果、182失敗。失敗包括候選驗證157、模型格式18、來源歧義3、generated runner 3與pipeline timeout 1；保留成果包括品質停滯19與候選驗證5。來源與520項管線產物摘要未變，設定及SecretStorage寫入0。這是全數處理完成，不是整個車輛專案品質通過；本批使用前一個種子／投影修正，沒有包含下列載入修補。
+- 三份runner失敗候選在decorator建立 `Connection()`／patch參數時拋錯，卻被當成不可修訂的loader工具錯誤。現在核對目前測試檔的native身分、module globals及有界traceback，在候選的實際setup呼叫點成立時，以unittest既有 `_FailedTest` 路徑保留真正例外與一筆載入失敗證據，交Writer整份修訂。純來源import失敗、錯檔、無候選frame或真正loader問題不借此取得修訂路由；隔離錯誤與黏著違規維持原阻擋。
+- 初版最深frame判斷漏掉runtime guard包裝的SQLite呼叫，新增真實decorator整合先重現失敗，再以候選中最後的實際執行位置區分setup呼叫及來源import；不憑例外文字猜所有者。full／execution共用回饋同時列imports、module/class setup、decorator與fixture，不再把這些失敗全說成缺import；實際錯誤保留，載入錯誤不是目標例外oracle。
+- 驗證：三檔相關Node15／15（含full真實執行、同候選Reviewer及builtin突變），Python runner24／24，快測Node736／736、Python42／42，均0略過。三份原始車輛失敗候選以新runner重播皆交Writer，刻意在模型修訂前停止，原候選與來源摘要不變；重播不算測試或品質通過。runner修補後、回饋文字修訂前的兩個真實3B目標共15次請求，仍因未定義名稱、無效patch及重複修訂失敗，未進突變。
+- 後續以獨立本機服務及測試暫存模型快取建立7B對照，角色資格與正式車輛驗證分開記錄；本節不宣稱7B或新版212目標已成功。尚未重跑修補後完整開發回歸、VS Code／Mocha、遠端CI或DGX；原有八個WIP保留，不納入本次提交。未修改車輛來源中的三處重複定義，也未放寬執行、身分、Reviewer或突變品質門檻。
+
+### Writer 種子契約與不可斷言回傳診斷
+
+- 本機車輛重現發現：沒有 grounded seed case 時，固定指令仍宣稱「One verified case」；生成與預執行修訂現在共用單一方法、單一真目標呼叫的範圍，明確區分已選實跑案例與同測試控制的依賴情境。完整來源、既有 Python 輸出及安全契約保留，不由 Host 代寫 fixture、expected 或 assertion。
+- 共用角色證據投影不再傳送明確不可斷言、截斷或未受控回傳的 `result`／`result_type`，以 artifact-only 標記交代位置；完整原始觀測仍保存在產物。案例 ID、輸入、來源位置、安全旗標、原因及未知欄位保留；先依原始事實分組，避免不同不可用結果被錯合併。有效回傳值及看似診斷哨兵的真正字串保留原文，不改 Trace／Reviewer／執行／突變 gate。
+- 驗證：七檔直接相關回歸49／49；快速Node736／736、Python42／42，0略過，含型別、lint與Webview語法；四檔種子與結構修訂整合19／19，含實際隔離執行及原有品質閘門。快測初輪因一個舊wire測試仍要求不可斷言回傳值而失敗，改為逐欄核對保留九筆有效事實及第十筆診斷後重跑通過。未以刪除失敗案例或降低容量／品質斷言換取通過。
+- 真實本機 `qwen2.5-coder:3b-instruct`：投影修正後 `_connect` 不再複製私有工具型別，仍因將來源的 `DB_NAME` 誤作 `DB_PATH` 且修訂無有效變更而失敗。Tier3四目標比較仍未通過完整流程：兩個候選驗證失敗，另外兩個以期限耗盡結束；來源八檔摘要不變，沒有設定或憑證寫入。這些小樣本及固定回覆整合不代表車輛專案成功。
+- 完整八檔／212目標已用520檔產物摘要固定的目前管線另啟新批次；截至本次改動驗證時仍在執行，不能宣稱整批完成或測試／突變全部成功。本次修正後尚未重跑完整開發回歸、VS Code／Mocha、遠端CI或DGX模型；先前全量結果只作修正前基線。原有八個工作區修改保留並排除提交。
+
+## 2026-10-16
+
+### BMI 容器斷言證據、Reviewer 三態與修訂工作量
+
+- 分析 `bmi_2026_10_16_18_28`：Local／qwen2.5-coder:32b-base-q8_0 的四次請求均 HTTP200 且完整讀取，最後 Writer 修訂以1,536-token輸出 length 中止；不是已證明的網路超時或 Context 超額。原批只保留一個可執行測試、目標行7/10、Reviewer未完成，突變未量測。保留原期限的較長重送因預估時間不足受阻，不將此批重標成功。
+- 根因之一是 AST facts 能辨認目標結果，卻不能還原 `(expected_bmi, expected_status)` 內的局部 literal 變數，導致觀測綁定遺失。現在有界解析 tuple／list／dict／set，先獨立綁定目標結果，再解析 expected；未知參數不產生懸空呼叫行號。mutation、可變別名、未知副作用／fixture、不完整或衝突觀測保持未知，不執行任意程式或產生 oracle。原測試原文及保存22筆觀測的靜態重播現為 verified；只在記憶體改錯 expected 的反例為 contradicted，原結果檔未改。
+- Reviewer 使用 verified／contradicted／unknown；舊缺值維持未知，非法或矛盾狀態停止處理。提示以三態取代舊布林，不再附加完整Trace；安全組裝診斷增加固定狀態與計數。原批有／無引號的「未經觀測」泛稱只在同候選實跑、同呼叫及同斷言已核實時反證，整份assessment走既有一次補正；不刪finding、不自動批准。真正缺少證據、新輸入、具體修改及獨立需求仍可審查。
+- 完整 Writer 修訂依有效 assessment 的 finding／missing-scenario 結構計數分配輸出，以同候選與同feedback摘要綁定並消耗，不解析自然語言。單一小修補仍為1,536；多項工作增加有界預留、最多原三成Context，learned floor不降。未知／非法工作量保留原預留；容量診斷、增容與wire輸入／輸出完全配對。沒有新增Tier、Agent、Trace副本、期限或重試，finding數不是測試數量保證。
+- 驗證：快測Node732／732、Python42／42，型別、全src lint、Webview語法及production建置通過。9檔定向整合初輪82項中80通過，兩個舊fixture仍要求空斷言或wire布林；改為精確unknown列／三態後，只補跑受影響兩檔，8／8通過，原審查次數及突變斷言未放寬，產品未再修改；其餘7檔74項的通過證據沿用同一份產品來源。相關Python44／44通過。固定回覆BMI完整閉環保留8個方法、目標行10／10、真實Mutatest39／39；多finding wire cap與下一單一NameError修補整合通過。追蹤檔及可達歷史密鑰掃描、差異檢查通過，原8個WIP逐檔摘要未變且排除提交。本次未重跑完整回歸、VS Code／Mocha、遠端CI或DGX真模型；不以固定回覆及局部通過宣稱實驗室模型驗收完成。
+
+### 快速、整合、完整驗證入口與 Context 數字釐清
+
+- 新增 `test:fast`、`test:integration`、`test:full` 與 `test:related`；小修改先執行明確相關回歸及快測，流程變更補受影響整合，里程碑／Demo 前完整驗證。快速與整合測試檔案互斥且聯集完整，保留所有既有回歸，未知新 Node suite 預設整合；`test:unit` 及低階無參數 runner 保留全量相容。
+- `--list` 只列計畫，不要求已有 out 產物；related 依測試檔名／路徑明確篩選，空選取或任何 selector 未命中皆非零。程序使用參數陣列及固定 cwd，失敗保留非零 exit，不用 shell 拼接指令。快速／局部通過不冒充完整驗證或真模型品質。
+- 更正 Code Llama 70B 的數字解釋：Analyst 初始 `num_predict=1024` 是輸出額度；當套件 metadata 回報2048時，目前 Auto `num_ctx` 也會因取半而得到1024。[Meta 70B Instruct 模型卡](https://huggingface.co/meta-llama/CodeLlama-70b-Instruct-hf)宣告最高16K微調且不支援100K，[Ollama特定70b blob](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)卻回報2048。套件宣告、請求／實配與輸出 cap 必須分列，不能把1024概括為模型本身上限；本次未依模型名稱覆寫容量或將短探針當長 Context 證明。
+- 實測：入口回歸16／16（含於快測），`test:fast` 為Node725／725、Python42／42、0略過，含嚴格型別、lint、編譯及Webview，共69.651秒。related 定向真實Mutatest與Writer修訂stop／length為Node4／4、Python45／45、0略過，共82.734秒。full／integration／舊unit／related的npm `--list` 通過，Node96＋148＝244、Python4＋45＝49；原Python49條有序清單摘要不變。production bundle、包含新增追蹤檔的歷史密鑰掃描與diff檢查通過。本次依加速開發規則未重跑約50分鐘完整回歸、VS Code／Mocha、遠端CI或真模型，不以清單／局部通過宣稱全量驗收；原有8個工作區修改完整保留且不提交。
+
+### BMI 角色溝通、完整回應期限與 Reviewer 證據診斷
+
+- 分析 `bmi_2026_10_16_01_03`：Local／llama3.3:70b、full／Tier2，`num_ctx=65536`，七次完整提示皆可容納；六次收到完整 stop 回覆，最後一次 Reviewer 在讀取 body 時達到原 target 期限。不是所有角色沒送出，也不是2K Context不足。目標總額600秒，最後一次送出時只剩151.986秒；錯誤卻展示設定的6,000秒，現已分列實際傳輸額度與設定上限，不延長原期限。
+- 首次 Reviewer 因引用不相關行而正確拒收；補正提出已觀測結果未重新核算的泛稱。當前 facts builder 重播確認該斷言的 `observationVerified`，但歷史 wire 未保存 facts DTO，不能混稱歷史原文已核對。Reviewer 明示逐行觀測旗標的含義，移除舊的 `quote TEST_FILE` 指令；與同候選實跑／精確觀測明確矛盾的重複核算要求走有限補正，不刪 finding 冒充批准，獨立需求、新輸入與具體改善仍可審查。
+- 完整回歸另捕捉到新增固定說明重複出現、令8K整合案例先增容的問題；已刪除重複說明欄位並僅保留一次精簡指令，該完整 Reviewer 提示5841→5649 tokens、`num_ctx`維持8192。來源、原facts、Trace、schema、品質gate及原測試的容量斷言均未更改；原失敗的stop／length與相關定向回歸74／74通過。
+- 新增安全 `reviewer-evidence/assembled`：只保存版本、source／test hash、計數與有界逐行 assertion 種類及驗證旗標；不含輸入、expected、來源或 provider 原文。事件只證明組裝，不證明伺服器收件、審查批准或業務需求正確。品質角色登錄分開 ungrounded v3 與 grounded v4，維持歷史相容。
+- 獨立重現並修正 AST facts 的 setup 旗標缺口：自訂 `setUp`／`setUpClass`／`run` 或未知 dispatch 時，原本呼叫不授予觀測核實、斷言卻仍可能標真；現在呼叫、斷言及 mock 事實共用既有保守 setup 條件。新增矛盾檢查也要求同方法／同 `targetCallLine` 的 returned-call 核實，不借其他案例或缺失旗標；語法上的 targetResult 不冒充觀測。此缺口不是已證實的原BMI原因。
+- 第一份 Writer 修訂把整 tuple 精確相等改成近似數值與索引斷言，削弱保護；現行 AST 保留工具重播正確拒絕，第二份完整保留原斷言則通過。未修改此 gate。批次保留五個可執行測試、目標行覆蓋80%，Reviewer未完成且突變未量測，不能列品質通過。
+- 修正另外查證的傳輸缺口：Custom 資格與 Cloud 模型探索不能收到 HTTP 標頭就清除期限；Cloud 資格及 Local 模型探索一併使用涵蓋完整 body 的共用 JSON helper。原期限涵蓋重試／回退，忽略 abort 的晚到回應也按期返回；丟棄的 body 非阻塞取消，HTTP錯誤不讀私有內容，JSON解析錯誤不回顯原文。這些側欄缺口不混稱本批 Local 正式流程的根因。
+- Cloud thinking 能力回退另有等待 `body.cancel()` 的同型卡住，已以永不完成清理的中性回覆重現，改成非阻塞清理；回退沿用原 schema、提示及 caller deadline，HTTP500不當作能力不支援。已核對正式程式無其他等待 provider body cancel 完成的路徑。
+- 完整驗證：Node 1,485／1,485通過、0略過；Python共749項，746通過、3項平台／權限條件略過。TypeScript嚴格編譯、全src lint、production package、Webview語法、追蹤檔與Git歷史密鑰掃描及差異格式檢查通過。採原生C槽短暫存區與UTF-8，原子檔案整合在沙箱外驗證；五角色×三種provider的傳輸矩陣59／59通過。固定回覆BMI整合保留8個方法、目標行10／10、真實Mutatest 39／39；這驗證工具閉環，不代表DGX真模型或遠端CI已驗收。原有8個工作區修改完整保留且不納入本次提交。
+
+## 2026-10-15
+
+### BMI 送出前容量不足、角色容量診斷與提示精簡
+
+- 分析 `bmi_2026_10_15_18_41`：新建置在第一個 Analyst 的 `prompt-budget` 停止，約19秒、正式生成及候選計數皆0。當次選用容量1024、完整輸入估量2410及補正預留94，增容診斷為 `prompt-exceeds-model-context`；舊報告未保存上限原值。本次查詢的[官方 `codellama:70b` metadata](https://ollama.com/library/codellama:70b/blobs/1436d66b6975)宣告2048，但不能以此代替該次私有服務的原始 metadata。尚未進 Writer、Reviewer或突變，不是新的300秒 API超時，也不能用此批判定串流修復無效；不把一個標籤概括成全部 Code Llama 上限。
+- 新增 `promptCapacity.ts`／`promptCapacityPresentation.ts`。`prompt-capacity-v1` 只描述當前完整角色提示，分列輸入、補正、輸出、缺口、已核實上限來源及最小容量；同請求已有觀測時採估量與實測較大值。每個候選容量套用既有角色輸出政策及 learned floor，不低估增容後的輸出預留。未知上限保持 null／unknown，不從 fallback 或模型名稱推定；DTO 不含來源、候選或 provider 原文。
+- 容量診斷接入角色事件、執行知識及中英文失敗流程，明示這是保守估算，不能當成 tokenizer 實測、後續角色可容納或品質通過。短角色連線探針亦補充只認證固定樣本，正式完整提示仍需各自核對容量。
+- 指定突變引擎預檢延後至完整提示可容納之後，並在所有增容資格與正式生成請求之前完成；同目標唯一 Promise 保存成功或失敗，不因角色重試再探測。不改指定引擎、取消、來源核驗、原請求／階段／target 期限與計數；確定容量不足時不啟動引擎探測。
+- 初始 Analyst 只精簡固定指令與結尾重述，system估量793→708、同批完整 wire提示2410→2302 tokens，含schema的request body 11317→10936 bytes。完整來源、setup、10筆成功與1筆例外觀測、2187 bytes原schema全保留；Trace JSON段落逐位元相同。沒有刪證據、變更literal或放寬語義gate；2302本身仍高於2048，不宣稱所有來源可在2K Context執行。
+- 驗證：提示相關定向回歸64／64；容量、英文診斷、引擎順序與真實Mutatest定向回歸39／39。完整Node共1399項，1397通過、1失敗、1略過；失敗為既有Windows路徑測試在D槽暫存區將Python的cp950輸出當UTF-8解碼，略過為該卷未提供8.3別名。兩項Windows案例均於原生C槽暫存區＋UTF-8補測通過（兩檔合計3／3，包含1項已通過案例）；D槽啟用UTF-8後正確略過無8.3的情境，未修改產品或測試條件，不宣稱原完整執行零失敗。
+- 完整Python共745項，740通過、5略過；新增的跨磁碟及8.3條件限制，另於C槽補測2／2通過，其餘3項保留Windows平台／symlink權限略過。TypeScript嚴格編譯、全src lint、production package、Webview語法、追蹤檔與Git歷史密鑰掃描及差異格式檢查通過。完整測試使用沙箱外的原子檔案操作，Python採`PYTHONUTF8=1`；保留原有8個工作區修改。工具回歸不代表遠端CI或DGX70B真模型已驗收，仍須以實驗室新批次確認。
+
+### BMI 300秒超時定位與串流傳輸修復
+
+- 比對 `bmi_2026_10_15_12_47` 與 `13_05`：兩批均在第一個 Analyst `semantic-json` 請求等待約300秒，queue為0／1ms、HTTP標頭／狀態／Ollama統計均未知；估輸入2410、輸出cap1024、請求容量65536。尚未產生候選或進審查／突變，不是這兩批的Mock失敗、queue阻塞或已證實的length截斷。前置約19～21秒加API300秒，也不同於整個專案300秒總額。
+- 舊報告為development build `2026-10-14T09:41:16.524Z`，沒有commit欄位，不能認定正在跑最新修復。使用者DGX／Windows短生成分別HTTP200約0.429／0.512秒，證明當時短生成路徑可用，不證完整提示及schema耗時。DGX為GB10，統一記憶體的N/A不是缺顯卡。
+- 正式Local與側欄資格探針統一 `stream:true` 及有界NDJSON接收；只在唯一done終端與EOF後交既有角色／候選gate。UTF-8拆包、缺完成、重複／尾部紀錄、供應商錯誤及超界皆明確拒絕；length仍由原完整提示增額恢復。普通JSON保留歷史missing-done相容，明示未完成不採用。
+- 修正資格探針收到HTTP標頭即清除timeout、後續body可能無期限的缺口；原期限現在包含完整讀取。失敗及HTTP錯誤清理採非阻塞cancel，不讓永不完成的清理Promise再卡住。
+- 新增安全傳輸進度：排隊／派送／HTTP提交／收到標頭／首資料／首回答／完整讀取，保存真正fetch body的SHA-256與bytes，不保存完整提示／回覆。排隊逾時明示尚未送API，body超時保留response-read階段；缺模型統計維持未知，不把HTTP等待推定成GPU耗時。
+- 另修已確認但非本次根因的queue期限：queued過期或取消即拒絕且永不啟動；active工作真正settle前不釋放槽位。新增deadline／cancel／超長timer／observer例外及舊run draining時新run過期的回歸。
+- 最近觀測131072與請求65536的容量差異會明示可能重載，保存偏好不覆寫。已核對Ollama 0.33.2的scheduler會比較runner選項；沒有服務端日誌，不能認定重載或schema就是此次300秒原因。正式schema與完整來源均保留，未以timeout放寬格式或品質gate。
+- 本機Ollama未啟動、開發機不能連入DGX；新reader／queue／資格及真流程固定回覆回歸與完整驗證分列，不能宣稱新版70B已完成BMI品質驗收。
+- 完整驗證：Node 1384／1384通過（0 skip），Python 742通過／3 skip；TypeScript、lint、生產建置、Webview語法、追蹤檔及Git歷史密鑰掃描、`git diff --check`皆通過。新增串流真流程固定回覆案例6／6通過；其完整回覆案例實跑隔離Python、Reviewer與builtin突變，仍不代表DGX模型驗收。原有8個未提交修改逐檔SHA-256核對保持不變。
+
+### Trace 診斷、Mock 必要設定與修復範圍
+
+- 修正車輛三份 `vehicle_card` Trace 的全域 `parameter:null`／`source-node-budget` 診斷被 TypeScript 拒收；保留 `needs-input`／`complete:false`，不產生 oracle。真正無效 JSON／觀測契約以固定 typed `trace-contract` 停止，不被 journal 或 legacy `load_error` 掩蓋；真正載入失敗的結構化診斷仍可恢復。
+- 首次 Writer 的 `includeTopology=false` 原本連帶省略 iterable／常數索引的可操作消費指引。現在必要 setup 在初次與修訂都保留，只有 raw topology 可整份省略；完整來源與 wire 預算閘不變。舊批每份 wire 是否省略 topology 尚未逐份證明，既有 `_connect` 的 `DB_NAME` 事實原本正確。
+- 同來源的 setup 契約新增有界參數屬性讀／寫／呼叫拼字，明示 dot 屬性不能用字典 key 取代、參數物件不應 patch 成 module-global；呼叫参数另列實際模組使用點。只供 setup，不供具體型別、值、expected 或 patch 權限；重綁、反射與未知控制流不猜。
+- 修正合法巢狀 `types.SimpleNamespace` 內 Mock 的來源追蹤誤拒，以明確物件／成員身分圖保留真正注入目標的 Mock；別名修改撤回舊成員證據。未知物件、假工廠、反射、動態 kwargs、手動預呼叫、偽斷言及目標 patch 仍拒絕；新 UI 正例已通過結構、AST bindings 與真實隔離執行。
+- Bug Fixer 移除三處 raw import 行數誤拒，由 Python AST 統一計算真正新增的 import binding；重複、既有與同來源拆行不占 NEW 額度，四個真正新增、名稱遮蔽、wildcard、fixture／其他方法變動仍拒絕，未通過範圍檢查不能執行。
+- 普通 Writer 增量與修訂依真正 AST 盤點選擇新方法名，未知盤點 typed 停止；生成與 wire 預算都納入同一簽名。模型仍寫完整 body／expected，新名字不能繞過情境去重、保留、實跑與同版審查。
+- builtin／Mutatest 共用試驗器在排程及 setup 後核對 stage 餘額：少於成功 baseline 的實測成本就保持 NOT_RUN／partial；已起跑而掛住仍 TIMEOUT，不改原期限、killed 或分母。新執行既有預設60秒，明確設定不覆蓋。
+- 真本機 `qwen2.5-coder:3b-instruct` 三目標驗收187秒完成，採最新 production、full／Tier2／五輪／指定Mutatest／60秒；重新公開資格探針後 Writer／Reviewer verified，Fixer未verified據實保留。`_connect` 真實執行、審查及目標行1/1完成，但Mutatest零候選，分數N/A；`_table_columns`仍把受控row的名稱放第0欄、型別放第1欄卻預期名稱，修訂未改正；`open_dialog`仍用dict／lambda或patch未注入的module-global，應拒，沒有新的合法Namespace誤拒證據。不能宣稱三目標完整品質通過。
+- 三目標來源／已批准fixture／production來源及編譯摘要前後相符，設定與SecretStorage存取0，隔離資源清理完成；唯一全src/out差異是命名回歸測試TS／JS，沒有假稱全樹未變。保存原生final／failure／events及安全摘要；同版builder重建能證明產生必要setup指引，舊wire沒有prompt hash，不宣稱逐字封包證明。13B／70B尚未新驗收，完整單元驗證與真模型品質分列。
+- 最終普通 Windows 完整回歸：Node 1,332／1,332 通過（35分48秒，0 skipped）；Python 745項，742通過／3 skipped，無失敗。針對性 Mock Node35／35、Python98／98，Trace直接呼叫及流程54／54、核心11／11，import修復Node25／25及Python13／13，Writer命名整合3／3，突變V2 23／23皆通過。TypeScript、lint、生產建置、Webview語法、含新檔的追蹤檔／可達歷史密鑰掃描與差異檢查通過；原八個WIP位元組保留並排除提交。這些是工具與流程驗證，不能取代真模型品質驗收。
+
+### 角色期限與完整 Writer 預算修復、車輛整批實測
+
+- 後續發現：初版恢復層把 Analyst 的首問60秒期限當成整個 shared stage，未使用已保留的120秒規劃階段；首問耗時後，缺少生成統計便必然不足完整60秒重送。現在明傳 `initialAttemptDeadlineAt` 與原 `stageDeadlineAt`，首問期限不變，最多一次同提示 length 重送使用原階段餘額；target／family／資格探針及計數不續期，舊呼叫端的 shared hard cap 不放寬，也不捏造 token 速度。
+- 固定回覆回歸補入首問耗10／45秒且缺統計的恢復、再次length停止、原stage／target／family剩餘不足及取消傳播；截斷前綴不保存，Writer仍用獨立額度，恢復完成後仍須實跑與同版審查才突變。這是流程驗證，不是70B實測。
+- 完整Node首輪發現兩個既有fixture還一次生成2／8個測試，與單案種子契約不相容；改為精確觀測的單案種子及真正新增／修訂，保留Reviewer阻擋、同雜湊批准、完整突變及三輪品質改善斷言。續跑邊界案例確證另一個程式缺口：宣告給Writer生成器的可用額度漏算seed system與案例事實（實際7,433 > 7,036），因此被最後安全閘正確阻擋。現按完整seed／addition system、phase／baseline、facts、資源、觀測、換行及已學習輸出floor預留，不截斷必要來源或放寬安全閘，逐案補測仍不帶回全域觀測。
+- 使用真 `qwen2.5-coder:3b-instruct`、Tier2、五輪及指定Mutatest，在隔離副本完整處理車輛八檔212個目標：1完整通過、21保留可執行基線、19零候選、171失敗。正式三檔80個目標無完整通過；通過的測試版本 `update_vehicle_loading` 為目標行6/6、真Mutatest 5/6，同測試／執行／Reviewer／突變雜湊一致。整批完成不表示整個專案品質通過。
+- 本批使用期限分離修補前的固定來源；與新修補驗證分列，不借整批宣稱新Analyst恢復或13B／70B已驗收。來源8檔、503項應用來源、499項編譯產物及host／probe未變；finally設定寫入與SecretStorage呼叫皆0，worker租約目錄清空。未讀原DB位元組，不宣稱完成原DB雜湊比對。
+- 全批耗時5小時40分42.578秒；212份final report與211份非通過failure report皆完整存在。沒有環境預檢受阻；209個目標進Writer，41個有真實可執行基線、同版Reviewer批准並進Mutatest，19次有正候選完整量測、19次零候選、3次部分量測。41份保留測試與批准身分相符，38份保存的突變量測與來源／測試批准相符。模型容量由8,192有界增至20,480，可信上限32,768，沒有改寫偏好。
+- 全批Analyst209次正式請求皆completed，無length恢復；Writer與修訂共44次length及27次有界增額，17個終態model-format目標各在增額後再次length。主要拒絕事件為結構325、名稱未定義103、執行失敗134、重複候選132及Fixer class-wrapper48；這些是事件次數，不是互斥目標數。現有Mock消費形狀／來源呼叫契約並非不存在，候選仍有DB參數、cursor／row形狀及UI物件使用錯誤，不以AST推測當斷言答案。
+- 下一階段先修Trace全域`parameter:null`診斷與TypeScript契約衝突（三個版本的`vehicle_card`皆出現），保留typed失敗而不轉legacy載入錯誤；其次核對Writer實際收到的DB／UI setup與修訂契約，再處理輸出範圍、重複方法與Fixer既有／新增import計數。另有20秒突變stage在末案分配小於成功baseline的證據，應於新執行提高時間並保留partial／timeout，不借此調整killed或分母。這些仍是改進目標，本次期限修補未宣稱已完成。
+- 最終普通Windows驗證：完整Node 1,311／1,311通過（約32分52秒，0 skipped），完整Python 707項無失敗（3 skipped），TypeScript、lint、生產建置、Webview語法、追蹤檔／可達歷史密鑰掃描與差異檢查通過。Writer直接相關四組24／24、Reviewer及角色整合單檔也先獨立通過，再以最終同一份production與fixture重跑全套Node；原八個WIP位元組保留且不納入提交。Python程式未變，707項結果不借用為真模型品質；遠端CI與實驗室70B未執行。
+
+### Analyst 輸出上限恢復與容量診斷
+
+- 檢查使用者回報的預設1,024-token中止：現行程式初始 Analyst 明確設定 `num_predict=1024`，原長度恢復只有Writer；自動 `num_ctx=0` 與此输出限制為不同設定。未取得該次70B角色事件，不能把已找到的預算缺口說成該次實驗的確定根因。
+- Local Analyst 明確 length 後可增加輸出額度，至多重送一次相同完整提示；Analyst／Writer使用獨立本目標額度，完整輸入與wire 輸出成對，保留模型可信上限、增容角色重驗與原shared／stage／target期限及計數。未知耗時需足夠完整單次額度，時間／容量不足或再次截斷保存原因停止，不把前綴當可用計畫。
+- 中英文錯誤訊息顯示合法 `num_predict` cap並分開Context上限；未知值不猜測，provider回覆仍不持久保存。
+- 新增固定回覆整合回歸四種情境：1,024→2,048恢復後真正執行Python、Reviewer及builtin突變100%；再次length、缺少耗時、原期限過期均阻擋，不保存前綴或進入Writer。這是工具與流程驗證，不代表Codellama70B或車輛整批通過；完整相關驗證與真模型結果接續記錄。
+- 最終10檔直接相關Node回歸70／70通過（約65秒），含Analyst四情境與既有Writer六情境的真實隔離執行／審查／builtin突變。舊Writer固定回覆fixture改按當前精確觀測生成一方法一呼叫，保留原完整提示、容量增長、同hash批准、100%突變及計數斷言。TypeScript、lint、生產建置、Webview語法、追蹤檔與可達歷史密鑰掃描、差異檢查通過；全套Node／Python／遠端CI與實驗室70B未執行。原八個工作區WIP位元組保持不變、排除本次提交。車輛真模型整批另在獨立結果目錄執行，不以此回歸宣稱整批通過。
+
+## 2026-10-14
+
+### BMI 品質任務、增量合併、例外審查與方法統計
+
+- 分析 `bmi_2026_10_14_17_41` 的「只有一個測試」：第一輪種子刻意最小化，但後續任務未綁定實測輸入、Writer 重寫基線與 Reviewer 無依據例外建議，使新增候選遭拒。新增生成／新增／拒絕／保留方法盤點，報告不再把初始種子或重複失敗當成完整測資。
+- `quality-task-v4` 以同 run／source／target／focus 的完整受控返回觀測綁定 scenario ID；不同輸入、型別、建構或不完整／變異／衝突觀測不借證據。Writer 只收精確輸入與實測結果，模型 expected 或例外文字仍為假說。空任務、無效契約或暫停可回到相同觀測的 Writer 補測，不造 Analyst 批准。只從下輪實驗候選中排除已證明相同的通過 literal 輸入，存活突變及分母不變。
+- 比較邊界探測增加 below／at／above 輸入族，直接 round 精度只用於探測間隔，沒有 source expression 或模型假設當成答案。新輸入都經真正 worker 執行再交 Writer；零身高的真正例外不當成 expected-zero 返回。
+- Writer 擴充只寫新增內容，Host 用 `writer-addition-v1` AST 合併，保留已執行基線完整原文。支援完整 class、單一可綁定裸方法及可證明外框；改寫既有方法、fixture、import 衝突及多份含糊候選 typed 拒絕。Tier 分區與修訂共用入口；新完整候選仍須獨立執行、審查與同雜湊批准才突變。
+- Reviewer return→exception 修改須精確輸入、具體例外及依據；同候選／同輸入的實跑 returned 觀測矛盾交一次契約重審，不刪 finding 自動批准。review-v7 與角色資格 v8 不變。未抽取為 Python 的回覆另列固定格式診斷，不推測缺 import。
+- 真實本機 3B 初輪另抓到種子塞九組猜測值與首案算術錯誤。`writerSeedContract.ts` 在完整單一受控案例存在時，給明確實跑 case facts 並核對一個方法、一個可定位呼叫及精確輸入；未知 Mock／動態呼叫仍走原執行與審查。輸入核對不批准 expected，也不由工具寫測試。
+- 後續兩次真實3B驗收達到種子／Reviewer／外部Mutatest，但仍為8／10行、26／39突變；Writer交換參數、只取家族第一案，且20次logical預算在第三輪後耗盡。據此在system層覆寫全面suite範圍，末尾列精確targetCall及每案結果；literal family缺案、有觀測卻no-op均走原有界Writer修訂。五輪開始前預留44次logical／88次transport／440,000 estimated tokens／20候選，上限64／128／640,000／40；顯式預算及10分鐘deadline保持，途中不重設。真實失敗保留原目錄，不改標通過。
+- 同步頂層函式以逐案 Writer 子任務補齊完整已觀測輸入族；每案一個新增方法、一個精確呼叫，最多兩次契約補正。家族期限按 focus／baseline hash 固定，外層修訂及 Tier 回退不續期；草稿全數完成才交完整執行、審查及突變。class／async／未知呼叫仍走既有流程，沒有工具代寫 assertion。
+- 真實3B後續達到9／10行、33／39突變，但仍把舊輸入帶入新案例。修正單案 core 重新附回全域 Boundary／Numeric 觀測的接線；以完整 typed call／result 重新解析合併後的真實 Trace ID，避免潛在原 worker ID 碰撞。第9輪的實際 ID 沒有碰撞，不能把這項潛在缺陷當成該輪已證根因。
+- `writer-addition-context-v1` 對簡單 unittest 基線只向逐案 Writer 提供 AST imports／class setup、完整基線雜湊及方法清單，Host 仍保存完整原文，不重送舊測試 body。fixture／helper／全域狀態／裝飾器與未知結構回完整提示；真正工具或契約失敗停止。setup 投影不是可執行候選或批准，完整來源與當前觀測不截斷。
+- 接線審查另外修正已有品質候選的 Writer 修訂誤走初次逐案生成：現在保留具體執行錯誤、Reviewer finding 與原候選，不把新鮮 case prompt 取代失敗回饋，亦不把未審可執行草稿變成不可修改的補測基線。passing 保護與重新執行／審查／同版批准不放寬。
+- 修訂提示的 baseline／draft 去重只接收完全相同的獨立 Python fence；原種子只是較大未批准草稿的 prefix 時仍完整另列，避免把原基線與待修新增方法混為一份。此分支以 Reviewer finding 整合回歸驗證，不把無修訂的真模型成功當成該分支實測。
+- 最新真實本機 `qwen2.5-coder:3b-instruct` BMI 驗收完整通過：同 `bmi_2026_10_14_17_41` 來源 SHA-256，三輪保留7個測試，行覆蓋10／10、Mutatest39／39 KILLED；每輪 available／selected／executed均39，無timeout／error／未執行，未減少分母。三輪執行、Reviewer及突變使用相同候選雜湊，6次逐案提示的輸入／結果逐型別逐值相符。完整流程約170秒，含公開資格約178秒；15次正式角色、2次目標內增容資格及3次執行前公開資格共20次生成請求，容量8192→9216並重驗角色。完成時來源／編譯快照未變、設定及SecretStorage寫入0、租約回收。Codellama13B、其他專案整批與GitHub CI仍待驗收。
+- BMI 固定角色回覆整合以真正 Python／coverage／Mutatest 執行，六項案例通過；成功案例保留八個方法，行覆蓋10／10、Mutatest39／39 KILLED，完整候選全集、無timeout／error／未執行，逐輪同候選批准。負例證明修改已通過種子在執行、審查及第二次突變前拒絕；新 Reviewer finding 情境證明單次完整 Writer 修訂保留原基線及具體回饋、重新執行與同版批准。這是流程回歸，不能代替真實模型或實驗室13B驗收。
+- 直接相關 Python83／83、Node去重146／146通過：方法／證據／角色／預算／報告基本126項，最後Writer提示10項取代其中8項，另加9項具體審查、3項輸出修訂及6項BMI整合。正常Windows重新驗證沙箱Temp rename EPERM及Trace受限情境，不改產品門檻；舊plain-substring去重fixture改為完整獨立fence，新反例仍要求保留整份基線。完整Python入口首輪696案例含3略過，唯一密鑰掃描假陽性診斷字樣已改名並用相關suite重驗；完整Node首輪的舊fixture失敗分別修正驗證，未宣稱本次有全套乾淨通過。型別／lint／生產建置／Webview及差異檢查通過，提交前另掃新追蹤檔與可達歷史；完整矩陣留待里程碑。
+
+### 同步容量快照、具體審查證據、受限輸出恢復與 Mock 修訂
+
+- 分析10/14 BMI及車輛結果：兩批正式完成請求皆HTTP200，主要問題為metadata上限未知、泛用／矛盾Reviewer意見及錯誤Mock；BMI修訂以1,536 tokens長度中止，車輛只處理7／212後取消，不能當成整批失敗或API超時。環境與Analyst已完成，不重做既有初始化。
+- 新增 `localRuntimeMetadata.ts`，UI及每次執行開始共用同端點／模型show／ps資料，HTTP及body共用期限、支援取消，只保存固定診斷與數字。取得執行所有權後、任何目標前一次補齊本次snapshot；同身分合法舊上限明示cached，無資料明示unavailable，不借其它模型，不授角色資格，不寫回模型profile或手動／captured偏好。
+- Reviewer維持review-v7，純指令回聲及沒有具體問題的泛用verify建議交原有限契約重審；同候選AST增加完整assertion及直接stdlib with-patch語法，只反駁完整重複修改提議。不同方法、literal空白、patch配置及未知callback／業務語意保持審查；不能刪finding冒充批准。Python事實入口明確讀UTF-8，中文案例不受Windowsconsole編碼影響。
+- Writer長度恢復不再被未知上限整個關閉：同已核對num_ctx內可增加輸出，需要增容才依可信上限重驗角色。對同完整提示採max(估量, prompt_eval_count)，保留輸入及128 tokens餘裕；以當次數值耗時、容量及原階段餘額選輸出cap。探針與正式請求各建一次單次期限，stage／shared／target期限首問前固定；探針後、真正重送前再核對時間，未知耗時需完整單次額度。截斷內容不保存或執行，不重設計數或偏好。
+- Mock來源形狀補安全單一comprehension的iterable及常數索引，明確提示真正 `receiver.method.return_value` 與每筆所需位置，不製造expected、資料或例外。重綁／filter／動態索引等未知情境不猜。可選屬性、真正module.__file__、path constructor輸入與來源global轉換指引保持來源綁定；非static的self／cls不當protocol替身。唯一實測mock初始化ERROR須標準堆疊及失敗測試patch行一致才交Writer，目標內部錯誤不誤分流。
+- 相關Node回歸去重238／238通過；正式Python入口671案例，668通過、3略過。TypeScript、lint、生產建置、Webview語法及差異格式通過，提交前另掃描新追蹤檔與可達歷史密鑰。首輪Node199／203，修正舊角色預算、探索計數及UI文案假設；Reviewer整合原30秒只能量88／96突變候選，改測試至現行60秒後保留全部原門檻重驗通過。初次Python手動選錯兩個不存在suite，改用正式完整入口完成。沙箱Temp native path EPERM不放寬產品，正常Windows環境重驗。
+- 真實本機Qwen3B四目標新快照：1／4完整通過，`_now_text`行1／1、builtin突變3／3且同候選批准；`_connect`8192→9216→10240增容及新容量資格成功，仍有DB_NAME字串／DB_PATH斷言與修復無變更；get_app_dir仍漏import，_table_columns仍有錯誤Mock資料列及修復失敗。四目標正式23筆、容量重驗4筆均完成，公開資格另列；來源、相依及compiled快照不變，SecretStorage／設定寫入0，租約回收。
+- 另以與實驗室同hash的BMI來源真實Qwen3B實測，執行、算術修復及Reviewer完成，已進builtin；20秒僅量64／96候選，32未執行、2timeout，分數保持null，覆蓋5／10仍需補測。沒有API超時或length；不能宣稱BMI品質通過。此實測使用builtin，不代替Codellama13B／Mutatest或212目標验收；既有UI／NLS／requirements等未提交修改保留且不混入提交。未重跑完整Node或GitHub CI矩陣。
+
+### 命名 Checker 執行校驗階段
+
+- 將執行 Writer 測試、以 unittest 斷言比對實際結果與預期答案的工具階段命名為 Checker，正式實作仍是 `generated_test_runner.py`。角色、架構、Python 工具與專案規則同步說明：Writer／Reviewer 是 LLM 任務，Checker 不呼叫模型；Validation 是包含預檢與執行的工具驗證總稱。
+- 核對實際 runner 與 Reviewer 提示分工，檢查文件差異與格式。此次僅命名及文件說明，未修改執行邏輯、角色契約或驗證門檻，未執行程式回歸測試。Checker 通過只表示案例符合測試內預期，不能代替獨立需求審查。
+
+## 2026-10-13
+
+### 車輛候選載入、Writer 外框與提示、Reviewer 事實及輸出恢復
+
+- 對照兩批 Codellama13B：10/12 13:57 的212目標為2完整通過、194 failed、6 retained、7 review-blocked、3零突變候選；10/13 10:55 使用者中止時只處理66／212，60 failed、3 retained、2零候選、1 cancelled，0完整通過。兩批環境均未受阻，Analyst209／209及65／65完成；均真正量測Mutatest5次，零候選仍為null。主要瓶頸是Writer錯誤／重複候選與較慢的完整生成，不再泛稱初始化或Analyst失敗。
+- runner純unittest `_FailedTest`保留真正匯入失敗，避免被 `Target invocation test identity mismatch` 遮蔽。新診斷由result／invocation雙產物、現行source／test byte hash、native path、target、run ID及profile核驗；只授Writer整份修訂，真正identity／runner錯誤、失敗證據與成功exit矛盾typed停止、不降Tier。execution／full均接線，資源schema診斷優先；成功仍須原執行與隔離證據。
+- Writer正式提示改為中性文字設計指引，不再傳可抄用的 `example_target` 完整測試與範例答案，原catalog保留內部回歸。程式抽取先處理均一外框，保留literal與尾端程式；字串內marker／fence不當wrapper，多份候選不猜第一份。移除主流程再次trim／全域marker刪除／main後截尾。
+- target行為AST支援方法詞法範圍內的明確import，遮蔽／重綁／條件／其他方法不外洩。窄版input-state只接納來源唯一函式直接寫入參數屬性、fresh明確stdlib `SimpleNamespace`、同物件真呼叫後的狀態斷言；Mock／未知helper／覆寫／錯物件／未呼叫／分支強反例保持拒絕。錯誤expected靜態可相關、實跑仍失敗，不產生oracle。
+- Reviewer同候選AST新增inherited unittest assertion語法，反證「import等於無target的patch」、「target import須是unittest module」及「合法assertion無效」等完整機械指控；未知語意、override、rebind與實際patch仍審。只要求原deadline內一次重審，不刪finding自動批准。狀態斷言說明保持Reviewer提示小於3,000字元。
+- Local Writer／修訂在首問前預留最多兩次單次額度，每次仍受使用者設定、shared／target期限與原計數限制。length加長重送只用當次完整數值Ollama timing估算；時間不足記available／estimated／原因而不啟動注定超時請求，未知時要求完整單次額度。截斷前綴不保存／執行，不重設期限，不改已保存容量。
+- 有序instance品質工具對canonical頂層函式直接回不適用、不spawn；一般數值mutation probes仍支持頂層。空觀測報unsupported／unavailable／duplicate／真正預算不足的原因，不再一律稱提示超額。
+- 定向回歸Node186／186、Python146／146通過；初次整合捕獲新Python測試根目錄import與舊prompt長度假設，修正後重驗相應suite。TypeScript、lint、生產建置、Webview語法與diff格式通過。新測試列入正式Python入口；提交前掃描新追蹤檔與可達歷史密鑰。依可執行版本優先政策未重跑全庫／CI矩陣，不宣稱CI或212目標通過。
+- 真實本機Qwen3B車輛三目標兩輪分別2／3及1／3完整通過：首輪 `_connect` 行1／1、builtin突變1／1，`_now_text` 行1／1、builtin突變3／3；最終快照第二輪只有 `_now_text` 同樣完整通過。`get_app_dir`仍漏sys／target import並重複候選；第二輪 `_connect`把實際字串參數斷言成WindowsPath，Fixer class-wrapper被拒、Writer回傳相同候選，未審查或突變，沒有API超時。各輪來源／相依／編譯快照不變，無設定寫入或SecretStorage存取。這是builtin、本機3B實測，不替代實驗室Codellama13B／Mutatest驗收；成功輪不能證明穩定。
+- 完整根因、修訂範圍及下一批驗收見 [車輛批次分析與修復](docs/車輛批次分析與修復_2026_10_13.md)。既有未提交UI／NLS／requirements等修改保留，未混入本次提交。
+
+## 2026-10-12
+
+### 跨專案 P0／P1、Tier 分流與來源測資
+
+- 批次改為依最後真正的隔離匯入結果分流。相同根、來源閉包、目標集合、Python 與 fixture 身分核對後，loaded 來源繼續；受阻、未檢及診斷不完整目標單列 environment-blocked，不呼叫模型、不計通過。取消／拒絕與身分漂移仍停止，沒有循環批准。最後安全預檢 JSON／Markdown 存入本批次，不依賴外部 import_check 目錄；partial 與整批通過分開。
+- Tier 降級只接受耗盡的候選／修復契約失敗。模型／環境／AST與修訂工具／預算／Reviewer失敗不再混成生成問題；工具故障不重問 Writer。缺少可用 Bug Fixer 時交 Writer 修訂，保留原成功情境。已證明的測試名稱未匯入／遮蔽先給具體 Writer 原因，不再被泛用「沒有目標斷言」訊息掩蓋。
+- Mock 的 provider member／使用點等價只在完整來源 AST、唯一目標、同一且未重綁的 module import 成立時接受。from-import、目標／class patch、替換模組與反射反例不借此通過。scaffold 只建已知 I/O 邊界，未知匯入與純計算保留 unknown；取消未核實 Trace repr 的 `Real return`，未填骨架不得執行。
+- Writer v2 把完整 globals／class／property setup 放為來源片段，保留 imports 的 AST性質與每個身分；同文只引用一次。可斷言觀測與完整不可斷言診斷分開。新增 `source-setup-call-contract-v1`：來源摘要綁定的 AST 正規化呼叫拼字、可選屬性、參數 scope 與來源 `__file__`，具體提示缺少屬性的 `create=True` 及真正 module-global binding；不計算expected、不授patch權限，未知／遮蔽／重綁／超限不發具體指引。
+- 整合既有未提交的 type-shape／input-plan 工作：有界scalar、容器、Union／Literal 與來源條件規劃，不 import／eval 型別或猜自訂物件。新增 `probeInputFile` 與 literal builder，提供來源檔／qualified target／SHA-256 綁定的型別化四組呼叫與建構輸入；32案例、64KiB，沒有 expected或可執行碼。過期、逃逸、junction、型別損失及解碼後credential拒絕；不偷偷回退。自動規劃中相同可重播呼叫去重但保留所有來源位置，未知狀態／使用者fixture／型別／kwargs順序／建構子不合併。
+- Trace 新執行預設總60秒／planning15秒／每案例5秒，可配置總最多300秒、單案例最多30秒，仍受原target deadline與cleanup限制；這是Python載入／執行時間。完整workflow與failure報告分開顯示設定、實際宿主分配、planning與case耗時及固定原因碼，未知不補0，不借後輪到逐輪；final維持精簡。
+- Reviewer 獨立核對每案例input／expected及來源或實測依據。拒絕 assessment 的行號／引用／reason／action保留為有界去密診斷，與有效finding／正式批准分開；不保存完整provider回覆，不刪矛盾finding冒充同意。review-v7／資格v8與實跑、同雜湊批准、80%突變門檻不變。
+- 真實本機Qwen3B兩輪三目標均為1／3：`_now_text` 審查完成、行覆蓋1／1、builtin-ast-v2突變3／3 KILLED；`get_app_dir` 與 `_connect` 仍有缺target import、test-side path運算／可選屬性Mock，以及Path對str參數斷言與重複候選。第二輪來源事實卡版本150.247秒，正式15次與增容資格4次請求完成，另fresh公開資格3次，沒有API超時；來源、相依、編譯副本與設定保持不變。新增事實卡不能保證小模型遵循；最後名稱診斷順序修正另由回歸驗證。不能宣稱車輛整批或所有Python專案已通過，Codellama13B仍待實驗室相同範圍重測。
+
+- 最終統一定向回歸：Node 174／174 通過，Python 230項執行、229通過及1項Windows不適用symlink案例跳過（Windows junction另由Node真測）。涵蓋真Python、角色／批次整合、source fixtures、coverage、builtin突變與八類型別樣本；固定模型回覆不代替真LLM驗收。TypeScript、lint、生產建置、Webview語法與差異格式檢查通過；提交前另掃描新追蹤檔及可達歷史秘密。CI與全庫矩陣依可執行版本優先政策未重跑，不宣稱CI通過。
+
+### 車輛增容政策、批次資格重用、Writer 恢復與 Mutatest 索引適配
+
+- 五批實驗室結果分流：`all_test_03_55` 與 `vehicle_04_00` 停在不同根的初始化；`import_check_20-01` 最後仍有 WebSpider notifier 網路初始化阻擋，`import_check_20-04` 的內層車輛根7模組全載入。`vehicle_04_04` 的212目標全結束但0完整通過；不能把模組 ready、批次 completed 或保存基線當通過。
+- 04_04 的86次增容都取得 Writer verified、Reviewer unverified；初始手動 Tier 2 允許嘗試，增容卻對所有角色硬套 verified Reviewer，造成決策不一致。修正為 Auto/full 保持新 Writer／Reviewer verified，手動 Tier 只依當次角色與原嘗試政策；正式候選的同雜湊審查、工具執行與品質門檻不變。
+- `RuntimeQualificationSession`／`batchRuntimeQualification.ts` 在同 execution 重用同端點、模型、容量、資格版本、Python、來源集合與 fixture 的完整資格判定，下一目標可沿用本批次容量，不寫回偏好、不跨批次。来源、已載入相依或 Python／venv 設定漂移清除；新的成功預檢也不能覆寫舊相依摘要、復活過期資格。timeout／取消／環境不可用不快取為模型能力失敗。資格請求納入批次總數，分列 formal／qualification／transport。
+- Reviewer 公開資格探針使用正式 `review-v7` schema／`review-json`，資格版本升為 `python-unittest-v8`；診斷只保存固定原因及結構統計。真隔離探針分開 passed／failed／unavailable，最多30秒且共用原期限。錯誤的既有 unittest harness 指控只有在同候選 AST 與真執行足以反證時才要求一次重審，不刪 finding 冒充批准。
+- 04_04 的38筆 Writer 長度中止不是 API timeout。Local Writer／完整修訂只學習當次確切輸出 cap，最多重送同完整提示一次；output reserve／wire 成對，必要時依已核實上限增容，原 deadline／target counters 不重置，截斷前綴不保存或執行。
+- Trace 預檢成功耗時由宿主量測，預先分配 planning／第一次案例重載及 cleanup，上限60秒且受原目標剩餘限制；未知保持原5／12／20秒，重試不續期限。現代 Python 整數 subscript 由 Mutatest 原生 Index 算子產生，版本 `mutatest-ast-3.1.0-v2`；算術及索引自檢皆通過才允許執行，歷史v1仍可讀，零候選仍不是100%。
+- 真實本機 Qwen 3B 初輪三目標：正式HTTP28／28、增容資格4／4完成，沒有timeout／length；初始公開資格另外3次。`_now_text` 真增容8,192→10,240→11,264，新容量 Writer／Reviewer皆verified，執行、正式審查及兩次builtin突變均完成；保留候選行覆蓋100%、突變1／3（33.33%），低於80%。get_app_dir仍有Mock／Path遮蔽與重複候選；_connect仍有connect參數斷言／修復包裝與重複。初輪0／3完整達標，來源、相依、設定及SecretStorage不變、owned資源回收；不沿用上次1／3，也不代表實驗室13B或212目標驗收。
+- `_now_text` 的兩個格式字串突變存活，原因是測試把整個 `Mock.strftime` 回傳固定為日期字串。依AST證明的 clock receiver chain 加入具體 datetime/date fixture 指引，保留真正 formatter 執行；不 patch 不可變成員或目標。中性真builtin回歸比較同一來源，固定formatter Mock時兩筆string mutants存活，具體datetime fixture時三筆皆被實際測試殺死。此證據不等於應用整批已通過。
+- 最終 formatter 版本另建新目錄 WyiE0n，真實 Qwen 3B／8,192／full Tier 2 單目標 `_now_text` 完整通過：行覆蓋1／1、builtin突變3／3 KILLED，第一候選執行、Reviewer、突變即完成；正式3／3 HTTP200，沒有超時、補正或拒絕候選。目標流程38.864秒；包含fresh公開資格及等待總102.484秒。保留候選使用真datetime，沒有Mock formatter固定回傳；6份測試及5份來源摘要與正式批准核驗一致，來源／相依／編譯副本不變，SecretStorage及設定寫入0、暫存已回收。這是最終版單項1／1，不改寫前述初輪0／3；get_app_dir、_connect及實驗室Codellama13B／212目標尚未重新驗收。
+- 待提交獨立副本主要定向Node回歸137／137；最後新增相依重載漂移及formatter實測後，受影響5檔41／41通過（含新增2案例、測試連線12案例；主要去重總151）。相關Python五suite58／58；TypeScript、lint、生產建置、Webview語法、秘密與可達歷史掃描、差異格式檢查通過。測試連線fixture改為核對正式review-json schema／完整wire，保留原容量及資格斷言。原17檔未提交修改保留並排除於本次提交。依可執行版本優先政策未跑全套Python／CI，固定回覆回歸不代替真模型驗收。
+
+### Analyst 獨立短計畫、補正額度與耗時證據
+
+- 最終提交副本 E 相關回歸26檔213／213通過（約158.3秒），含完整來源增容、新容量公開角色探針、Reviewer資格失敗禁止沿用舊資格、同候選審查與真實builtin突變100%、原deadline及wire預算、短計畫、長修訂、分區保留及Cloud schema傳輸投影。首輪212／213的唯一失敗是新增Custom回歸仍期待Google保留不支援的schema鍵，改為核对支援限制與共用schema未被修改後全過；Cloud／Custom另定向24／24通過。TypeScript、lint、生產建置、Webview語法、密鑰與可達歷史掃描、差異檢查通過。依使用者可執行版本優先指示，本次不重跑全套Python或CI。
+- 修復後 exact staged D 真實 Qwen3B／8192／full／Tier2／builtin 小批次177.3秒，18／18API完成、3／3Analyst初次解析成功，沒有API超時、提示超額或環境阻擋。`_now_text` 完成同候選執行、Reviewer及builtin-ast-v2突變，行覆蓋1／1、突變3／3 KILLED；同版來源、測試及批准雜湊已核對。`get_app_dir`仍有Path局部遮蔽／Mock斷言與重複候選，`_connect`仍有未定義helper及Mock參數斷言；本輪1／3完整通過，另外兩筆無突變分數。修訂6038～6321 tokens皆真正送出，原阻擋已解除。真實批次所有提示已fit，沒有觸發增容；增容與資格失敗停止由上述固定回覆整合回歸驗證。來源、相依、設定、SecretStorage及原資料庫不改寫，owned暫存資源核對回收；此結果不代替實驗室13B或212目標驗收。
+- 依使用者確認，超额可動態提高本次 Ollama `num_ctx`：以完整提示、補正及實際輸出預留規劃足量容量，加128 tokens餘裕、向上對齊1024，不超過同端點／模型已核實上限、不改已儲存選擇。新容量重跑公開固定 Writer／Reviewer與必要Fixer資格，真正隔離執行且不沿用舊容量認證；資格失敗或到頂仍超額保持受阻。Reviewer亦經共用最終gate，不被舊容量提前擋下。資格、正式請求與回退共用原deadline及target計數；事件、日誌及失敗報告記錄容量與耗時。
+- 修訂預算修復後的 exact staged C 真實Qwen3B／8192三目標實跑169.8秒，15／15API完成、3／3Analyst初次解析成功；`_connect`四次修訂已送出但未定義helper重複，`get_app_dir`有測試側Path遮蔽與斷言問題，`_now_text`必要Writer提示6792超6656、尚未送出，本輪0／3通過且無突變。觀測皆有完整診斷；時鐘值與一次Trace timeout使必要提示增大，不刪除案例、不把環境值當oracle。針對提示超額精簡small Writer與seed重複建構指令，保留全部來源、setup、資源、規則及觀測。
+
+- Analyst 不再由 Writer 的純 Python 生成資格決定輸出格式；Local 使用共用短 JSON schema，Cloud 共用 schema，Custom 保留 JSON mode。必要策略只規劃一個起始情境，最多兩個參數提示、三個規則；相依／不可達／Mock 摘要改為有界可選欄位。完整來源、setup、觀測與具體策略 gate 保留，舊計畫仍可讀取。角色契約記為 `semantic-plan-v3`，正規化證據仍為 `semantic-plan-v2`。
+- Cloud 的 OpenAPI `responseSchema` 不直接帶新共用 JSON Schema 的 `additionalProperties`：依[官方 Schema 欄位](https://ai.google.dev/api/generate-content#Schema)建立獨立傳輸投影，只移除各 schema 節點的此鍵，保留合法同名資料欄位、完整長度／數量／required限制、來源schema與本地gate，避免此不相容鍵造成不必要的文字回退。本次只驗證請求包裝，未用SecretStorage金鑰呼叫真實雲端，不將此問題當成已證實的Gemma HTTP500原因。
+- Local Analyst 的輸出保留量最多 1,024 tokens，不超過原保留量，輸入額度與 wire `num_predict` 同步。無效分析只交角色契約補正一次，不再增加隱藏文字重問；服務明確拒絕格式時仍可移除格式參數，提示文字及單次期限保持相同。輸出長度中止仍拒絕。
+- 分析開始時預先分配兩次單次請求額度，例如60秒設定為階段最多120秒、每次最多60秒，仍受原目標期限限制。HTTP 重試、格式／思考量回退與排隊不取得新額度；傳輸超時、取消、預算或來源失敗不觸發格式補問。
+- `model-request-timing-v1` 分開保存排隊、各次 HTTP、回覆讀取與 Ollama 載入／提示處理／生成及 token 數，未知值保留 null；日誌、逐輪及失敗報告顯示安全數字。HTTP 等待可能包含服務推論，不推定 GPU 或網路延遲。HTTP 200 非 JSON 回覆另記 `response-error`／`model-format`，不誤報網路錯誤，不保存完整 provider 回覆。
+- 真實 `_connect` 的 6,125-token 修訂提示比原 5,734 額度多 391，560 字元候選僅 160 tokens；不是必要來源重複或模型容量不足。local/full Writer 修訂依顯式完整候選採 `max(1536, ceil(估量 × 1.25) + 256)`，只在低於原預留時調整輸入／wire；本例可用 6,656 並保留全部證據。大候選、未知、execution及遠端不變。結構／Trace修訂正確標為 writer-revision，不當新seed；分區基線保持完整。後續擴充的結構／Trace重試沿用原輸出預留，避免只按短的無效片段縮限、容不下提示要求保存的完整基線。長度中止仍拒絕。
+- 修訂預算改動前，真實本機 Qwen 3B／8,192 context／full／Tier 2／builtin 三目標實跑約 128.7 秒，12／12 API 完成、3／3 Analyst 初次解析成功，沒有 API 超時或 Analyst 提示／格式阻擋。`_now_text` 通過執行、同候選 Reviewer 及 builtin-ast-v2 突變，行覆蓋 1／1、突變 3／3 KILLED。`get_app_dir` 仍有名稱綁定／斷言與重複候選，`_connect` 首次實跑失敗後修訂提示超額；兩筆沒有突變分數，不能把三目標宣稱全通。來源、依賴與隔離資源已核對，本次未修改原車輛程式或歷史結果。
+- Codellama 13B 位於實驗室 RDP；本機沒有該模型或可連線端點。上述真實小模型及固定回覆整合回歸不代替13B／212目標驗收；提交後須在實驗室依相同來源及full小批次重測，不因失敗換模型或放寬驗證 gate。
+
+### 結果刪除捷徑與車輛三批分析
+
+- 覆蓋率儀表板在「全選」旁新增「刪除所選」，保留底部按鈕；兩者共用同一處理程序，只移除勾選的頁內結果、重設全選並刷新，不刪除磁碟報告。沿用中英文文案，控制列允許窄側欄換行。
+- `vehicle_manageme_2026_10_12_01_00` 為 Codellama 13B、8,192 context 的已取消批次：212 目標中 7 timeout、3 Analyst 格式失敗、1 Writer 結構失敗、1 取消、200 未開始。`_table_columns` 的兩次 Tier 2 回覆使用缺少例外證據的泛用 `assertRaises(Exception)`；兩次 Tier 1 回覆替換受測目標，皆正確拒絕。沒有完成候選執行、Reviewer 或突變量測。
+- `01_13` 在確認來源／目標前約 2.4 秒取消，預期目標為 0，不能當作模型或生成失敗。`01_14` 為 2 Analyst 格式失敗、1 Writer 取消、209 未開始；`_now_text` 的 Writer 提示 6,130／6,656 已送出，約 14.2 秒後取消，沒有回覆，不能指稱 1,536 輸出 cap 截斷。
+- 本次結果環境均未顯示受阻；瓶頸轉為 Analyst 格式、60 秒共用分析與格式補正期限，以及 Writer 的目標 Mock／例外證據。現行 `selectAnalysisResponseFormat` 由 Writer 的純 Python 探針推定 Analyst 使用一般文字，仍要求合法 JSON，角色能力推論需獨立核驗；本次只完成介面改動與根因分析，尚未修訂 Analyst 傳輸、時限或驗證 gate。
+- 驗證：中英文介面及實際 Webview 腳本定向回歸 14／14、TypeScript、lint、生產建置、Webview 語法及差異檢查通過；保存的實驗室報告未修改，未重跑完整 Python／CI／真實模型整批。
+
+### 車輛批次 Writer 預算與可選屬性 Mock 修復
+
+- `vehicle_manageme_2026_10_11_23_44` 已採 8,192 context，11 次模型請求全部完成；212 目標中 3 失敗、1 取消、208 未開始，沒有完成 Reviewer／突變量測。`_connect`、`_now_text` 的 Analyst 已完成，Writer 的完整提示仍為 6,907／6,714，超過固定 5,734 輸入預算；不是這兩筆模型請求超時，因為 Writer 尚未發送。
+- Writer 群組完全相同的呼叫站輸入／setup，但保留每個來源位置、型別化輸入及 unknown／diagnostic。資源提示只引用完全相同的完整表格 schema，保留各資源身分、來源、自己的 rows／rowsStatus 及全部約束；批准計畫、執行租約、來源與隔離 gate 不改，不將共享 schema 當共用資料庫或 oracle。
+- local full 初次 Writer seed 的輸出保留量上限改為 1,536 tokens，小容量不高於原三成保留量；相同 `num_ctx` 減保留量作輸入額度，wire 同步使用 `num_predict`。只適用一次單測試種子生成，其他角色、擴充及修訂沿用原政策。使用者手動容量不變；長度中止不得當完整候選，真正超額仍停止且不截必要證據。
+- `get_app_dir` 的候選通過結構後在可選屬性 patch 失敗；另有使用測試檔 `__file__`、直接路徑 I/O 求 expected、缺 import、修復格式拒絕與重複候選。新增來源支持的可選 `getattr`／`create=True`、owner 還原與來源位置 Mock 指引，Writer／修訂／Bug Fixer 共用；不允許 patch 目標或 class，不把來源或未受控時鐘回傳值當 oracle。
+- 驗證：隔離提交版本 14 個相關測試檔，最終 73／73 通過（約 74 秒），包含真實 guarded Python、formal wire／快照與截斷拒絕、英文及小容量 gate。首輪 72／73，發現新增指引讓純格式函式提示變大；限定相關來源才附指引、只在群組時附圖例後，保留原容量斷言重驗全過。兩筆原失敗提示完整重播由 6,907／6,714 降至 5,827／6,130，均低於 6,656；原始證據未改。TypeScript、lint、生產建置、Webview 語法、秘密與可達歷史掃描、差異檢查通過。原實驗室結果不改寫；提示能發送及固定回覆回歸不代表 Codellama 13B 或 212 目標完整通過。依使用者優先可執行版本的指示，未跑全套 Python 或等待 CI。
+
+## 2026-10-11
+
+### 自動容量改用已核實模型上限的一半
+
+- 車輛批次 `vehicle_manageme_2026_10_11_23_12` 的 5 個失敗目標均在 Analyst 請求前因提示預算受阻；模型請求 0 次，另 1 個取消、206 個未開始。當時自動保存 4,096、輸入預算 2,867，已知提示估量 3,763～4,860 且另預留補正 94。模組預檢皆通過，不能把這批失敗當成 Codellama 13B 生成能力不足。
+- 依使用者決定，自動容量採已核實模型上限的一半，16,384 因而選 8,192，輸入預算為 5,734；舊自動保存值及舊資格容量不再將已知上限的自動模式固定在 4,096。明確設定及真正手動保存值仍優先，未知上限保留原回退。自動刷新檢查目前偏好，不覆蓋並發手動選擇；保存 0 恢復自動模式，執行中的批次仍使用啟動快照。
+- 測試連線原本已有送 `options.num_ctx`；本次補驗三個角色探針都使用相同的新選擇，生成與提示預算也共用此 resolver。容量改變後原角色資格失效，須重新驗證；請求選擇與實際觀測分配仍分開呈現，不將模型上限或自動值冒稱為 GPU 已分配容量。
+- 驗證：隔離提交版本的定向容量／真實探針請求包裝／偏好遷移／本地化回歸 71／71 通過（約 6 秒），TypeScript、lint、生產建置、Webview 語法與差異檢查通過。首輪唯一錯誤為測試把有效 PS allocation 同時當成 Modelfile 預設欄位；修正該斷言後，原三角色 wire、手動值與隔離資格斷言完整保留。不跑全套 Python 或 CI；解除已知五筆 Analyst 預算阻擋不代表後續角色、212 目標或實驗室 13B 已完整通過。
+
+### 保存使用者 Ollama 容量與精簡完整角色提示
+
+- 取消依模型參數量縮小輸入預算的政策；以當次 `num_ctx` 計算約 70% 輸入、30% 輸出空間，不自動把模型上限當成實際分配。側欄依端點與模型保存容量，優先保留明確設定及既有資格容量，首次可讀取同模型的實際分配／Modelfile 設定，未知時使用 4,096；使用者可修改或清除保存值。分開呈現請求選擇、最近實際分配及模型上限，分析執行中保留啟動時快照。角色資格仍綁定相同 wire `num_ctx`。
+- Analyst、Writer、Reviewer／Bug Fixer 的完全相同來源及 setup 改用同一請求內的唯一位置引用；各來源身分、相依索引與觀測分開保留。13B 的 structured large Writer 接到與 small 相同的精簡投影，必要 helper 先於 optional topology／範例，不截斷必要資料、不放寬品質與隔離 gate。
+- 初次 Writer seed 只在完整、可重播且無同呼叫衝突時選一個觀測；未知資料保留全量。原證據檔不改，結構／Trace 重試與正式修訂使用完整來源、setup、所有觀測與完整被拒候選，避免修復仍只有單案。超額事件以中英文呈現估計輸入、補正預留、可用上限、超出數與當次 context。
+- 驗證：隔離提交版本完整 Node 首輪為 928 通過、6 失敗、2 因暫存磁碟無 8.3 別名略過。六項失敗皆為舊整合 fixture 只提供模型最大容量，未提供實際 runtime，導致新版正確採 4,096 fallback 後提示超額；補上獨立的 8,572 runtime、核對 wire 與原 6,000 輸入預算，保留原執行／審查／突變斷言。六項修正與最後介面文案在隔離提交版本補驗 24／24 通過；Core 15／15、TypeScript、lint、建置、Webview 語法、秘密與歷史掃描、差異及提交內容核對通過。依使用者要求先交付可執行版本，不等待遠端 CI；Python 全套未重跑。固定回覆與本機工具回歸不代表實驗室 Codellama 13B、車輛 212 目標或任意 1B～5B 模型整批已通過。
+
+### Trace 總期限交界的跨平台修正
+
+- 第二輪遠端 CI 六組中五組通過；Windows Python 3.12 唯一失敗是總期限用盡後，後續案例仍標為 timeout 而非 not_started。四組 Node、Ubuntu Python 3.12／3.13、Windows Python 3.13 與兩組真實 Mutatest 均通過。
+- 重現 worker 提前 0.5 毫秒回報逾時、host 時鐘仍有微量剩餘的情況。總剩餘時間限制的 worker 一旦逾時，保存預算耗盡狀態，後續案例不再啟動；包含總上限恰好等於案例上限的邊界。提前成功或單案例逾時仍可使用剩餘時間，不延長總期限或增加重試。
+- 新增可重現的計時與進度日誌回歸；隔離提交版本及主工作區一般環境 Trace timing／case isolation 均為 24／24 通過，包含原 CI 失敗案例。主工作區沙箱執行曾因另一慢速匯入案例逾時失敗，一般環境重驗通過；秘密與歷史掃描、差異檢查通過。推送後 CI 另行核對，本項修正不代表車輛整批或實驗室 13B 已通過。
+
+### CI 後續短路徑與外部引擎相依矩陣補驗
+
+- 推送後的 CI 揭露 Python 3.12／3.13 按 requirements 不安裝 Mutatest，但隔離 seed 回歸仍無條件要求 Mutatest 執行。將內建與外部引擎驗證分為獨立案例，缺少可選引擎時明確略過外部案例，內建隔離驗證照常執行；失敗訊息補上工具擁有的固定診斷欄位。
+- 新增 Ubuntu／Windows 的 Python 3.11 專用工作，依 requirements 正常安裝相依，先強制核驗真實 Mutatest 3.1.0 適配器，再執行外部引擎與隔離資源測試；不以全部略過代表外部引擎通過，也不以 `--no-deps` 繞過相依解析。
+- Python 結果布局原以 `resolve() != absolute()` 判斷連結，誤拒合法 Windows 8.3 名稱，連帶使生成結果未被 caller 掃描排除、匯出與 scorecard 失敗。改以逐層 `lstat` 檢查連結／junction，並在讀 manifest 前拒絕；保留 basename、版本、檔案與來源證據核對。caller 與 scorecard 本體不改。
+- 初始化、突變副本與跨磁碟建議的回歸 fixture 仍使用舊短路徑期待或 mock key，改成已存在來源的真實身分，補確實命中拒絕分支的斷言。角色整合缺少 baseline 時輸出安全的 stage／status 摘要，避免只看到 ENOENT。
+- 真實 Windows 8.3 TEMP 補驗：初始化 Node 22／22；Python 路徑 fixture 27／27、結果布局與 caller／scorecard 27 通過／1 因 symlink 權限略過（真短路徑、junction 與 manifest 讀取前拒絕均實際通過）。可選 Mutatest pipeline 本機 21／21 通過，包含真實外部引擎。主工作區與隔離提交版本的角色完整整合各 1／1 通過；遠端矩陣結果另行核對。
+
+### CI 路徑一致性、Analyst 模板回聲與角色提示預算
+
+- GitHub 四組 CI 的 Node 階段確實失敗：Windows 的 Node／Python 對既存來源之 8.3 短路徑解析不同，造成執行、突變、品質與初始化證據誤拒；Ubuntu 的歷史 coverage 相容解析則把 Windows 路徑當作一般檔名。新增既存檔案的 native 實體身分工具，跨語言只對已批准來源建立別名；歷史 coverage 只在相容解析處統一分隔符號，不放寬目前執行的來源、摘要或 runId 驗證。
+- 一併納入工作區原有且已核對的 CI 工作流程：Node、Webview、Python 與建置分開顯示結果，非取消時後續檢查仍執行；總上限 45 分鐘。這不是原路徑失敗的修法，而是避免較長的完整回歸與相依安裝共用 30 分鐘上限，並保留各階段診斷。其餘既有工作區修改保留。
+- 路徑正規化不授權資源存取：保留原拼法的連結／junction 檢查，UNC 僅作虛擬字串，原 DB／設定不讀取。外部精確資源的未證明 `~N` 短名稱拒絕；突變副本排除資源時同樣使用已證明的來源別名，避免短路徑漏過排除。
+- 原車輛批次 173 次無效 Analyst 回覆的 214 字元與 SHA-256，完全符合公開 system prompt 的 JSON 範本。移除可直接照抄的完整範本，改成逐欄契約；補正仍最多一次、共用原期限。日誌增加固定原因碼、回覆形狀／數量與是否重複的診斷，不保存完整 provider 回覆或任意回覆欄位。
+- Analyst、Reviewer 與 Bug Fixer 的目標 import 使用保守的相關性投影；未知綁定保留。Reviewer／Bug Fixer 去除 caller 的重複 transport 樹，沿用型別敏感的完整呼叫投影，保留目標／依賴來源、constructor、globals、setup 與受控觀測。自動模式的輸入預算改用當次實際 Ollama context 計算，避免使用過期 profile 預算；自動容量上限與約三成輸出預留不變。Reviewer 超額事件增加實際容量、預算及提示估量。
+- 分治合併新增 Python AST 工具，保留已執行基線的 class、方法、fixture 與順序；只去除相同 AST 定義，安全情況下才改新 class 名稱。無法保留 import／fixture／全域綁定的合併仍拒絕並交 Writer；不靠改掉已通過方法身分來合併，不省略同候選執行與審查。
+- 真實小批次另揭露模型把純日期解析誤作 mock，以及把函式參數誤作模組屬性。完整模式 Writer 補充純標準庫解析／格式化／計算優先真實輸入；捕捉例外規則改為必要時才配置 `side_effect`。參數指引按實際 AST 簽名列出在測試建立並傳入的值，保留獨立來源支持的全域 lookup 例外；不猜 fixture 形狀或預期值，不放寬執行與去重 gate。
+- 獨立重跑確認 Trace 規劃約需 4.4 秒，每案例重新載入模組卻只有 2 秒，因此沒有有效觀測。僅在規劃成功且無載入錯誤時，將當次規劃耗時加入案例上限作為啟動成本估量；每案例仍受原總期限剩餘時間限制，不新增重試或共用 worker。工具與進度紀錄保存設定、校準、實際分配及原因，timeout／未啟動仍不是 oracle。
+- 真實 builtin 對照中，車輛 `get_vehicle_status_map` 取得同候選 Reviewer 核准、目標覆蓋 2／2、11／11 killed，scorecard 重算完整通過；Mutatest 對同函式零候選的結果仍獨立保留。同步修正頂層 journal 保存品質成果時漏更新 `mutationStatus`，不更動突變前 executable checkpoint 的歷史狀態，也不以此欄位取代完整品質證據。
+- 真實模型驗收、完整回歸與尚未完成界線另記於 `docs/CI與車輛小批次修復_2026_10_11.md`；不以本機 3B 結果冒稱 Codellama 13B 或 212 個目標整批通過。
+- 本機完整 Node 894／894、Python 562 通過／1 因符號連結權限跳過、核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 與憑證／歷史掃描通過。最後 journal 欄位同步重新編譯後，直接相關整合補驗 2／2 通過；GitHub 平台矩陣在 push 後獨立確認。
+
+### 生成重試保留失敗候選與正確匯入指引
+
+- 真實小模型重跑中，Writer 已改正時間來源的 mock，卻漏掉被測私有函式的 import；原結構診斷誤將被測函式視為一般 helper，建議 point-of-use patch，與「不可 mock 被測目標」的契約互相矛盾。
+- 保留原拒絕條件，只在缺少匯入的名稱等於被測目標時，提示依 `Target import` 明確匯入並呼叫真實目標；類別方法須匯入 owner 並依 `Target binding` 呼叫，不可退回同名頂層函式。缺少模組 metadata 時引用既有契約，不捏造 import 路徑；其他 helper 的原診斷不變。
+- 一般生成與分治子任務的首次結構／觀測證據重試，改以既有 Writer 修訂契約附上完整被拒候選、具體診斷與原來同一份證據；分治保留該 caller 的證據範圍。先前僅重送原提示與錯誤原因，獨立請求無法看到剛被拒絕的測試。維持原 seed／expansion 指令、重試上限與全部 gate；完整修訂超出預算時在傳輸前停止，不截斷候選或必要證據、不用降 Tier 繞過容量限制。
+- 新增 6 項回歸，涵蓋繁體中文／英文提示、類別 owner、缺少 metadata、合法 alias／module import，以及真實 Python AST 對 target patch 和 class-to-module fallback 的拒絕。6／6 通過；TypeScript、lint、生產建置、Webview 語法與差異檢查通過。這次是診斷修正，不改變品質門檻或模型資格，不以單元回歸宣稱真實車輛批次通過。
+- 修正後的 3B／16K 單點試跑共 6 次請求且全部完成。缺少 target import 的後一份候選已補上匯入，但保存紀錄沒有請求提示全文，不能把此結果當成提示送達的直接證據。4 個實際執行候選仍直接 patch 不可變的 `datetime.datetime.now` 而失敗；2 次 Bug Fixer 均已解析、合併並執行，最後因相同失敗停止，並非 scope 拒絕。尚未進 Reviewer／突變；34 個隔離租約均回收，來源及依賴未變。
+
+### 名稱綁定修復分流、相依關係與小模型生成一致性
+
+- 真實 16K 車輛試跑發現，生成測試缺少 `datetime` 匯入卻交給 Bug Fixer；候選僅補 import，因方法本體未變而遭範圍檢查拒絕。修正候選流程的角色排程，對可辨識的 unittest `ERROR`／`NameError` 或 `UnboundLocalError` 優先交 Writer 處理完整測試；Bug Fixer 的解析、合併與方法範圍 gate 保持不變。
+- 分流只判斷名稱綁定問題，不宣稱一定缺少套件或 import。含糊 traceback、例外鏈與一般訊息不作此判定；原始碼、來源中的名稱錯誤、已通過案例及同版審查要求仍由既有 gate 保護。
+- 同批另一份測試把直接 cursor 的 `fetchall()` 誤設到 `execute()` 回傳物件。相依 fixture 工具補充 comprehension 最外層迭代來源的可證接收物件呼叫關係；元素、條件、後續迭代與未知行為維持不完整診斷，不推導資料列值、不新增 oracle 或 mock 授權。
+- `qwen2.5-coder:3b-instruct`／16,384 context 車輛試跑共 37 次請求、37 次完成，5 個 Analyst 計畫可解析，沒有 API 失敗或提示容量超額。因找到上述分流問題而正常停止：212 個目標中 4 失敗、1 取消、207 待執行，完整通過 0，尚未進 Reviewer 或突變量測；不能把本次傳輸與分析成功算成整批成功。
+- 該次正式流程的 112 個隔離資源租約均完成回收，原來源與依賴摘要不變，未寫入使用者設定或存取 SecretStorage。後續以同一失敗目標驗證修正，單點驗證不取代全批驗收。
+- 第一輪單點重跑仍未通過：時間函式 8 次請求均完成，但候選直接修改不可變的 `datetime.datetime.now`；資料庫函式 9 次請求均完成，新增的名稱綁定分流確實讓 Writer 移除誤當 API 的提示標籤，後續仍有 mock 回傳資料與斷言不一致。兩者均未進 Reviewer／突變量測；分別 22、33 個隔離租約已回收，來源與依賴未變。
+- 本機資格探針原已設定 `temperature: 0`，正式請求卻沿用服務預設。正式本機角色及格式回退現在同樣明確設定零溫度，保留當次 `num_ctx`；Cloud／Custom 不變。此修正降低資格與使用條件的落差，不保證決定性或模型生成成功。
+- `datetime_freezing` 規則補充依實際 import 綁定替換受測模組的時間來源，區分 class 與 module 匯入，固定日期由測試自行建立；禁止直接修改不可變的標準庫 `now`。不把環境時鐘觀測當成固定預期值，也不增加 TypeError 的概括放行或分流。
+- 零溫度後再重跑兩個真實目標，各 5 次請求全部完成，線上請求皆確認 `temperature: 0`／`num_ctx: 16384`。時間函式後續候選修正了 mock，但漏掉受測函式 import；資料庫候選仍提出無證據的例外案例，或 mock 受測函式而遭結構拒絕。兩者仍未通過、未進 Reviewer／突變，不能把提示改善或 transport 成功當成驗收；20 與 8 個資源租約均回收，來源及依賴未變。
+- 驗證：名稱綁定與 comprehension 修正後完整 Node 851／851、Python 546 項（545 通過、1 略過）、核心 Mocha 15／15 通過。TypeScript、lint、生產建置、Webview 語法及 tracked／可達 Git 歷史密鑰掃描通過。後續零溫度與時間規則變更另補針對性驗證；不將先前完整回歸冒稱為後續變更的全套結果。Mocha 初次使用錯誤介面而未載入測試，改用原 suite 所需的 `--ui tdd` 後通過，未修改測試內容。
+- 時間規則新增及相關回歸 20／20 通過，包含 class／module 與 alias 的真實受控執行及錯誤 patch 負例。初次新測試的語境與 AST gate 旗標未照正式接線，已修正測試 fixture 後重跑，正式 gate 未改。Runtime context／取樣快照整合通過；完整角色整合在沙箱兩度因拒絕候選保存所需的 `fs.linkSync` 得到 `EPERM`，保留診斷後用相同測試與正常檔案權限重跑通過（193.9 秒），未修改驗收預期或生產程式來繞過錯誤。
+
+### 本機 Context 設定與角色資格一致性
+
+- 新增 `llmUnitTest.runtimeContextTokens`，預設 `0` 保留自動容量；明確正整數須有有效模型 metadata 上限且不得超額。提示輸入預算與實際 Ollama `num_ctx` 使用同一解析結果，約 30% 保留輸出空間；Cloud／Custom 不受此設定影響，沒有模型品牌特例。
+- Writer、Reviewer、Bug Fixer 資格增加 `ollama-context-v1`／`numCtx` 綁定。舊本機 profile metadata 保留，但缺少綁定或容量不符不能沿用資格。Auto 只使用當次相符且 verified 的角色；手動 Tier 保留既有試跑與全部驗證門檻。
+- 測試連線三角色共用設定快照；設定中途變動會提示重驗。正式單檔、全檔與批次也固定啟動時容量。非法設定在發送前保存 `model-runtime/rejected` 原因碼，metadata 缺失不能冒認明確容量可用。新增中英文設定說明及通知。
+- README 同步更正早期殘留的 execution 預設、Auto 確定性備援及自動改換突變引擎描述；現行 full／角色資格與指定引擎規則不變。
+- 真實 Qwen 3B 中性探針分別確認 8,192 與 16,384 的實際 Ollama allocation；兩種容量皆為 Writer 真實隔離執行通過、Reviewer 契約通過，Bug Fixer 仍未通過。16K 有部分 CPU offload；較大容量不是免費效能提升，也不等於長上下文品質或整批通過。
+- 對前一批 205 個 prompt-budget 失敗的容量估算：8K 可容納 161 個，16K 可容納 205 個；這只是原提示容量比較，尚非新模型生成結果。原必要來源與 schema 完整保留，未用截斷或降低 gate 換取容量。
+- 驗證：完整 Node 841／841 通過，包含正式多目標執行快照、失效資格、側欄三角色與原 Reviewer 整合；TypeScript、lint、生產建置、Webview 語法、tracked／可達 Git 歷史密鑰掃描與差異檢查通過。Python 正式工具未修改，沿用本輪已完成的 540 項回歸（538 通過、2 略過），不將中性探針當作車輛驗收。
+
+### 精簡 Analyst 契約與保守的資源語境投影
+
+- Analyst 固定指令由約 1,092 降為 658 估算 token，移除使用者提示內重複的任務；完整目標、必要 setup、相依來源與可斷言觀測保留。狀態快照仍只存證據檔，來源與模型假說不成為斷言答案。
+- 空 JSON 策略不再算分析成功；目標參數過濾後重新確認仍有具體策略。合法 quoted scalar 保留，格式補正最多一次，與首次請求共用原 deadline；在最終 system、輸出契約與隔離資源加入後，預留完整補正所需空間。
+- 資源提示依重新核對的來源與共享資源身分投影，實際批准計畫及 worker 資源不變；未知匯入／呼叫關係保守保留全量。完整 schema、default、unique 等約束不因字元預算截斷，漂移或遮蔽必要內容時不送出模型請求。複雜 DB／UI 的未知 dispatch 仍可能保留全量；此機制不宣稱已證明任意 Python 的完整執行期閉包。
+- 本機 `codegemma:2b` 的 8 種固定 Analyst 試驗均有 HTTP 200，但沒有可用策略；不能以模型回覆成功宣稱生成成功。另取得 3B 指令模型供後續實測，正式程式仍不依模型／provider 名稱建立例外。
+- 正式 F5 SecretStorage 的 `gemma-4-31b-it` 新診斷：discovery HTTP 200；生成先 HTTP 500，重試後 HTTP 200、約 36.8 秒，固定公開提示回覆正確。這只證明當次雲端可用，不代表 Analyst 或車輛整批通過。
+- `qwen2.5-coder:3b-instruct` 實測使用 API 回報 3.1B／32,768 context，正式預算維持 5,000 context／3,500 input；固定公開範例的 Analyst 有效、Writer 真實隔離執行通過、Reviewer 契約通過，Bug Fixer 仍未通過固定探針安全要求。Writer 首次診斷 adapter 誤傳 payload，改正後同回覆雜湊通過，該次不算模型失敗。資格未寫入使用者設定，也不外推為整批通過。
+- 補齊 Analyst 的 provider JSON schema：陣列元素與巢狀策略欄位完整宣告。固定公開範例中，舊 schema 在兩種 thinking 設定都得到 HTTP 400；完整 schema 的一次服務預設請求得到 HTTP 200 且策略可解析，但其他完整 schema／純文字請求仍有 HTTP 500，不能宣稱所有雲端錯誤已解決。HTTP 500 不改判為格式不支援。
+- Writer 選擇 optional 材料前預扣實際初始化／隔離資源語境；最終請求仍重新核對完整提示。Reviewer 的預算判斷也納入相同語境。角色請求失敗事件只增加 transport 所持有的合法數值 HTTP 狀態，不保存回應本文，也不從路徑或錯誤文字猜狀態碼。
+- 真實 Gemma 車輛批次選取 8 個來源／212 個目標，因 API 可靠性問題正常取消：11 個已結束（9 失敗、1 審查受阻、1 取消），201 尚未執行，沒有完整通過目標。來源未變、設定未寫入，87 筆隔離資源生命週期皆確認回收。早期 9 個終態樣本中 15 次角色請求有 9 次傳輸失敗；4 次已回覆 Analyst 都可解析，2 次 Writer 都通過結構，其中一份測試可執行卻卡在 Reviewer API。完整批次另計 22 次 logical request／62 次底層 network request，兩種計數不可混用。
+- 資源 tuple 壓縮雖可減少約 35% 提示容量，中性 3B 實測卻多誤解 unique／seed，因此未採用；資料保真、模型理解與完整品質通過分開驗證。
+- 真實 Qwen 3B 車輛批次於 30 分鐘截止後正常取消：212 個目標中 207 失敗、1 取消、4 未執行；205 個為 prompt-budget、2 個為 static-analysis。模型請求為 0，不能用這批失敗數評估模型生成品質；來源未變、設定未寫入，1,347 筆隔離資源生命週期皆確認回收。下一步須使本機 context 設定、輸入預算與三角色資格探針一致，並以精確目標的來源閉包判斷資源相關性。
+- 驗證分階段記錄：第一版完整回歸 Node 814／814、核心 Mocha 15／15；Python 540 項中 538 通過、2 略過。最後補齊 provider schema／Writer 預扣語境／HTTP 診斷後，相關 Node 補驗 88 項中 87 通過，既有 Reviewer 終態案例一次不符預期；保留安全失敗診斷後，原整合檔以相同斷言單獨重跑 1／1 通過，包含真實 Python 突變及新增資源預算案例。該次異常未重現且原紀錄不足以確定原因，不把補驗合併宣稱單次全套零失敗。TypeScript、lint、生產建置、Webview 語法、密鑰掃描與差異檢查通過。
+
+## 2026-10-10
+
+### 車輛全批第二輪修復：提示預算、實際 schema 與單筆突變時限
+
+- 針對 14:40 批次的 212 個目標重新分類；198 失敗、6 無突變候選、4 保留舊成果、3 審查受阻、1 完整通過。模組預檢成功不代表函式所需 schema 或候選品質就緒。
+- Writer 刪除無關的 module-wide import 語境、相同規則重複文字，限制 optional examples 佔用；保留完整目標與必要 setup／觀測。純日期轉換不再誤觸 clock freezing。新增保守 AST receiver 契約，明列來源消費的 connection、cursor、方法回傳路徑；unknown 不猜，不提供 expected 或 patch 授權。
+- Schema planner 支援來源可證明的新 DB 資源、本機 connection helper、ConfigParser fallback 與新增欄位；fallback 所需空白設定 fixture 併入批准預覽，不讀取／覆寫原設定。跨來源摘要與一般 Python 程序條件納入批准及每 worker 核對；未知套件初始化、副作用、rebind 與不保真 SQL 保持診斷。
+- 同版車輛 8 來源的靜態規劃得到 20 候選、去重後 18 提案；3 個隔離 DB 各 6 表。真實 fresh worker 12 次查詢成功，原資料未讀寫、lease 均回收；此驗證只證明隔離 schema 可供應用查詢，不代表模型已完成整批。
+- Reviewer 增加同候選 AST／執行事實支持的 unbound import/name、已有 mock assertion 與相同斷言替換診斷；無效回覆仍須有界重審，不冒充批准。
+- 成功 baseline 後校準每 mutant 時限為 `max(設定值, baseline × 2 + 1 秒)`，仍受原 stage deadline；保存設定／校準／分配欄位，中英文報告與兩種語言的證據驗證器同步。新增真實冷啟動測試，原 0.05 秒上限不足載入 0.2 秒模組的情境，修正後 3 個 mutant 均完成。
+- 修正資格探針把「呼叫目標卻只比較常數」算合格的缺口：每個固定案例必須把真正目標結果與獨立固定 expected 連到同一斷言；保留安全變數、反向 assertion 與舊式同值 fixture，相同結果互相比較或變數重綁不構成證據。另拒絕巢狀、同名覆寫或未執行範圍內的測試，runner 要求至少執行一個案例。資格升為 `python-unittest-v7`，撤回舊版 verified；已儲存模型與金鑰不因此移除。
+- 修正本機 Ollama 模板只讀 `.Prompt` 時遺失角色 system 指令：正式請求把完整角色契約與使用者證據依原預算順序合併一次，空白 system 抑制 Modelfile 預設回填；不改原模板、格式、context 或驗證門檻，也不依模型名稱分支。整合回歸直接檢查真實傳輸 prompt，文字可見性不冒充模型生成品質。
+- F5 正式 SecretStorage 確認可取得 `gemma-4-31b-it`；探索成功但三次最小生成仍為 HTTP 500。依使用者指示測試實際本機 `codegemma:2b`（服務規格回報 3B、completion/insert）；一般指令回覆不穩定，加入完整骨架／檔案起始提示後取得 1 個通過正式結構、AST 與隔離執行的 seed，不代表 Reviewer、突變或整批已通過。
+- 2026-10-11 收尾驗證：Node 全套 789／789、核心 Mocha 15／15 通過；Python 全套 535 項，533 通過、2 略過，跨磁碟機項目另於不同磁碟暫存環境補驗 1／1 通過，symbolic link 權限案例仍略過。TypeScript、lint、生產建置、Webview 語法、tracked／可達歷史密鑰掃描與差異檢查通過。
+- 前次 Node 在宿主預設暫存路徑出現路徑過長／隔離子程序失敗而中止；同版 schema 測試改用短暫存路徑與 UTF-8 後 7／7 通過，最終全套亦使用此環境。Python 首次編碼失敗後以 UTF-8 重跑全套；上述通過數指修正執行環境後的新完整執行，不把失敗嘗試與補驗合併成零失敗。
+- 真實本機車輛批次保留 8 檔／212 目標，在 30 分鐘截止時為 178 失敗、1 取消、33 未開始；7 模組載入、0 預檢阻擋、1154／1154 清理成功，但全部角色請求停在 Analyst，沒有 Writer／Reviewer／突變。此批為傳輸修正前 baseline；修正後固定 Analyst 對照雖確認完整契約可見，仍回覆無效 JSON。小模型全角色及車輛整批尚未驗收通過。
+
+### 修復車輛批次的 schema、角色契約與突變冷啟動
+
+- Writer 增加明確 import、私有 helper、alias 使用點及 connection／cursor／context manager 形狀指引；修訂採專用完整證據，只去除完整且相同的 source／current test 重複。最終提示超預算由統一請求檢查記錄為 prompt-budget，停止而不誤分 unknown 或降 Tier；不增加模型名稱特例。
+- Analyst 對已收到但格式無效的回覆最多補正一次，保留同證據及原 deadline；取消、來源漂移、傳輸失敗與超預算不補問。Reviewer 使用同候選 AST import／binding 事實處理明確機械矛盾，仍須重新取得有效同意，不刪 findings 冒充批准。
+- 初始化新增有界 SQLite DDL 規劃，將支援的 literal `CREATE TABLE IF NOT EXISTS` 配對同來源的精確已宣告資料庫後合併預覽。支援 literal default、UNIQUE／複合 UNIQUE 與 INTEGER PRIMARY KEY AUTOINCREMENT；既有 schema／seed 保留、衝突只診斷。工具不 import 應用、不執行來源 SQL、不讀取或複製原 DB，各 worker 新建資源，來源漂移使批准失效。
+- 本機同版來源只做 AST 核對：8 來源中 6 個可定位候選，另有 14 個動態 DB 路徑及 2 個非 literal SQL 診斷。候選不代表已套用，也不代表原 8 個 schema 失敗目標已全部解決；未修改原應用、呼叫 GUI 或重跑實驗室模型。
+- Builtin／外部引擎共用的 baseline 冷啟動上限改為 `max(20 秒, 每 mutant 上限)`，仍受 stage 剩餘時間限制，個別 mutant 時限不增加。結果保存 baseline 上限／實際分配／耗時，逐輪流程與失敗報告顯示診斷；timeout／error 不算 killed，精簡最終報告格式保留。
+- 新增真實隔離 worker、來源漂移、一次批准、冷啟動時限、完整修訂證據、分析格式及 Reviewer 矛盾回歸；中英文訊息、VS Code 設定 schema、規則與操作文件同步。
+- Node 完整回歸 761 項，760 通過；唯一失敗為精簡提示漏保留 execution 契約標記。恢復標記並新增保護斷言後，重新編譯的 Writer／執行驗證相關 33／33 通過，不把補驗冒充單次全套零失敗。Python 全套 514 項，513 通過、1 項因目前使用者無 symbolic link 權限略過；核心 Mocha 15／15 通過。
+- TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／可達 Git 歷史密鑰掃描與差異檢查通過。先前沙箱內 async 測試因 localhost 連線被拒而逾時；正常本機權限原測試及完整回歸皆通過該項，未更改 timeout 或隔離 gate。
+- 詳見 `docs/車輛批次品質修復_2026_10_10.md`。原工作區既有修改保留；本機固定模型回覆與工具測試不代表實驗室整批或 1B～5B 模型已通過。
+
+### 載入前彙整初始化清單，確認後接續同一批次
+
+- 新增有界 AST 初始化規劃：讀取選取來源及本機 import 閉包，提前彙整直接模組目錄與外部 callback 啟動入口，包含沒有可測函式的相依檔。靜態候選保留獨立證據身份，不假冒已觀測錯誤；不求值 helper、註解或任意程式，也不查詢原 UNC 資源。
+- 設定或 helper 算出的目錄不猜測路徑；每次規劃最多使用一次既有隔離診斷，僅套用已批准設定，再把實測資源與後續靜態入口合併預覽。使用者確認一次後保存設定、重檢一次；批次略過重複的「處理初始化」提問，就緒後接續原目標。仍有未知障礙、缺相依或 schema 時停止，不自動反覆套用。
+- 預覽綁定整份來源閉包摘要，確認與就緒回傳前再次核對；取消、來源或環境變動不放行。初始化規劃與實際載入診斷分開保存，報告區分待確認與已觀測受阻；批次更新重檢後的剩餘障礙數。
+- Windows 來源身分以大小寫等價核對，本機 import 搜尋配合受控載入的有限祖先路徑；未知相依不假裝已完整掃描。入口替身在執行期僅接納普通外部 Python 函式，拒絕 callable 物件、partial、bound method、builtin 與重匯出的受測應用函式，避免靜態候選繞過真實程式碼身分檢查。
+- 核對 `vehicle_manageme_2026_10_09_22_49`：初始化已就緒並完成 212 個目標終態；保存 19 個可執行成果、12 個審查批准，但完整品質通過 0。8 個後續環境失敗為執行期 schema 缺失；4 個突變 baseline 逾時、7 個無候選，僅 1 個有效突變分數。新增分析文件，按 Writer／提示預算、明確 schema、Reviewer 與 baseline 時限列出後續改善，不把完成批次解讀成通過。
+- 本機同版車輛來源僅做 AST 規劃，讀取 8 個來源，辨識 3 個啟動入口與 6 個動態目錄診斷；未執行原應用、GUI、實驗室批次或真實模型。原工作區既有修改保留。
+- Node 完整回歸執行 743 項，741 通過；唯一案例仍期待舊 Windows 路徑大小寫，連帶使父測試失敗。只修正該測試的顯示預期後，初始化整套 17／17 補驗通過，原資源不變與實際載入的斷言均保留；不將補驗冒充單次全套零失敗。新增初始化整合 5／5、批次接續 5／5 與核心 Mocha 15／15 通過；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／可達 Git 歷史密鑰掃描及差異檢查通過。
+- Python 完整回歸 497 項，496 通過、1 項略過；包含新 planner 28 項與入口真實 callable 的正反整合驗證。正常本機權限下，先前沙箱內出現的 coverage metadata 讀取失敗未再現；未放寬 runtime 隔離。完整回歸後的密鑰／歷史掃描通過。
+
+## 2026-10-09
+
+### 接續已確認的批次初始化並修正角色的機械誤判
+
+- 核對 `vehicle_manageme_2026_10_09_05_14`：212 個目標中 122 個在模型前受阻；當次仍使用舊 flet 入口設定，沒有套用已辨識的目錄資源。修正批次處理初始化後直接結束的流程：保留同一批次、選取範圍及模型快照，確認清單並重檢就緒後接續。使用鎖與獨占設定鎖分開交接，取消同步傳遞；仍受阻、拒絕或來源／Python／設定變動即停止，不循環預檢或靜默批准資源。
+- 設定結果明確回傳實際計畫、載入狀態與範圍；顯示總結期間發生的取消／變動也拒絕接續。修復子預檢成功但父批次仍命中舊匯入失敗快取的問題，包括 fixture ID 未變的相依修復。原始預檢及每次 setup 保留獨立證據，manifest／完整流程保存決定、計畫 ID、資源數與相對報告連結。
+- Writer／Bug Fixer 依來源呼叫鏈區分 Mock 回傳物件與末端方法結果，保留測試 import 的作用域；NameError 提供有界修復提示，import-only 修訂仍須在失敗方法內合法修改，不放寬三個 import、passing 保護或修復範圍。中性範例實際重現錯誤 Mock → 缺 import → 合法修訂與隔離執行。
+- Reviewer 依同一候選的已執行 import 與標準 mock 呼叫斷言事實，拒絕可證實的機械矛盾並要求既有額度內重審。只處理明確錯誤綁定、缺 import 與單純要求把互動斷言改成回傳斷言；未知需求、更強斷言及獨立品質意見保留。離線核對當次兩份審查的 9 項意見，5 項命中矛盾、其餘 4 項保留；重複相同回覆兩次仍未批准。核對候選／來源身分及引用行，未執行、保存或輸出私有原始碼。未刪 findings 冒充批准、未降低覆蓋／突變門檻。
+- 驗證：最終 Node 全套 733／733 通過；Python 全套 468 項，467 通過、1 項因 Windows 符號連結權限略過。核心 Mocha 15／15、TypeScript、lint、生產建置、Webview 語法、tracked／可達 Git 歷史密鑰掃描與差異檢查通過。初輪發現兩個提示長度回歸，縮短重複說明後重新跑完整 Node；保留完整來源／證據及原預算。初輪 Python 有一項 Trace 未取得預期例外，該模組 18／18 補驗及獨立完整重跑均通過，未放寬 Trace gate。
+- 中性批次驗證涵蓋同一批次接續、拒絕／取消、下一個障礙、來源變更、預設輸出位置及 fixture ID 不變時的失敗快取更新；原位置沒有建立資料目錄。以上本機工具／固定回覆不代表原始實驗室整批或真實模型通過。原工作區 32 個未提交檔案獨立保留，不混入此次提交。
+
+### UNC 邏輯名稱映射至本機測試資源
+
+- 新增 Windows 專用 `scope: "unc-virtual"`，以精確 `//server/share[/tail]` 名稱映射至本機 owned lease 內的空白目錄及明確文字／SQLite seed，保留應用原字面地址。`external-exact` 仍拒絕 UNC；裝置路徑、`IPC$`、跨層及來源交集保持拒絕。
+- 自動候選只依實際受阻的 `Path.mkdir(exist_ok=True)` receiver；手動草稿共用來源／設定核對。中英文確認逐項列出完整名稱，明示只使用本機暫存、不連線、不讀寫原共享、不授予網路權限。取消或確認期間來源／設定變動均不套用，批准後只重檢一次。
+- UNC 核對與映射不查詢原 metadata、資料或連線；runtime 前置 guard 處理支援的標準 Python API 與已知 `ntpath` 別名，不宣稱 OS sandbox 或支援任意原生／私有 API。各 worker、baseline、mutant 重建並清理本機資源，突變不推導其他遠端別名。
+- 角色資源語境只提供 alias／path hash，設定與 seed 不是 assertion oracle。新增候選、手動清單、確認／取消／來源變動、英文、單次重檢及 UNC 檔案系統查詢攔截的回歸案例；不以中性 fixture 冒充實驗室完整專案或模型通過。
+- 核對本機同版 `config.py` 的隔離副本與中性目錄 probe：未配置時受阻並提出 UNC 候選，加入一筆已核對的虛擬目錄後可載入。獨立前置 sentinel 記錄原 UNC metadata／內容／網路存取嘗試為零；原檔不變、worker 已清除，私有副本已刪除。未啟動 GUI、原應用完整流程或真實模型。
+- 保留 `Path.absolute()`／`abspath()` 的純字串計算及 Windows 分享根語義；真正的路徑解析仍受資源限制。目錄列舉物件也檢查呼叫者，生成測試不能接手做直接 I/O；突變複製先排除 symlink／junction，再處理一般來源，不解析連結目標。
+- 驗證：Node 全套 700／700 通過；Python 全套 464 項，463 通過、1 項因目前使用者無法建立 symbolic link 略過。完整相關 10 個 Python 模組另跑 134／134、0 略過，包含 UNC、真實 Mutatest 與 C→D 跨磁碟。核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／Git 歷史密鑰掃描及差異檢查通過。原工作區 32 個未提交檔案獨立備份並保留，不混入修復提交；未重跑實驗室整批或真實模型。
+
+### 明確映射本機外部資料路徑並保留 UNC 障礙
+
+- 新增 `scope: "external-exact"`，讓專案父層範圍以外、與來源不相交的固定本機絕對路徑使用空白暫存目錄及明確文字／SQLite seed。預檢只依實際受阻的 `Path.mkdir(exist_ok=True)` receiver 提案，確認清單逐項顯示精確路徑；取消、來源或設定在確認期間改變均不套用，仍只重新預檢一次。
+- TS 與 Python 共用路徑、scope、來源與 seed 身分；Windows 統一分隔符與大小寫。各外部根目錄使用獨立暫存命名空間，巢狀 seed 共用宣告目錄；worker、Trace case、baseline 與 mutant 各自重建並清理，不讀取或複製原資料。固定絕對路徑的突變不推導額外別名；副本造成新地址時保留基線錯誤及無有效分數。
+- 原位置只做允許的本機路徑 metadata 核對；UNC／裝置路徑在讀取 metadata 前拒絕，連結及 junction 由根至葉核對，遇連結就停止、不穿越至其子路徑。來源／磁碟根目錄重疊、生成測試直接 I/O、網路及未宣告資源的限制保持不變。
+- 模型的資源摘要只收到穩定別名／path hash，不另附完整外部路徑；若 seed 重複該路徑，整組資料標為 withheld，不改寫成假值或空資料。別名不是 expected；既有原始碼及執行證據不做文字替換。
+- 新增正反回歸涵蓋明示確認／取消／過期、跨磁碟、來源及連結、原資料未讀寫、Trace／runner／builtin／真實 Mutatest、獨立 seed、cleanup 及不支援的路徑。中英文介面、設定 schema、架構／規則及操作文件同步。
+- 另核對本機子目錄 `config.py` 的同版受限副本：其固定路徑在 Windows 解讀為 UNC，而非一般其他磁碟。本版仍拒絕 UNC，沒有把該樣本算成已解除或整個車輛專案就緒；原設定／私有路徑未寫入提交，未執行 GUI、完整應用或真實模型。
+- 驗證：Node 全套 681／681 通過；Python 全套 451 項，449 通過、2 項略過（Windows 符號連結權限，以及本次全套將 TEMP 設在同一磁碟）。最後連結檢查修正後，完整相關 5 模組 82／82 通過、0 略過，包含 C→D 真正跨磁碟與真實 Mutatest；不將補驗冒充單次全套。核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／Git 歷史密鑰掃描及差異檢查通過。原工作區 32 個未提交檔案再次核對保留；沒有重跑實驗室整批或真實模型。
+
+### 修復突變副本的資源別名衝突與跨磁碟診斷遺失
+
+- 延續目錄障礙檢查，以中性 fixture 重現：原預檢與 unittest 通過，但突變額外建立未使用的平面副本，令專案內及父層資料映射互撞。突變副本與初始化設定改用同一份靜態匯入布局，僅建立實際需要的來源副本，不再由同名檔案猜測來源。
+- 套件初始化與 helper 的平面匯入及較短套件名稱，優先解析同一份套件目標副本，涵蓋 trial 內各層父目錄，避免回到原始來源而誤判突變存活。新增真正修改副本後斷言必須失敗的回歸；builtin 及真實 Mutatest 共用此流程。
+- 真正混合匯入的資源別名歧義仍拒絕；不支援的動態匯入、無目標布局、相依副本雜湊改變及設定失敗保存為無有效分數的錯誤，不算 killed。沒有放寬原資料隔離或測試品質 gate。
+- Windows 跨磁碟的受阻目錄無法轉成專案相對路徑時，仍保留已觀測的 mkdir 入口及來源證據；不再因路徑轉換例外遺失整筆診斷。此修正不批准任意外部路徑，原位置仍不建立、不讀寫。
+- 驗證：Node 全套 663／663 通過；Python 全套 440 項，439 通過、1 項因 Windows 符號連結權限略過。最後深層套件匯入修正後，再跑完整受影響的 10 個 Python 模組共 123／123 通過、0 略過，包含真實 Mutatest；不將補驗冒充單次全套結果。核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／Git 歷史密鑰掃描與差異檢查通過。原工作區 32 個未提交檔案備份並保留，不混入修復提交。以上限工具、受限匯入與中性隔離副本，沒有重跑原始實驗室整批或真實模型。
+
+### 支援專案旁的隔離資料目錄並釐清重新預檢診斷
+
+- 依 `vehicle_manageme_2026_10_09_00_35`、`00_37` 與 `import_check_2026-10-08T16-36` 修復：`config.py` 在所選根目錄旁建立 `VMS_Data`，舊 advisor 沒有可套用的資源路徑，因而反覆在 `os.mkdir` 受阻。新增明確 `scope: "project-parent"`，從實際受阻的 `Path.mkdir(exist_ok=True)` receiver 提出同父層且不與來源樹相交的資源；確認清單後只重新預檢一次。
+- 省略 scope 保留原有專案內語意；父層與專案內同名路徑使用不同身分及暫存子樹。文字、SQLite schema／seed、角色語境、Trace、runner 與 builtin／Mutatest 沿用同一資源計畫；突變 alias 僅由已核對的來源布局推導。原位置不讀取內容、不複製或寫回，不修改受測原檔，不放寬來源／根目錄／祖先、跨層、symlink／junction、可執行檔與未宣告 I/O 防護。
+- 新增 `recheck-diagnostic-incomplete`；診斷遺失、僅文字變化或無法確認原因是否改變，不再冒充新載入障礙。逐輪報告保留獨立證據與比較連結；工具失敗只保存 `timeout`／`process-failed`／`invalid-result`、安全 exit code 與固定 detail code，不把任意 stdout／stderr 放入報告。取消、目標總時限及真正匯入失敗分類保持不變。
+- 同版 `config.py` 僅複製至 owned 暫存目錄重播：修復前受阻，套用一筆父層目錄設定後可載入；來源雜湊、原位置 sentinel 與檔案清單不變，worker 暫存區已回收。原始 16:36 報告唯讀核對後，第二輪正確分類為診斷不完整。
+- 中英文清單／確認訊息、設定 schema、操作文件與架構規則同步更新。Windows 同 scope 的路徑大小寫統一比對；相同資源可共用，schema／seed 不同仍拒絕。
+- 驗證：Node 全套 663／663 通過；Python 全套 425 項，424 通過、1 項因 Windows 符號連結權限略過。最後的路徑大小寫修正及新增回歸另跑完整資源／advisor／import fixture 組 55／55 通過；不將補驗冒充單次全套結果。核心 Mocha 15／15；TypeScript、lint、生產建置、Webview 語法、含新增檔的 tracked／Git 歷史密鑰掃描、差異檢查通過。原工作區 32 個未提交檔案獨立備份並保留，不混入修復提交。
+- 以上驗證限工具與隔離副本；實驗室整批及真實模型尚未重跑。後續 GUI 啟動、缺少 schema 或原應用重複函式定義仍依實際證據分流，不宣稱整個應用已就緒。
+
+### 匯入前準備隔離資源，執行後由工具回收
+
+- 依使用者確認，新增來源／根目錄綁定的空白目錄、文字 fixture、SQLite schema／seed 清單。原模組實際使用暫存資源，保留 `__file__`、來源與 coverage 身分；不複製正式資源、不猜表、不代呼叫初始化函式、不修改原始碼。
+- 預檢從真實 `Path.mkdir(exist_ok=True)` receiver 提出可核對的目錄。新增專案區「隔離測試資源」：編輯、保存、最終合併預覽與確認、重新預檢；來源變更可重建草稿版本。舊草稿不覆蓋後來新增的初始化設定；過期入口行號只明示撤銷、另行預檢批准，不自動重綁。
+- 每個預檢、Trace case、suite、baseline、mutant 都建立獨立資源；同 worker 的 import／call 沿用。Node 擁有外層 lease，正常、失敗、逾時及取消皆在子樹停止後核對清理，journal 保存清理結果；清理失敗不回報成功。套件安裝不帶入資源授權。
+- SQLite 缺表／欄位明示 `resource-schema-required`，不能作 oracle 或 killed。full／execution 以同 source／test／run／資源計畫的完整隔離紀錄停止為環境設定障礙，不交 AI 猜 schema。保留生成測試直接 I/O、未宣告路徑、越界、連結、Windows 裝置／ADS、網路、shell、共享 SQLite、ATTACH／extension 的防護。suite 方法間狀態仍須由測試透過公開 API 管理，沒有假稱自動方法級隔離。
+- Writer／Analyst／Reviewer／Bug Fixer 取得受限資源語境與相同計畫身分；seed 是輸入，不是 expected。純函式不加入冗長資源規則。修正品質實驗比對注入前環境而誤拒合法 fixture 的問題，Trace／runner／mutation 保留設定證據；不同 seed 拒絕舊觀測。
+- 突變複製套件時排除宣告資料目錄、文字檔、SQLite 及指向資源的 alias；拒絕資源路徑 symlink／junction，避免在隔離 guard 啟動前讀取正式資料。內建與 Mutatest 共用相同執行生命週期。
+- 統一單檔預檢、相依探索與報告使用的選取專案根目錄，避免 F5 工作區為插件自身時錯用根目錄。execution 呼叫語境沿用完整記錄投影，保留來源、輸入與建構子，移除重複 tagged 傳輸欄位以符合原提示預算。保留舊無 fixture Trace 輸出格式；中英文介面、設定 schema、架構／規則及操作文件同步更新。
+- 驗證：修正完整回歸發現的提示長度、空白 metadata 與既有提示文字相容性後，最終 Node 全套 650／650 通過；Python 全套 417 項，416 通過、1 項因 Windows 符號連結權限略過；核心 Mocha 15／15。TypeScript、lint、生產建置、Webview 語法、新檔／tracked／可達 Git 歷史密鑰掃描及差異檢查通過。原工作區既有 32 個未提交檔案備份並保留，不混入本次功能提交。
+- 實驗室原始整批與實際雲端／本機模型尚未重新執行；中性 fixture、模擬 provider 與工具整合通過不代表原始專案整批通過。
+
+## 2026-10-08
+
+### 結束重複初始化提示並刷新明確重檢
+
+- 初始化操作改為一份清單確認、套用後真正重檢一次即結束，移除最多八輪重複彈窗及最後一輪套用後未驗證的狀態。新的載入障礙保存下一份建議，需另一次手動操作；同一障礙仍受阻時明確停止，不略過隔離或假造載入通過。
+- 新增 `import_setup.json`／`import_setup.md` 總結，連至每輪詳細診斷；區分已可載入、原障礙未解、下一個障礙、拒絕、取消與沒有可測目標。中英文同步，明示預檢不是函式／審查／突變通過。
+- 重現並修復同一 execution 相依檔案已修好仍命中舊失敗的問題：明確重新掃描時只清本 execution 已完成失敗快取，保留單次掃描內共享及其他執行的快取。
+- 批次轉入初始化設定時沿用本次勾選的來源，不再掃回已排除的檔案；關閉與取消不啟動設定，明確空清單不回退到整個專案。
+- 修正拒絕清理過期來源設定時的就緒誤報：暫時預覽可載入但清單尚未保存，仍為 incomplete；確認視窗中取消不會寫入設定或再次預檢。
+- 驗證：直接相關 Node 75／75 通過，Python 37 項中 36 通過、1 項因 Windows 符號連結權限略過；TypeScript、lint、生產建置、Webview 語法、新檔／tracked／可達 Git 歷史密鑰掃描及差異檢查通過。本次採相關回歸，未重跑整個模型生成／突變全套。
+- 本機以真 Python 重現連續兩個初始化入口及相依修復。使用者實驗室本次的原始 `import_check` 尚未提供，因此不宣稱已核對其特定障礙或完成實驗室重測；既有未提交工作保留。
+
+## 2026-10-07
+
+### 保護已核對計算、跨 Tier 案例與指定突變補測
+
+- 依 `bmi_2026_10_07_17_29`、`17_33`、`17_59` 的實測證據修復：Reviewer 可否定正確計算、Writer 可將精確字串比較改成排序比較、降階可遺失尚未量測的可執行 seed，以及全局覆蓋提升被誤當指定 mutant 已解決。
+- 新增只讀 AST 的 Reviewer facts，綁定當次 run／source／target／test；imports、測試 harness、實際 assertion 與完整同輸入 Trace／numeric ledger 交給審查與有界矛盾檢查。錯誤 finding 要求原預算內重審一次，不傳成 Writer 改錯答案的指令，不刪 findings 冒充批准；未知語意與獨立需求仍交正常審查。
+- 新增通過案例 AST 保護，涵蓋初次擴充、Writer／Bug Fixer 修訂及跨 Tier：不允許刪除／更名已通過案例、更換輸入或 expected、放寬斷言／例外及破壞共享設定；保留格式差異、新案例、追加斷言、可證明的標準 unittest 斷言強化與收緊的 tolerance。失敗方法仍可修，未能證明等價的重寫保留具體拒絕原因。
+- 精確追蹤所選 mutant ID 或 line／branch，核對來源、引擎、規則、範圍、候選集合與測試版本；對回滾後保留候選分開記錄任務是否解決及全局進展。指定 mutant 仍存活時延續原任務／觀測；兩次未解決則明示暫緩、嘗試其他缺口，不移除分母。回滾同步恢復下一輪使用的 executable checkpoint，沿用既有預算及停滯限制。
+- 簡報告分開呈現最新候選審查中斷與保留測資的既有覆蓋／突變分數，保留突變表與完整失敗流程。原三批歷史產物不改寫。
+- 原三批紀錄另做唯讀離線核對：6 份非空審查共 21 項 finding，14 項命中可證實矛盾，6／6 份均會要求重新審查；另外 7 項範圍／mock 等未知語意沒有擴大判為錯誤。未重跑原目標或呼叫模型。
+- 驗證：Node 全套 604 項，初輪 603 通過、1 項揭露新的保護檢查先於 Bug Fixer 專用範圍診斷，蓋掉既有 import-conflict 原因碼；恢復專用診斷優先並保留後續通過案例保護後，完整角色流程、跨 Tier、審查事實、品質追蹤、回滾與中英文報告等 57／57 補驗通過，不將補跑紀錄冒充單次全套零失敗。Python 全套 390 項：389 通過、1 項因 Windows 符號連結權限略過。舊核心 Mocha 15／15、TypeScript、lint、生產建置、Webview 語法、新增檔／tracked／Git 歷史密鑰掃描及差異檢查通過。
+- 固定模型回覆配合真 Python／coverage／builtin／Mutatest 的回歸不等同實驗室模型重跑，未宣稱 codellama:13b 或 1B～5B 已通過；原工作區的型態／Trace 輸入規劃等未提交工作仍保留、不混入提交。
+
+### 恢復由 AI 分析、撰寫、審查與突變回饋的完整循環
+
+- 依原始設計收斂正式完整流程：AI 分析來源 → Writer 產生最小測試 → 隔離執行與保存 → Reviewer 審查 → 同一候選突變 → Analyst 選擇一個實測缺口 → Writer 補測，再執行與審查。初始分析無效、角色不可用或審查未完成時明確停止，不以 host 測試取代 AI 成果。
+- 所有可操作的審查問題均交 Writer 修訂，包括品質建議；審查無效回覆仍最多修正一次，修訂與請求使用既有總預算。零問題批准綁定 workflow／run／source／target／test hash，突變前重核對，品質回退同步還原原候選批准。
+- 移除完整模式的自動 Trace 測試合併、自動 state 測試採用與 import 改寫。數值工具只交付已經計算與隔離執行核對的輸入／結果；由 AI 撰寫修訂，再通過原有結構、修復範圍、執行、審查與品質 gate。execution 診斷模式的算術工具也只提供假設，不直接替換程式。
+- 物件狀態工具改為 quality-experiment-result-v2，只保存完整、有型態的 constructor／呼叫序列／前後狀態／回傳或例外；綁定實體來源、module、target、gap 及初始化設定，拒絕混用來源或疑似憑證。歷史離線 helper 保留相容，不參與正式生成。
+- 新增有界實測證據保存與去重，後續修訂及品質輪次仍可取得有效觀測。提示僅按完整案例／片段投影，明示省略數；無法容納必要證據就回報預算不足，不截斷 JSON 或測試程式。
+- 每輪擴充只帶入一個量測缺口，移除 system 與 user 重複的存活突變、來源切片、基線及任務；預先保留實際 system 契約、完整測試及觀測所需預算。不以模型／provider 名稱分派，也未提高小模型預算上限或降低 80% 突變及覆蓋門檻。
+- 批次與 scorecard 對新 ai-reviewed-loop-v1 紀錄要求可核對批准；缺失、矛盾證據或未知流程版本不能算完整通過。中英文顯示明確區分「可執行但審查阻擋」與通過；舊歷史紀錄仍依原版本讀取。Stub 不預檢不會用到的突變引擎，host smoke 明確標示作者且不視為已執行。
+
+- 驗證：Node 全套 582 項，初輪 581 通過、1 項揭露舊回歸仍要求工具直接改寫答案；該回歸更新為 AI 證據交接後補跑通過。最終變更另驗數值補測／state 補測／execution 算術 3／3、批准讀回／來源版本／execution 14／14、Python scorecard 19／19，全數通過；不把補跑紀錄冒充單次全套零失敗。
+- Python 全套 364 項：363 通過、1 項因 Windows 符號連結權限而略過。舊核心 Mocha 15／15、TypeScript、lint、生產建置、Webview 語法、暫存新增檔與 Git 歷史密鑰掃描及差異檢查通過。
+- 完整整合以固定 AI 回覆配合真 Python、coverage、builtin／Mutatest 驗證，包含審查阻擋、AI 修訂後再審、來源／候選批准綁定、回退與品質補強；尚未重跑實驗室 codellama:13b 或 1B～5B 模型，不宣稱原批次或小模型已通過。原工作區既有型態／Trace 輸入規劃等未提交工作保留，不混入本次提交。
+
+## 2026-10-06
+
+### 整合來源範圍、最小測試與實測補強流程
+
+- 在 ARCHITECTURE 固定完整流程與各階段責任；沿用同一主流程，將來源選擇、seed 驗證、審查契約修正、候選追蹤及品質實驗抽為獨立模組。
+- 專案區新增批次來源勾選，依專案記住選擇並顯示新檔／備份／fixture 提示；不自動排除。批次保存所選及排除清單，同來源的重複限定目標只診斷一次。初始化入口在分析鎖釋放後啟動；中止、切換或舊掃描回覆不能啟動過期選單／初始化。
+- 完整模式首份 Writer 候選先獨立執行並保存 seed，再獨立驗證 Trace、合併、審查與量測。合併失敗保留 seed，修訂及 Trace 去重不得移除已通過方法；生成測試的 import／fixture 錯誤明確屬 validation，不誤報為原應用缺相依。
+- Reviewer 的契約無效回覆最多修正一次，與原請求共用 deadline／總預算；仍無效保持 incomplete。取消、傳輸及預算失敗不發起契約修正，沒有放寬審查與品質判定。
+- 補測優先使用可支援的單一實測缺口。數值邊界規劃涵蓋 builtin／Mutatest；同步普通物件可從已通過測試的 literal 呼叫提出最多 6 個實驗，每個獨立隔離程序、最多同一目標 2 次呼叫，實測回傳、狀態及內建例外 args。只有可重播且通過獨立基線的觀測才能建立 host 測試，下一輪重新審查及量測；不增加多餘 Writer 請求。
+- host 案例綁定來源／target／constructor／call sequence／root／import fixture hash，未知 I/O、mock setup、descriptor、async 狀態實驗保持 unsupported。候選去重支援 async 測試及各層 fixture／global context；改名或重複案例不觸發相同量測。品質回退同步還原已接受的 host bundle。
+- 拒絕候選保存有界 Python 與逐次 gate／reason／hash；完整 provider 回覆只保留 hash／長度。失敗報告連結僅供檢視的候選，原始碼複製及憑證不保存；模型疑似憑證回覆在格式回退前停止，Journal 與補測採同一去敏原則。
+- 重用工作區已準備的相關回歸修正：依目前突變集合核對計數、顯式 strict 情境、Python interpreter、索引辨識測資與序列測試執行；沒有改動品質門檻。既有型態／Trace 輸入規劃工作保留，不混入本次功能提交。
+- 驗證：隔離提交副本完整 Node 563 項，第二輪 562 通過、1 項揭露選用分析師的 API 備援被過度中止；縮小條件後該真實 Python／突變整合複驗通過。最終修改另驗 seed／批次修復 19 項、品質實驗／安全回覆／預算／審查修正／恢復限制 21 項，全數通過；沒有把補跑結果冒充單次全套零失敗。
+- Python 全套 358 項：357 通過、1 項因目前帳號無 symbolic link 權限而略過；最後 Trace 去重保護再驗相關 10 項（含 2 個新增回歸）全過。舊核心 Mocha 15／15、TypeScript、lint、生產建置、Webview 語法、tracked／Git 歷史密鑰掃描及差異檢查通過。未新增模型品牌特例或降低品質／隔離門檻。
+- 已驗證實例：真 Mutatest 購物車 state 補測由 15/20 提升到 19/20；另一普通容器整合以一次 Writer 產生 seed，經工具補測後第二輪真 builtin 突變 100%。這些固定回覆／工具回歸不代表實驗室模型整批通過，原批次仍需 pull 後重跑；1B～5B 相容能力亦未實測認證。
+
+## 2026-10-05
+
+### 完整回歸與最新 complex_test 結果重播
+
+- Node 全套 518 項：初輪 517 通過、1 項因本輪 TEMP 路徑過長觸發既有路徑保護；該完整批次案例改短路徑重跑通過。早期沙箱執行的 asyncio 逾時以最小範例確認為環境限制，後續回歸改一般環境，未停用產品隔離 gate。
+- Python 全套 361 項：354 通過、7 略過、0 失敗。依使用者授權在專案 .venv 以 --no-deps 安裝 Mutatest 3.1.0，coverage 保持 7.16.0；外部引擎 13 項補跑全過，補齊原先略過的 6 項。剩餘 1 項因 Windows 符號連結權限而略過；不同案例合計 360 項具通過證據。
+- 新環境的 TypeScript／Python Mutatest 交接 5／5、舊核心 Mocha 15／15、既有快取 VS Code 冒煙 1／1 通過；Webview、型別、lint、生產建置及 tracked files／可達 Git 歷史密鑰掃描通過。未把補跑結果冒充原始整批零失敗。
+- 同步負面測試預期：當 sourceRoot 不含目標且沒有任何來源版本紀錄時，預檢應明確拒絕，不能回傳可沿用的成功證據。
+- 最新批次三個來源雜湊核對一致：保存的 core 候選 12 項有 2 項錯誤例外預期；login 候選 9 項有 3 項失敗，確認目標呼叫位於 Mock scope 外且部分字串預期錯誤。這與歷史最後被拒絕候選的 AST／provider 簽名診斷分開。
+- checkout 保留測資 8／8 通過；同一 Mutatest 規則、來源／測資雜湊與 12 個候選 ID 重播仍為 8 killed／4 survived（66.67%），沒有 timeout／error。人工最小修正副本三目標共 30／30 通過；checkout 補精確布林斷言與混合條件案例後，同集合 12／12 killed（100%）。
+- 原始來源與歷史結果保留，驗證產物另存在本機 tmp/regression-20261005-32265f8a/。未呼叫外部 LLM／重跑真實 codellama 生成或 Reviewer，不將人工修正測資的結果當作模型新一輪完整通過；原有未提交修改不混入本輪提交。
+
+### 修復來源版本核對、突變程序交接與預算停止
+
+- 完整品質 checkpoint 保存帶版本的來源絕對路徑／雜湊；批次重讀及結束時重新核對。相依被修改、刪除、同名不同路徑變更，或舊資料缺少可核對來源版本時，不再沿用完整通過；歷史報告本體不改寫。
+- 受控模組預檢另外記錄實際載入的專案 Python 來源，涵蓋常數、模組別名、轉遞相依與循環匯入；與提供模型的 callable 語境分開。新紀錄拒絕空白／無效版本清單。函式內尚未執行的動態匯入、原生套件及外部環境仍不在此來源快照範圍，不宣稱完整涵蓋所有執行期相依。
+- TypeScript 啟動變異程序時沿用一般隔離測試的 PYTHONPATH／環境，保留深層 package 需要的專案根目錄；不以 cwd 猜測可匯入路徑。
+- 非零結束碼保留引擎、exit code、已知 stdout 錯誤碼及有界、去敏的 stderr 例外摘要，寫入失敗診斷與報告；不接受非零程序所附的成功 JSON，也不將任意 stdout／原始 traceback 全文寫入報告。
+- Python baseline 只有結構化、可歸因於實際測試方法的失敗才分類 failed；fixture／runner／缺失紀錄屬 error，逾時仍為 timeout，皆不得算 killed。加入只執行 baseline、零變異候選的回歸。
+- 本地 AnalysisStageError（含目標預算耗盡）立即停止，不再套用網路重試及退避；真正的暫時傳輸失敗仍保留有限重試。
+- 驗證：直接相關 Node 34／34、Python 4／4（含多個子案例）；型別、lint、生產建置通過。交接整合使用固定模型回覆、真實預檢／隔離測試，於變異程序邊界回傳固定錯誤，確認環境及報告診斷。未呼叫外部 LLM、未執行完整變異測試或全套回歸。
+- 唯讀核對指定結果 `complex_test_2026_10_04_17_13`：7 個目標已處理，但無完整通過（2 failed、2 dummy、2 stub、1 stagnated）。login_user 候選混入相依函式的 provider 引數；checkout_order 為 8／12（66.67%），And→Or、Eq→GtE／LtE、False→None 存活。assertFalse 無法區分 False／None，缺少條件真假混合案例；需以實際目標執行驗證新增案例。這是修復前的歷史結果，尚未重跑模型或宣稱上述測資品質問題已解決。
+
+## 2026-10-01
+
+### 可選外部突變引擎、內建 v2 與隔離並行量測
+
+- 設定與中英文側欄新增 `llmUnitTest.mutationEngine`（builtin／Mutatest）及 `llmUnitTest.mutationWorkers`（1–4，預設 2）；單檔與批次共用、記住選擇，執行中鎖定。Mutmut 明確標示尚未支援。外部引擎在模型請求前核對所選 Python、套件版本與 API，失敗停止並說明原因，不再靜默改用內建。
+- Mutatest 3.1.0 提供真實外部 AST 變異規則，搭配共用隔離執行器；採 AST-only 安裝 `python -m pip install --no-deps mutatest==3.1.0`，不啟動舊 CLI 或導入其舊 coverage 相依。其他版本尚未驗收；其連鎖比較只變第一個運算子的限制仍保留。
+- 內建新執行改用 `builtin-ast-v2`，增加數值鄰界、算術／比較／一元運算、字串、容器與索引變異；排除 docstring、巢狀 callable、default／decorator 與範圍外程式，保留 v1 歷史讀取及重建。全集先經 noop／AST 去重／編譯篩選，不同版本或集合不直接比較分數。
+- 每個 mutant 使用獨立目錄與 guarded unittest 子程序，並行共用階段 deadline 與父程序樹取消。新預設突變預算 60 秒，明確保存的自訂時間不覆蓋；未測／逾時／錯誤不得算 killed。
+- 新增結構化逐測試失敗歸因與耗時。只有實際方法失敗可記 KILLED；loader、fixture（含 asyncSetUp／fixture subTest）、背景錯誤、隔離阻擋、缺紀錄與零測試皆不算 killed。TypeScript 與 Python 以共享引擎版本契約核對，v2／外部 killed 缺歸因不得評分。
+- 最終報告保留原突變表及純文字程式碼對照表，另顯示實際引擎／規則版本與逐項失敗測試、耗時。被拒絕的外部來源／測資證據先保存再停止，避免錯誤被版本訊息掩蓋。
+- 同一份 22:13 BMI 保留測資唯讀重播：v2 96／96 完整量測、85 killed、11 survived（88.54%），2 workers 約 24.7 秒，無 timeout／error；來源／測資 hash 與原批次相同。舊 v1 為 19 候選，分母不同不宣稱分數退步；原始結果未改寫。
+- 驗證：隔離交付副本 Node 直接相關 60／60；Python 直接相關 67／67（含真實 Mutatest 13 項及背景錯誤分類補強）；型別、lint、生產建置、Webview 語法、提交範圍密鑰掃描及差異檢查通過。真實 Python／coverage／內建 v2 與 Mutatest 完整生成整合使用固定模型回覆，並驗證不可用引擎在生成前停止、錯誤 hash 拒絕、候選改善／回退與批次重讀。
+- 本次依加速開發安排未跑全套回歸；尚未重新執行實驗室模型／雲端 API，不將固定回覆整合或舊測資重播當作模型新一輪通過。原有未提交型態／Trace 工作保留，未混入本次提交。
+
+## 2026-09-30
+
+### 突變對照改為簡單文字格式
+
+- 程式碼欄位改用簡單 Markdown 文字形式，直接保留 `height_m = height_cm / 100` 等原始字元與空白，不再輸出 HTML code 標籤、nbsp 或一般字元的數字編碼。多行片段以 ↵ 標出換行；反引號與表格分隔符仍妥善處理。
+- 保留原表、逐項新表及所有量測結果，同步更新 22:13 的展示副本。驗證僅執行直接相關報告測試、型別、lint、建置與差異檢查，未跑全套回歸。
+
+### 逐項顯示突變前後程式碼
+
+- 保留最終報告原有的突變摘要表，下方新增逐項程式碼對照表；每筆各列位置、突變種類、修改前／後程式碼與原執行結果，繁體中文及英文同步支援。
+- 內建引擎從實際 AST 變異保存有界 `mutation-code-v1` 快照，不從運算子名稱或測資推測改寫。候選 ID、分數與執行邏輯不變；舊紀錄或無法完整保存的片段明示未保存，不補造測試與突變對應。
+- 22:13 BMI 的 19 個突變已逐筆核對來源雜湊及候選身分，另產生 `final_report_with_mutation_code.md` 展示副本；原報告與量測 JSON 保留，副本標示程式碼依相同來源重建，未重新呼叫模型或執行該批測試。
+- 驗證：交付副本直接相關 Node 12／12，Python 直接相關 20／20；型別、lint、生產建置及差異檢查通過。包含真實 Python 突變至 TypeScript 的快照傳遞、身分／計數不變、特殊字元、雙語表格及舊紀錄相容。本次依加速開發安排未跑全套回歸，既有未提交工作保留且不混入提交。
+
+### 加速開發驗證與核對 Gemma 雲端 HTTP 500
+
+- 依使用者要求，日常交付改採直接相關回歸與必要型別／靜態／建置檢查；全套回歸延後至里程碑或 Demo 前安排。文件修改只檢查差異，明示未執行項目；產品的執行及品質 gate 不變。
+- 核對 `bmi_2026_09_30_21_52`：`cloud/gemma-4-31b-it` 的分析師及 Writer 分別約 4.96、4.77 秒後遇到 HTTP 500；估算輸入分別為 1,833、3,014 tokens，均未超過本次本機輸入預算。Writer 的一般文字請求也失敗，尚未生成測資或進行 coverage／mutation，不能將此結果歸因於計算斷言、審查或突變品質。
+- 現有程式已對生成請求提供最多三次有限傳輸嘗試，HTTP 500 不觸發思考量／格式不支援回退。紀錄不足以確定伺服器內部觸發原因；本次未改寫 provider 請求、未呼叫付費雲端 API、未宣稱 HTTP 500 已修復。
+- 驗證範圍：僅文件差異檢查及上述既有紀錄核對；本次未執行 Node／Python 回歸、型別、lint 或建置，未更動產品程式。既有未提交修改保留。
+
+### 混合例外測資修復與 Demo 摘要
+
+- 修正同一方法前方正確例外斷言阻止後方修復的缺口；保留正確 TypeError／ZeroDivisionError 區塊，布林數值運算保持 Python 語義與原輸入型別。所有修改仍須相同 typed 輸入的隔離 Trace 及正式測試核對。
+- Bug Fixer 無可用格式候選時交 Writer 接手一次，保留原始失敗、passing 案例與總預算；Writer 未成功才回到外層處理，不因一次格式錯誤立刻降 Tier。
+- 精簡 Reviewer 指令，明示合法匯入形式、同版測試已通過隔離執行、空 findings 可接受；不放寬證據行／語意檢查。Writer 例外語法範例改用 ExceptionType，避免將 ValueError 誤當業務規則。
+- 依 Demo 需求，結果卡與最終摘要在工具達標時省略審查未完成標籤，顯示「測試執行與量測達標」。詳細報告及機讀審查狀態保留，不增加完整通過或批次通過數，歷史報告不改寫。
+- 驗證：交付副本 Node 490／490；Python 共 301 項，300 通過、1 項 Windows 符號連結案例略過（Git 專屬掃描在原儲存庫執行）。21:30 原始 18 案例經 8 處同輸入驗證修正後全數通過，無額外模型請求；格式失敗交接、中英文摘要、缺失證據及真實 Python／Trace／coverage／mutation 整合回歸通過。型別、lint、建置、Webview、密鑰／歷史掃描與差異檢查通過。
+- 限制：本機使用固定模型回覆及原測資重播，未重跑實驗室 codellama:13b；不宣稱新的 Reviewer 提示已在該模型實測通過。既有未提交型態／Trace 工作保留，原受測來源與歷史結果不改寫。
+
+
+### 將新執行的突變驗收門檻改為 80%
+
+- 驗證：交付副本 Node 484／484；Python 共 298 項、297 通過、1 項 Windows 符號連結限制略過（Git 專屬案例於原儲存庫執行）。型別、lint、生產建置、Webview、工作區／歷史密鑰掃描及差異檢查通過。固定模型回覆搭配真實 Python／coverage／mutation 驗證 BMI 17／19（89.47%）可達標並通過批次重讀；實驗室模型新一輪仍待重測。
+
+- 依使用者要求，正式新執行採 `standard80-v1`，突變分數至少 80%；行覆蓋 100%、完整分支、完整候選集合、無 timeout／error、成功基線與 Reviewer 完成要求保留。存活突變保留在分母與報告，不用刪除候選提高分數。
+- TypeScript 與 Python 共用版本化政策；歷史 `strict100-v1` 仍依原 100% 門檻驗算，fixture manifest 原驗收門檻保留。批次與 scorecard 依綁定政策重新核對，舊報告不回溯升格。
+- 最終報告以中英文顯示實際突變門檻；分數已達標但審查未完成時，存活突變不再列為失敗原因。工具量測達標即停止品質補測，Reviewer 未完成仍明示，不能宣稱完整通過。
+- 新增 80% 臨界值、79.5% 不四捨五入通過、17／19、舊政策不變、未完整量測／覆蓋／審查不可通過、跨語言一致與批次驗證回歸。
+
+### 修正生成測試的例外預期與型別斷言
+
+- 驗證：獨立交付副本 Node 483／483；Python 共 296 項、295 通過、1 項 Windows 符號連結限制略過（Git 專屬案例於原儲存庫執行）。型別、lint、生產建置、Webview、工作區／歷史密鑰掃描與差異檢查通過；完整流程回歸確認修正後仍執行真實突變。
+
+- full 的數值技能同時處理實際 `FAIL`／`ERROR`。受限運算與同輸入隔離 Trace 都確認為內建 `ZeroDivisionError`／`TypeError` 後，才將失敗呼叫及其不可達的回傳斷言改成 `assertRaises`；正確捕捉預期例外的測試為成功，其他不符預期的結果仍為失敗。工具不把任意執行錯誤直接標成通過。
+- 保留正確的 `type`／`assertIsInstance` 檢查，修正其後數值預期；保留 passing 方法、原輸入、setup、先前成功斷言。共享 fixture 例外、獨立後續工作、不明語法、不可 assertion／不一致的觀測均不自動改寫。
+- 每次至多 12 組 typed 輸入，以每批至多 6 組分批核對；工具最多嘗試兩次，有效候選不占模型修訂額度，仍受全域候選與時間預算限制。`numeric-test-skill-v2` 保存正常回傳／例外證據及各批觀測；完整模式的 coverage／Reviewer／mutation gate 保留。
+- 原失敗候選回放：20:23 的 20 個測試、20:15 的 27 個測試均在真實受控 Python 執行中通過，修正分別為 11 處及 2 處，無額外模型請求。原實驗室報告與受測來源未改寫；實驗室模型新生成結果仍待重測。
+
+### 加入可執行的數值計算技能
+
+- Skill Dispatcher 依來源與 AST 選取 `numeric_calculation` 卡片，排除不支援的 class／外部呼叫，避免占用小模型提示預算；不綁模型／provider／業務名稱。Writer 選擇案例，擴充套件呼叫本機受限 AST 計算器，無須模型原生 tool calling 或額外 API 回合。
+- full 的失敗測資先提出計算修正，再以原始 typed args／kwargs 執行隔離 Trace，核對回傳、來源與相依版本後才能採用。涵蓋算錯的數值／分類、tuple 拆解與簡單 fixture；同輸入證實正常回傳時，可將單呼叫的錯誤例外斷言改為精確回傳斷言，真正的零分母例外保持原樣。
+- 超出範圍、缺觀測、結果不一致、來源改變或預算不足均不採用猜測。passing 方法、輸入、隔離與品質 gate 保留；修正後重跑 unittest／coverage／Reviewer／mutation。execution 模式仍保留原有來源算術路徑，不暗中加入 Trace。
+- 當輪 `numeric_*.json` 與 `numeric-skill` 事件記錄修正前後 hash、計算步驟、同輸入觀測及失敗原因；中英文進度與分輪失敗報告同步呈現。計算核對不代表完整品質或獨立需求驗證。
+- 驗證：獨立交付副本 Node 480／480；Python 共 292 項、291 通過、1 項 Windows 符號連結限制略過（Git 專屬案例於原儲存庫執行）。型別、lint、生產建置、Webview、工作區／歷史密鑰掃描、差異及既有修改保留檢查通過。涵蓋兩批 BMI 的數值／分類／例外失敗、typed 輸入、缺失／矛盾／不可 assertion 觀測、來源改變、案例預算、原有降階與真實突變。實驗室模型尚待重新測試，本機使用固定模型回覆搭配真實 Python 執行與突變。
+
+### 分離每個函式與每輪產物，保存回滾前候選
+
+- 驗證：交付副本 Node 477/477；Python 共 281 項、280 通過、1 項 Windows 符號連結案例略過（Git 專屬案例在原儲存庫執行）。型別、lint、生產建置、Webview、密鑰掃描與差異檢查通過。完整 Node 初跑有讀取位置待更新及一項並行負載超時，修正讀取並以並行數 4 重跑全套通過，未放寬產品 gate 或超時。
+- 函式第一層保留 `final_report.md`、`failure_report.md` 與 `loop`；每輪使用 `loop/<輪次>` 保存流程、失敗報告、測試、coverage、invocation、mutation 與輸入補測計畫。共用 journal、不可變基線與稽核流程置於 `loop/_run`。
+- 執行候選在修訂／回滾前保存 hash 命名快照；分輪報告不套用後續輪次的分數或終態，函式最終報告仍綁定最後保留候選。英文標題與連結同步支援。
+- 批次統計、scorecard、執行證據重讀及匯出支援新舊格式；basename、hash、來源與 run 契約保持不變。相依、呼叫站與批次來源掃描排除分輪產物，避免生成測試污染下一次分析。
+- 分析 BMI 17:47／17:52：環境與請求均完成；前者因 Writer 錯誤斷言／重複修訂停止，後者第二輪錯誤例外與 Bug Fixer `no-method-change` 後保留第一輪 100% 覆蓋率、12/19 突變分數，Reviewer 仍未完成。原始資料未改寫，另產生閱讀副本；未重跑實驗室模型。詳見 `docs/BMI結果分析_2026_09_30_1747_1752.md`。
+
+### 精簡最終結果，獨立保存失敗與完整流程
+
+- 最終報告只顯示選定目標、模型、最終狀態／失敗原因、目標覆蓋率、突變分數、保留測資及突變案例；不再混入 AST／相依程式碼、各輪候選和分析過程。分數與測資核對同一 hash，缺量測明示 N/A。
+- Dummy、未執行的 Stub、沒有函式的檔案與批次未開始目標不列入最終結果。批次依本次 manifest 彙整，完整目錄、略過與未完成仍保存在稽核清單；匯出器不將有流程報告的明確略過目標誤列缺檔。
+- 新增 workflow_report.md 與獨立 failure_report.md；後者保留首次／最近失敗、逐步時間線、角色修復、Tier 降級、各輪量測與後續處理。批次失敗報告連到逐目標完整流程；原始 provider 回覆改存 hash／長度，不再複製完整回覆至新報告／事件。
+- scorecard 從綁定的 manifest 讀取精簡報告 provenance，仍驗證 run/source/test、完整品質基線及 Reviewer，不拼接跨輪最高分。繁體中文及英文都適用。
+- 驗證：獨立交付副本 Node 476／476；Python 共 279 項，278 通過、1 項 Windows 符號連結案例略過（Git 掃描回歸於原儲存庫執行）。涵蓋報告排除／候選身分／雙語、真實 Python 執行／多輪突變、scorecard／ZIP 相容；型別、lint、建置、Webview、密鑰掃描與差異檢查通過。既有未提交型態／Trace 工作保留，不混入交付；未重跑實驗室模型，歷史結果保持原樣。
+
+
+### 補齊英文介面、環境安裝清單與執行報告
+
+- 補齊 Cloud 設定、驗證模式、Tier 選項、初始化入口、儀表板、動態結果卡、資料夾對話框與通知的翻譯；相依盤點、安裝清單與確認操作也共用語言設定。
+- 模型資格、structure／Reviewer／Bug Fixer、預算及取消、Trace／coverage／mutation 訊息與單函式／批次報告接上翻譯。保留機讀狀態、資格模式及 gate；插入的檔名、程式碼、模型回覆與 Python 證據不翻譯、不改寫，歷史報告保持原樣。
+- 從設定頁變更語言會同步側欄，側欄會更新有效的工作區語言覆寫；進行中的分析固定啟動語言，介面延後至該次分析結束再重載，不讓舊分析清除新分析的狀態。
+- VS Code 命令面板、活動列與設定頁新增 `package.nls.json`／`package.nls.zh-tw.json`，依 VS Code 自身顯示語言載入。擴充套件側欄、通知及新報告遵循 `llmUnitTest.language`。
+- scorecard 支援新英文報告欄位與中斷標記，仍核對保留候選與品質證據；英文起始 Tier 不能冒充保留 Tier，缺少基線不能計為通過。英文錯誤保留既有失敗分類。
+- 驗證：獨立交付副本 Node 474／474；Python 共 277 項，276 通過、1 項 Windows 符號連結案例略過（Git 掃描回歸於原儲存庫執行）。英文完整品質整合使用真實隔離 Python 與多輪突變，驗證降級、保留策略與未完成審查；execution 整合驗證未執行突變的英文說明。補強字典／參數、Webview、安裝腳本、語言覆寫／刷新及 scorecard 證據回歸通過；型別、lint、建置、密鑰掃描與差異檢查通過。
+- 原有未提交型態／Trace 工作保留且不混入交付；未呼叫實驗室模型或雲端 API，不宣稱原始批次已通過。操作與語言範圍見 `docs/英文介面與報告.md`。
+
+### 明示 Tier 降級與階段意義，依存活突變補測邊界
+
+- 首頁新增指定／起始 Tier、逐輪起始、降級原因與保留候選摘要；事件與機讀歷程同步保存。起始路由不再誤稱全程實際 Tier，scorecard 仍依保留候選證據評分。
+- `structure` 拒絕訊息顯示原因與 Writer 修訂路由；`validation`、Reviewer、checkpoint 與模型請求使用具體說明。完整品質與僅執行模式分開描述，內建突變啟動訊息明示正在執行基線與突變集合。
+- 同來源的完整內建突變量測可觸發有界 AST 數值輸入規劃；只反推輸入實驗，經原有逐案隔離 Trace、獨立基線、合併執行與突變重新驗證後才採用成果。品質分析連續兩次契約無效後停止額外請求，保留實測缺口指引；角色、模型與 provider 不設白名單。
+- AST 去除模型類別內完全相同且無 fixture／helper／decorator 的 Trace 副本，保留 runner-owned 基線與所有不同案例。前置分支涵蓋下限的突變僅標示條件式等價候選，不改動分母或品質政策。
+- BMI 14:01 原來源 hash 核對一致，本機沿用原生成測試重播：補入 5 組隔離觀測、移除 10 個重複方法，突變由 12/19（63.16%）提升為 17/19（89.47%）；沒有新增模型請求，原來源與歷史產物保持不變。剩餘 2 個候選未排除，Reviewer 未重測，因此不宣稱完整通過。
+- 驗證：獨立交付副本 Node 468/468；Python 共 276 項，275 通過、1 項 Windows 符號連結案例略過（Git 掃描回歸於原儲存庫執行）。涵蓋真實 Python 四輪突變、首次降級與後續恢復、品質角色成本限制、重複方法與未知設定保留，以及新標頭不得充當 scorecard 的保留 Tier。型別、lint、生產建置、Webview、密鑰掃描與差異檢查通過。
+- 限制：輸入規劃目前限定有數值種子的頂層同步函式及有限算術；未知 helper／物件狀態／簽名不猜測。既有未提交型態／Trace 工作不混入交付；實驗室模型生成仍待 pull 後復測。詳見 `docs/修復結報_2026_09_30_品質補測.md`。
+
+### 恢復完整品質預設，明示是否執行突變
+
+- 依使用者澄清，正常流程預設 `validationMode=full`；設定、側欄、單檔／批次入口、模式解析及環境工具準備一致包含完整品質需求。`execution` 僅保留為明確選用的生成測試執行診斷，不代表整個專案可運作。
+- 模式選單明示「含突變」／「不跑突變」，即時更新範圍說明；僅執行模式停用突變時間與完整品質迭代欄位，執行中鎖定模式。結果卡及報告開頭指出未執行突變及切換後重跑的方式；既存結果不改標，品質與隔離 gate 保持不變。
+- 分析 `bmi_2026_09_30_13_35`：codellama:13b 一次請求約 9.6 秒，4 個失敗案例由既有算術修復更正 5 個預期常數後 4/4 通過；該批選用 execution，所以 mutation 為 deferred，並非 API 或突變工具故障。
+- TypeScript 編譯範圍限定 `src/**/*.ts`，避免舊報告中的 TypeScript 副本造成 rootDir 建置錯誤，保留既有產物。
+- 驗證：本次交付的獨立副本 Node 464／464；Python 268 項中 267 通過、1 項 Windows 符號連結案例略過（Git 專屬掃描在原儲存庫執行）。單檔及批次省略模式時，整合回歸實際執行 Python、coverage 與 mutation；模式傳遞、執行模式保留、結果提示與環境需求回歸通過。交付副本及現有工作區型別、lint、生產建置通過；Webview 語法、tracked files／可達歷史密鑰掃描及差異格式檢查通過。
+- 限制：已明確保存 execution 的使用者需切換一次完整品質；預設值不覆蓋既有選擇。本機使用模型回覆替身，不代表實驗室 codellama:13b 的完整品質已通過。既有未提交型別／Trace 工作保留且未混入提交，原受測程式與實驗室產物未修改。詳見 `docs/修復結報_2026_09_30_完整品質預設.md`。
+
+## 2026-09-29
+
+### 修正測試誤擋、局部修復與跨專案設定，新增 BMI 專案
+
+- 匯入初始化設定依受測根目錄選用；其他專案或已移除專案的設定不再阻擋 BMI 等乾淨專案，也不會被套用或刪除。相同根的設定仍核對來源版本，切換後未 mock 的 mkdir 仍受阻。全檔案結束文字區分流程錯誤／受阻與函式通過。
+- Mock 行為分析支援明確標準 Mock 回傳子物件的無參數設定呼叫，繼續核對後續目標呼叫和父 Mock 斷言；自行呼叫過的子 Mock、別名、任意呼叫與重綁定不得充當行為證據。重放車輛專題 `_connect` 原產物已通過。
+- Reviewer 拒絕以標準 patch 匯入行指控非法 patch，以及將來源依賴 patch 誤認成所選目標；錯誤審查維持未完成，保留可執行基線。Bug Fixer 接受唯一 Python 區塊外說明與可證明的單方法 class 包裝，保留其他測試／fixture，仍須通過 AST 範圍和隔離執行，不放行完整 class 重寫。
+- 小模型提示不再僅因使用 SQLite 就提供無關 SQL／context manager 範例；明示真實 target import、Mock 消費位置及相依回傳不等於目標回傳，並精簡重複文字以維持既有模型預算。AI 輸出格式錯誤分類為 model-format。
+- 新增 `examples/bmi`：標準庫計算／分類／報表、命令列入口、8 個測試方法與操作說明；匯入無副作用。整合回歸從全檔案入口探索四個函式，逐一核對真實呼叫及完整隔離證據，來源保持不變。
+- 驗證：乾淨副本 Node 451／451，最後多區塊防繞過補強後重點回歸 12／12；Python 257 項中 255 通過、1 Windows 符號連結案例略過、1 Git 專屬掃描另於原儲存庫通過，合計 256 通過／1 略過。型別、lint、生產建置與 Webview 通過。BMI 8／8，原 bmi.py 的隔離案例亦通過；車輛六個局部重放均通過結構／binding／隔離 runner，錯誤 Reviewer 重放被拒絕。完整證據與限制見 `docs/修復結報_2026_09_29_BMI.md`。
+- 限制：整合回歸採固定模型回覆替身，不能代表實驗室模型的實際生成成功率。完整品質仍要求原 coverage／mutation／審查政策；未支援或歧義的修復包裝維持拒絕，不修改被測原專題。既有未提交的型態分析工作未混入本次交付。
+
+### 預設先做執行驗證，完整品質保留獨立模式
+
+- 新增「驗證目標」，預設 `llmUnitTest.validationMode=execution`。執行模式保留 AST／相依／caller 語境、匯入預檢、明確初始化設定、有效斷言／binding／簽名檢查與原隔離 runner；Trace、語意規劃、coverage、突變及品質 Reviewer 延後，不做速度優化。`full` 保留原品質政策與流程。
+- Writer 使用來源與明確控制之 Mock 建立待執行假設；有限修訂沿用 Writer／Bug Fixer 路由與單方法範圍 gate。Auto 未完成 Writer 資格時提示測試連線或手動 Tier，不改用 Trace fallback。執行模式的環境準備不要求補裝 coverage／突變工具，但必要相依、版本檢查及安裝清單確認保留。
+- 每次執行候選獨立保存，成功證據核對真實 target code frame、source／test／run、案例統計與完整隔離始末；空測試、全 skip／expectedFailure、目標被 mock、來源改變及缺少紀錄不得通過。報告／介面明示「執行驗證通過；完整品質尚未驗證」，未測分數保持 null，批次重算執行證據且不增加完整通過數。
+- 驗證：排除既有未提交型態分析工作的獨立副本 Node 全套 448／448；Python 全套 256 項中 255 通過、1 項 Windows 實體符號連結案例略過，完整歷史密鑰掃描通過。最後補上初始化替身與來源變更終態後，獨立副本重點回歸 34／34、型別／lint／生產建置／Webview 檢查通過，工作區建置亦通過。涵蓋實際執行成功、單方法修復、偽目標／無關斷言、全略過、未 mock 的 mkdir、匯入受阻、取消、證據竄改與批次重算；測試中禁止啟動延後的工具。
+- 限制：只證明已執行案例及目前 Mock 設定下可執行，不證明整個應用／需求正確或外部 GUI／檔案／資料庫整合。模型、未滿足的初始化條件與來源歧義仍可能失敗；原專題未修改，實驗室尚待更新重跑。操作與交接規則見 `docs/執行驗證模式.md`，既有未提交型態分析工作保持原狀。
+
+### 程式／函式分層輸出與初始化作用域修正
+
+- 新結果採「批次／程式檔／函式測試」固定兩層結構，同一來源集中、不同位置的同名程式分開。source.json 與 target.json 保存完整來源身分，短碼碰撞核對完整資料後另配目錄；同分鐘重跑不覆寫，新增層級納入短路徑預算，批次清單記錄實際巢狀報告路徑。舊結果不搬移或改寫。
+- 19:29 批次的兩份 main.py 於頂層啟動 Flet socket server 時受阻，共影響 86 個目標；原始碼中函式內 local import 被初始化建議器誤認為模組 binding 變動，導致漏提入口替身。修正為略過函式／lambda 的延遲本體，同時保留名稱、decorator、default、annotation 的定義時檢查；實際應用 callback 仍不自動略過，沒有增加框架專用判斷。
+- 含空白的固定 runtime policy 標籤（如 network connection）現在正確分類為載入副作用，提供初始化設定入口；仍拒絕任意操作文字，不放行網路或修改受測原檔。
+- 本地 output 保存該批 215 個目標的逐項分析及統計：1 個完整通過、210 個失敗，另 4 個其他終態；692 次模型請求約占總耗時 83%。分析區分環境、測試證據、格式／逾時與重複定義問題，不將所有失敗歸因於受測程式。
+- 驗證：排除既有未提交型態分析工作的獨立副本通過 Node 全套 446／446、Python 初始化／匯出 21／21、scorecard 14／14；型別檢查、lint、生產建置及 Webview 語法通過，目前工作區建置也通過。涵蓋巢狀報告、同名來源隔離、重跑與短碼碰撞、函式內 import／assignment、定義時重綁定及實際 callback 保持阻擋。
+- 限制：新兩層結構仍需較短輸出根；實驗室須更新並重跑初始化精靈確認兩份 main.py，未宣稱遠端已可載入。無關範例污染、角色輸出失敗、備份範圍與歧義任務去重列為後續改善，本輪未修改角色提示、原專案或既有型態分析工作。
+
+## 2026-09-28
+
+### 依實測呼叫產生通用初始化建議
+
+- 設定精靈以真實隔離例外、原始 AST、呼叫鏈及已載入函式身分提出替身；支援可驗證匯入別名，沒有框架或專題名稱白名單。Path.mkdir 建議也改為確認實際 callable，不再僅憑 os.mkdir 訊息猜測。
+- 自動外部入口僅處理回傳值未使用的直接模組頂層呼叫，綁定受阻行號與已確認來源版本。同一函式多次呼叫逐處提案；來源變更後拒絕舊設定，再由精靈重新診斷、預覽確認。保留既有 mkdir、configFiles 及手動入口；取消不保存，不修改受測原檔。
+- 各執行階段共用行號限制；內建突變副本若因 AST 重建改變行號，只能對應相同未變更的頂層呼叫，無法確認則停止。需要回傳值的其他呼叫不會被同一入口設定一併略過。
+- 驗證：獨立副本 Node 全套 445／445、Python 全套 254 項中 253 通過及 1 項 Windows 實體符號連結測試略過；型別檢查、lint、生產建置、Webview 語法與完整歷史密鑰掃描通過。最後補強重複入口與多行呼叫案例後，獨立副本再跑 Python 初始化回歸 18／18 及 Node 匯入流程 6／6 通過，工作區亦通過建置與 18 項初始化回歸。
+- 限制：缺套件／API、一般例外、逾時、應用 helper／callback、類別及動態或歧義呼叫不自動建立替身。未使用回傳值不保證初始化狀態可省略，仍須審閱預覽並執行正式測試。實驗室三個入口尚待新診斷確認；文件撤回缺少 flet.app 的未證實歸因，保留原專案與既有未提交型態分析工作。
+
+### 匯入初始化之後的具體例外診斷
+
+- 修正設定精靈與批次預檢只留下 module-import 的資訊缺口：Markdown 新增逐模組診斷及來源位置，JSON 保存有限長度的例外類型與原因。可能含憑證或連線網址的訊息省略，不複製任意子程序輸出或完整 traceback；報告表格轉義 Markdown 字元。
+- 模組自行拋出的 AttributeError 即使缺少 Python name／obj 欄位，也可由嚴格的標準訊息辨識缺少的模組 API；不從任意文字猜測 API、不自動補出不存在的函式，也不改變預檢受阻狀態。其他錯誤保留具體例外類型。
+- 驗證：不含既有未提交型態分析修改的獨立副本通過 9 項 Node 匯入／設定／批次回歸，以及 8 項 Python 初始化替身回歸；型別檢查、lint、生產建置通過。涵蓋 mkdir 套用後下一個 ValueError 的落盤、無 metadata 的 AttributeError、來源不變及敏感訊息省略。
+- 限制：實驗室回報 Flet 0.28.3 的 app 可呼叫，但三個入口檔的新例外尚待重新預檢確認。本次只修復診斷，不修改受測原檔、安裝套件、套用實驗室設定或宣稱三個模組已可載入；既有型態分析工作保持未提交。
+
+## 2026-09-24
+
+### 最終狀態優先呈現、批次前置匯入預檢與初始化設定預覽
+
+- 報告開頭及結果卡改以最終狀態判定完整通過；高突變分數使用中性色，階段 passed 明示只代表該步驟。保留候選、環境受阻、審查未完成、略過與來源變更不會顯示綠色完整通過。批次摘要區分通過、環境受阻、失敗、略過／未評分、未完成，批次只開啟彙整報告。
+- 批次在任何模型請求前逐來源做 AST 與隔離匯入預檢，先保存來源清單與預檢結果。存在障礙時先開啟診斷；關閉提示即停止、未執行目標維持未完成，只有明確選擇繼續才執行並保留受阻目標失敗。
+- 新增「檢查模組載入／初始化設定」入口：根據實測目錄阻擋提出正確相對路徑的 Path.mkdir 初始化替身，預覽來源雜湊與根目錄；確認後合併保存到工具使用者設定並重新預檢。取消、來源或設定變更不得套用；根目錄綁定防止切換專案誤用。既有 configFiles／entryPoints 清單保留，未擴大既有隔離允許範圍。
+- 預檢以 Python 內建例外欄位辨識缺少模組 API，與缺套件、初始化副作用分開診斷；不以補裝或空殼 API 假裝修復。本地原專案重播：車輛管理 config／database 從 mkdir 阻擋變成可隔離載入；main 仍缺 openpyxl、爬蟲 scheduler 仍缺 apscheduler，5 份核對原始檔雜湊不變。
+- 驗證：只含本次修改的獨立副本 Node 全套 438／438 通過、Python 245 項中 244 通過及 1 項 Windows 實體符號連結測試略過；後續狀態文字與結果卡回歸新增後另跑 6／6 通過，匯入相容防護另跑 2／2 通過。涵蓋 100% 分數但最終失敗的實際 HTML、預檢停止／明確繼續、取消預覽、來源變更拒絕套用、套用後重查及缺 API 不產生替身；型別、lint、建置、Webview 語法與密鑰掃描通過。
+- 限制：未修改受測原檔、安裝套件或更動實驗室設定，未重跑真實模型。本次修復工具流程與呈現，不宣稱原 287 個目標已通過；Flet 相容版本及模型輸出品質仍須實驗室實測。既有型態分析未提交工作保留。
+
+### 縮短結果路徑與提供完整內容 ZIP 匯出
+
+- 結果目錄改為一層有界的來源／目標標籤與短識別碼，`target.json` 保存完整對照；批次清單持續引用實際目錄。長來源樹與限定函式名稱不再直接放入目錄層級，同分鐘重跑仍保留獨立 attempt。輸出根過長時提前提示改選短位置。
+- coverage／invocation 使用成對短編號，Trace 使用短編號；排他建立避免覆寫及衝突。完整執行 UUID 保留於證據內容。可執行快照檔名縮短為 `exec_<16碼>.py`，完整 64 碼 hash 保留及核對，碰撞或內容損壞拒絕覆寫。
+- 新增標準庫 `export_results.py`：Windows 長路徑來源可直接打包，不重複包含外層批次長名稱，原內容及內部相對路徑保持不變。逐檔解壓讀取並核對 SHA-256，附 `_transfer.json` 缺報告清單及解壓根長度預算；拒絕覆寫既有 ZIP、來源內目的地及連結，偵測來源變動後清除本次未完成 ZIP。
+- 最新本機批次共 1,446 檔、最長完整路徑 207 字元，另有 21 個清單目標缺少報告；已建立並驗證約 3.5 MB 的傳輸 ZIP，原結果未修改。原實驗室前綴與舊快照命名可形成約 270 字元路徑；缺失資料仍須從原電腦核對補傳。
+- 驗證：獨立副本 Node 全套 434 項中 430 項通過；4 項在出現一至兩小時異常執行間隔的執行中失敗，同一份程式碼重跑受影響四個測試檔 18／18 通過。Python 245 項中 244 通過、1 項 Windows 符號連結測試略過；型別、lint、生產建置、Webview 語法與密鑰掃描通過。整合測試改由來源對照尋找報告，不再寫死舊目錄名稱，原覆蓋、突變及品質判定斷言保留；未調整產品逾時或品質門檻。另通過 15 項 Node 焦點測試、2 項匯出測試及工作區建置。
+- 限制：不修改受測原檔、Windows 設定或自動重新命名舊結果；實際 RDP／檔案總管操作仍待實驗室驗證，匯出不能復原缺檔。原有型態分析未提交工作保留。
+
+### 統一整個專案入口、減少重複呼叫站生成與提前拒絕來源歧義
+
+- 檔案選單預設 `all（整個專案）`，採上方受測目錄並共用開始按鈕；選定檔案後可選全部函式或單一目標。移除側欄獨立批次目錄／按鈕，保留舊命令相容性。檔案顯示相對路徑並排序，切換範圍清除舊函式，拒絕過期檔案／函式清單回覆。
+- Tier 2 依可重現的 tagged 輸入去重，保留型別、順序與建構子差異；只有 2–4 組已知輸入才分治。含未知輸入／建構子、僅一組或超過四組時採標準單次生成，原始語境、Trace、重試預算與品質 gate 保留，記錄規劃原因及數量。
+- AST 階段共用正式 runner 的唯一目標解析規則，重複函式定義在 Trace／模型前停止，避免要求模型反覆修復無法解決的來源範圍問題。未修改受測程式，也不把早停宣稱為目標通過。
+- 介面、README 與批次摘要說明缺套件須確認安裝清單，開始測試只做預檢；相依衝突、API 不相容及匯入副作用各自保留診斷。匯入副作用引導工具端 `importFixtures`，不要求修改受測原檔。
+- 指定批次分析：215 個目標中 151 個在模型前失敗；其餘 64 個產生 426 次請求，模型請求占約 97／123 分鐘。保存逐函式分析與呼叫站重播；33 個相同輸入呼叫站可規劃成 1 個初始 Writer 任務。未重跑實驗室真實模型，不能宣稱已測得耗時縮短或通過率提升。
+- 驗證：獨立提交副本 Node 432／432 通過（測試檔同時執行數 2），Python 243 項中 242 通過、1 項 Windows 實體符號連結測試略過。Webview 語法、型別、lint、生產建置、tracked files／可達歷史密鑰掃描與差異格式通過；工作區生產建置通過。首次高並行回歸有 2 項 Trace 失敗，其中一項子程序逾時；降低測試並行數後整套通過，產品逾時及品質門檻未修改。
+- 限制：`all` 沿用既有來源掃描範圍，可能含備份，沒有默默排除檔案；實驗室仍須設定初始化替身及核對 Flet 相容性。原有型態分析／測資規劃未提交工作保留，不納入此次提交。
+
+## 2026-09-23
+
+### 保留受測原檔的匯入隔離與相依診斷修復
+
+- 新增 `llmUnitTest.importFixtures`：以來源雜湊綁定指定模組頂層的目錄建立、受控 ini 內容與外部啟動入口。原始碼照常載入，未修改受測原檔、刪除初始化 AST 或替換受測函式；一般函式與保留的別名仍受原執行隔離限制。
+- 預檢、Trace worker、unittest／coverage 與內建突變共用設定；突變副本重新綁定來源，設定納入預檢快取識別。每次分析保存設定快照與 ID，成功及失敗診斷保留實際 mock 操作；模型提示明示結果只在測試設定下成立。套件版本查詢僅放行既有 interpreter 的標準 metadata 讀取，不放寬一般檔案讀取。
+- 無新安裝時仍執行 `pip check`，安全顯示衝突的套件／版本條件；安裝失敗指出失敗項目。掃描發現附近同名本地模組但匯入根不明時，列為「本地匯入待確認」，不嘗試補裝同名外部套件。補充車輛管理與爬蟲設定、實驗室 mutatest／coverage 處理步驟；忽略 `.venv-*` 本機環境。
+- 驗證：只含此次變更的獨立副本 Node 429／429 通過；Python 243 項中 242 通過、1 項實體符號連結測試因 Windows 權限略過。型別、lint、生產建置、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式通過。含原有修改的工作區另通過 30 項焦點回歸與生產建置。
+- 原應用預檢：車輛管理 config／database、爬蟲 settings／scheduler 在明確 fixture 下匯入成功，35 個 Python 原始檔雜湊前後一致。車輛管理 main 在本機仍缺 openpyxl，未驗證完整 Flet 介面、真實資料庫、GUI 或實驗室環境；不宣稱補裝版本衝突已在遠端解除。
+- 保留既有型態／測資規劃未提交工作，未納入本次提交。該完整工作區另有 2 項 Trace 測試失敗（無參數提示的 echo 未產生案例、instance method 未探索到既有邊界）；此次獨立副本的相同測試通過。
+
+## 2026-09-22
+
+### 專案相依快捷檢查與同名套件直接補裝
+
+- 相依檢查入口與結果移至「受測專案目錄」欄位下方。「檢查此專案相依」直接採已選資料夾，不重問範圍，也不沿用先前單檔目標；「其他範圍…」保留資料夾／單檔選擇與紀錄。兩個入口都在分析或補裝期間停用。
+- 依使用者的直接補裝需求，沒有 requirements 或既存映射時，預填 import 同名套件供一次確認後 pip 補裝，不再逐項要求輸入與保存。頁面及報告明示同名候選尚未驗證對應，不自動保存為明確映射；已知別名仍可修改並保存。
+- requirements 與明確映射優先，版本限制不繞過；僅處理外部必要缺項。每次安裝後重新檢查，pip 無套件、仍缺 import 或相依衝突保持失敗；不自行換名稱重試，取消不安裝未批准清單。
+- 驗證：獨立提交快照 Node 427／427 通過；Python 234 項中 233 通過，1 項實體符號連結測試因 Windows 權限略過。型別、lint、生產建置、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式檢查通過。包含同名候選一次確認、離線真實 pip 補裝與重查、安裝失敗／無效映射／取消、專案入口訊息分派及範圍捷徑；含既有修改的工作區另通過 40 項焦點回歸及生產建置。
+- 限制：同名套件不保證提供所需 import；沒有宣告或映射時仍可能需要修正安裝名稱。未查詢 PyPI 建立別名，也未重新執行實驗室私有應用、真實模型或人工 F5 操作。原有型態分析未提交修改保留。
+
+## 2026-09-21
+
+### 修正安裝清單缺少名稱時無法繼續
+
+- 沒有 requirements 且缺少套件對應時，安裝清單新增 pip 名稱輸入欄、「使用此 import 名稱」與「儲存名稱並更新清單」，讓使用者當場完成對應。取消離開再手動改設定不再是唯一處理方式；未知名稱仍不自動猜測。
+- 明確填寫的名稱合併保存到所選 workspace 的 `packageMappings`，保留其他對應；重新產生清單後才可確認安裝。保存後取消保留名稱，但不安裝該清單。requirements 宣告及版本限制不受此編輯流程覆蓋。
+- 輸入錯誤保留頁面供修正；修改中的名稱不能直接沿用舊清單安裝。訊息核對計畫識別與可編輯缺項，拒絕非套件名稱／無關項目；設定寫入失敗不開始安裝。報告區分已保存名稱與已確認安裝。
+- 驗證：獨立提交快照 Node 424／424 通過；Python 234 項中 233 通過，1 項實體符號連結測試因 Windows 權限略過。型別、lint、生產建置、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式檢查通過。包含清單內編輯／保存／取消、錯誤名稱修正、過期訊息、requirements 不可覆蓋、設定合併及離線真實 pip 補裝後重新檢查；含既有修改的工作區另通過 30 項焦點回歸及生產建置。
+- 限制：仍須由使用者確認安裝名稱，不自動查找或猜測 PyPI 對應；不建立新 venv。本次不執行私有應用、真實模型或人工 F5 操作，原有型態分析未提交修改保留。
+
+### Python 安裝清單與確認介面
+
+- Python 環境檢查改為先顯示獨立安裝清單，列出 interpreter、檢查範圍、所有已知必要缺項、使用位置、明確映射、requirements 宣告／版本／條件及測試工具；按「確認並安裝」後才執行 pip。已齊全時不要求安裝確認。
+- 取消、關閉清單、沒有確認或尚有未對應套件皆不開始安裝；新發現缺項須另列清單。報告保留每份清單與確認狀態，後續取消會明示先前已完成的安裝保留。安裝失敗不改寫 Python 設定。
+- 確認綁定安裝操作與 requirements／本機引用／constraint 的內容 hash；檔案變更須重新檢查。來源網址、憑證及任意原文不顯示；無法讀取、範圍外、遠端、動態或循環引用阻擋確認。直接宣告不冒充 pip 最終解析結果，原版本限制與正式載入 gate 保留。
+- 驗證：獨立提交快照 Node 421／421 通過；Python 234 項中 233 通過，1 項實體符號連結測試因 Windows 權限略過。型別、lint、生產建置、Webview 語法、tracked files／可達歷史密鑰掃描及差異格式檢查通過。涵蓋確認／取消／中止、未知映射、確認中及分步安裝間的清單變更、引用隱私、Webview 按鈕／訊息／釋放、控制器報告與離線真實 pip；含既有修改的工作區另通過 28 項焦點回歸與生產建置。
+- 限制：不建立新 venv，不提供逐項取消 requirements 宣告；pip 仍可能補入間接相依或調整既有版本。未重新執行實驗室私有應用、真實模型或人工 F5 操作；原有型態分析未提交修改保留。
+
+### Python 資料夾與專案相依掃描
+
+- Python 環境準備新增整個專案／資料夾／單一檔案選擇，分開保留最近範圍、專案、資料夾與檔案；多根 workspace 可選專案，取消不覆寫紀錄。
+- 新增不執行原始碼的 AST import 盤點，跨檔彙整缺少的頂層外部套件與使用行號；區分標準庫、local／namespace／src、函式內及條件／可選／型別 import。環境、建置、輸出、產物與連結目錄有明確排除，解析／讀取失敗及容量超限不得當成掃描成功。
+- 資料夾範圍沿用既有 Python、requirements 與明確套件映射的補裝流程，每次補裝後重掃；成功與失敗都開啟可保存的 Markdown 報告，保留首次缺項、最後結果與準備終態。明確 Python 設定、版本限制及單檔正式載入 gate 保留。
+- 驗證：獨立提交快照 Node 413／413 通過；Python 234 項中 233 通過，1 項實體符號連結測試因 Windows 權限略過。型別、lint、生產建置、Webview 語法、密鑰掃描與差異格式檢查通過。涵蓋跨檔缺項、部分失敗、排除範圍、選擇記憶、不等待通知關閉就開啟報告、大型 UTF-8 輸出，以及離線真實 pip 補裝後重掃；含既有修改的工作區另通過 20 項焦點回歸與生產建置。
+- 限制：靜態頂層套件可找到不代表子模組、版本或載入副作用通過；條件／可選缺項只列出，動態 import 不能完整靜態辨識。未重新執行實驗室私有應用或真實模型；原有型態／測資規劃的未提交修改不納入此次提交。
+
+### 修復失敗逐次診斷與報告
+
+- Bug Fixer 的格式／合併拒絕加入原因碼，區分區塊外說明、多區塊、class 包裝、方法名稱／數量、import 與缺少方法等情況；保留既有純 Python 與歷史 JSON 接受規則，不放寬 gate。
+- Python AST 修復範圍工具回傳穩定 reasonCode，分開記錄 import 衝突、超量、萬用匯入、未改方法、修改無關方法或 fixture 等問題。範圍工具錯誤不直接複製 stderr。
+- `role_events.jsonl` 即時保存每次原因、階段、輪次／修訂、角色契約、耗時與回覆／候選 hash；新增紀錄僅保存詞法統計，不保存完整 provider 回覆。`function_knowledge.json` 保留首次／最近修復失敗及原因計數，後續通用錯誤不覆蓋它們。
+- `final_report.md` 顯示中文診斷、原測試是否未修改、已驗證基線是否存在，以及後續修訂／降階／停止。格式失敗終態標為 model-format／bug-fixer-response，降階保留 Bug Fixer 來源，不再冒充 Writer 本身失敗。既有重試與降階規則不變，也不新增模型呼叫。
+- 驗證與限制：新增解析器、真實 Python AST、即時 journal、隱私與主流程回歸；獨立提交快照 Node 407／407、Python 225／225 通過，型別、lint、生產建置、Webview、密鑰掃描與差異格式檢查通過；含既有未提交功能的工作區另通過 25 項焦點回歸及生產建置。舊批次缺少的拒絕原因無法事後還原，本次沒有重新執行私有應用或真實模型。既有靜態型態／測資規劃修改保留於工作區，未納入本次提交。
+
+### 完善計畫第二批：保留 caller 型態並統一品質判定
+
+- Python caller 先編碼完整呼叫與已證明的 constructor，再以 `probe-inputs-v1` 傳給 Trace；tuple、bytes、非字串 dict key、大整數、float／負零與 kwargs 順序不再被一般 JSON 改變。非 literal、超限及不合法輸入留作診斷，typed 欄位無效不降回舊值。
+- 抽出共用 snapshot validator、typed input builder 與 Python literal renderer。Tier 2 按同一筆輸入／constructor 配對觀測；Tier 1 每個案例建立自己的實例，不再共用首個 caller 的 setup。Unicode／特殊字串 kwargs 用有序字典呼叫，Python 精確斷言 gate 僅展開可證明的 literal `**dict`，不借用未知流程的 oracle。
+- 新增 TS／Python 共用版本化 QualityPolicy 定義與 45 組跨語言一致性案例。正式 `strict100` 與事先固定的 fixture ID／manifest hash／原門檻分開，使用精確比例及完整候選集合，不依顯示百分比或事後政策判通過。checkpoint、主流程、批次與 scorecard 核對同一份來源／測試／coverage／mutation／review，再重算 assessment；來源失效及篡改不得通過，舊報告不升級。
+- 主流程與介面分開顯示完整量測、政策達標及審查完成；無候選保持 N/A，保存好基線不會把取消、回合耗盡或失敗改成整次成功。不完整證據不能取代最佳品質基線，仍保留已成功執行的候選。
+- corpus 新增三個型態／大數／雙 constructor 正向案例，改用正式 guarded runner、原生目標 coverage 與完整突變全集驗收。測試找出巢狀 BinOp 在相同行欄的候選 ID 碰撞，現加入變更後 AST hash，保留全部候選；運算子語意版本不變，舊 ID 不沿用。
+- 驗證：本機 Windows／Python 3.13.2，Node 403／403、Python 225／225 通過；最後增補的 scorecard 來源失效拒絕另以 14／14 專項回歸通過。新版 corpus、真實主流程／批次／Python scorecard 一致性與四種篡改拒絕通過；型別、lint、生產 build、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式檢查通過。新增 constructor fixture 補齊正式 class 語境後重跑全部 Node 測試，門檻及預期規則不變。
+- 限制：仍未完成靜態型態樹與自動產值、受限制 setup／Mock、缺口導向 Trace、增量 Writer、突變穩定性與 durable progress、逐筆 UI、完整環境身分及主控拆分。set／frozenset 不因此取得精確 oracle 資格；本輪沒有真實模型、外部引擎矩陣或遠端 CI 結果，整份計畫仍在進行中。
+
+### 完善計畫第一階段：保存真實輸入、隔離案例與核對品質證據
+
+- 接續既有 Python 環境準備功能，整合 interpreter 選擇、環境檢查、明確套件映射與 UI；不再由 import 名猜測安裝套件，也不以別的 interpreter 取代使用者明確設定。既有 requirements 的版本限制保留。
+- Trace 改為逐案例新程序，保存建構子與目標呼叫前後的型態快照、輸入來源、唯一案例 ID 與執行狀態。有限 codec 不呼叫自訂 repr／deepcopy／metaclass descriptor，循環、共享參照及截斷值不能建立精確斷言。逐筆 JSONL 可在逾時後恢復已完成案例，未知、受阻擋、setup 失敗及未開始的案例分開保存。
+- Trace、預檢、正式 unittest 及突變共用 runtime policy，記錄被捕捉的違規，限制一般檔案／網路／子程序／共享 SQLite。標準 `threading.Thread` 納入執行完成與失敗判定，直接底層 `_thread` 啟動明確阻擋；來源讀取例外限於必要 import／traceback。這是執行防護，並非作業系統層級沙箱。
+- 正式 coverage 讀取原生行／分支資料，使用 source、test、run 與 coverage hash 核對限定目標在主／新標準執行緒的實際呼叫；匯入單行函式不算執行函式。同名其他函式不能代替目標證據。Trace 合併與 Python 斷言比對保留 kwargs 順序，不將不同呼叫順序錯當同一事實。
+- 內建 mutation 只測所選函式本體，排除 decorator、default 與巢狀 callable，移除無效／重複／無變化候選；正式流程量測完整集合。結果綁定來源、測試、scope、operator 與 candidate-set 版本；TIMEOUT、ERROR、未測與無候選不補成通過分數。外部格式僅接受已驗證契約，模組範圍不能替代函式範圍。
+- 成功執行後先保存不可變 executable 基線，再進行審查及 mutation；完整 quality 基線另存。首次 mutation 失敗仍保留測試、coverage 與審查狀態。來源或測試在測量途中改變會使該輪證據失效；跨輪來源變更不再顯示舊分數為目前有效。
+- 同一目標共用時間、模型邏輯請求、實際傳輸、估算輸入 token 與候選次數預算；重試與 Tier 降階不重設。保留既有品質 gate，刪除六個無正式呼叫點的舊 export；角色 prompt 僅投影必要斷言事實，完整快照仍保存在產物，caller 搜尋排除本工具產物。
+- 加入完整計畫與實作追蹤文件；CI 設定 Ubuntu／Windows × Python 3.12／3.13，使用工作區 `.venv`。本機 Windows／Python 3.13.2 最終完整驗證：Node 392、Python 200 全部通過；型別、ESLint、生產建置、Webview 語法、tracked files／可達歷史密鑰掃描與差異格式檢查通過。遠端 CI 尚未驗證。
+- 已知限制：第一階段不是整份完善計畫完成。型態樹、caller 的型態保真傳輸、受限制 setup、缺口導向 Trace、增量 Writer、共用 QualityPolicy、逐筆 UI 及完整主控拆分尚待後續實作；未重新執行私有應用或真實 LLM，不能把中性 fixture／固定模型回覆通過當成模型能力或實驗室整批通過。
+
+## 2026-09-20
+
+### 完整批次重分析、正式執行隔離與角色回覆修復
+
+- 重新核對已補齊的 587／587 結果：275 failed、302 dummy、2 stub、3 stagnated、3 review-incomplete、2 無突變候選；完整通過仍為 0。舊 501／587 分析為當時未完成快照，不能作為最終統計。
+- 新增正式 unittest／coverage、Trace baseline 及 mutation 共用 runner，在執行時阻擋漏 mock 的檔案、網路、shell 與非隔離 SQLite。被吞掉的安全例外仍不算通過；記憶體 SQLite、明確 mock 與 asyncio 正常使用。工具 import／traceback 與 coverage 儲存另行處理。
+- 內建突變的隔離阻擋記為 ERROR，不算 killed；有執行錯誤不產生品質分數。外部引擎也改用 guarded runner，要求每次開始／結束與隔離狀態紀錄完整；缺少紀錄、未完成或隔離違規均拒絕分數，防止引擎將安全阻擋誤計為測試殺死突變。
+- Reviewer 升為 review-v7，完整語境中只有程式行可選 ID；拒絕模板回聲、明顯不相關引用，以及帶引號的 staticmethod／mocked target 指令。無效回覆仍是審查未完成。
+- 品質分析升為 quality-task-v3，拒絕空泛模板，要求具體 input／state／mock 配置；仍最多一項、最多一次共用 deadline 的格式補正，建議不是 assertion oracle。Writer 增加精簡 fixture 檢查。
+- Bug Fixer 升為 bug-fix-v4，正式輸出使用 Python 單方法 fence，避免 JSON 多行轉義破壞程式；保留舊 JSON 解析相容性及唯一方法／Python 範圍檢查。隔離問題交 Writer。三種 provider 的角色資格依任務選 JSON／文字，資格版本升為 python-unittest-v5。
+- 修正缺少 assertRaises 例外依據被文字分類器誤列 ast-trace 的診斷；仍屬驗證失敗，不改變 gate。
+- 驗證與限制：中性案例涵蓋間接 SQLite、吞例外、網路／檔案／shell、coverage、async、突變計分、錯誤審查與 native Python 方法修復；並離線重播本批角色回覆。完整提交快照 Node 347、Python 146 全部通過；包含暫停環境功能的工作區 Node 359、Python 154 全部通過。兩者型別、lint、生產建置、Webview 語法與密鑰掃描通過。本次不執行私有應用或模型；實驗室通過率與 1B～5B 能力仍待實測，詳見 `docs/完整批次修復_2026_09_20.md`。先前暫停的環境初始化功能保留於未提交工作區。
+
+### 保留部分品質改善、綁定審查原文並縮小品質分析任務
+
+- 修正未覆蓋行清單縮短卻因文字改變而被判為品質倒退的問題。回滾與停滯改比較實際行／分支身份；新增缺口、已知證據變未知、分數下降及舊突變體重新存活仍受保護，rollback 附結構化原因。
+- Reviewer 升級 `review-v6`，以 TEST_FILE 行號還原精確原文，拒絕無效／混用引用。明確與 static／instance 契約矛盾、要求修改被測來源或 mock 目標自身的建議保持審查未完成，不交 Writer，也不刪除 finding 後算通過。Writer 共用更清楚的 class／static 呼叫指引。
+- Reviewer 預算改採與其他角色相同的 token 估算，避免額外字元門檻誤擋仍在預算內的完整語境；超額仍停止，不截斷原文。
+- 品質分析使用 `quality-task-v2`，每輪一個實測證據 ID、最多一項情境。格式補正最多一次、共用原絕對 deadline；取消或傳輸錯誤不啟動格式補正。Python-only 模型使用文字傳輸，其他能力可使用 schema，所有回覆仍經同一本地 parser。
+- Python binding gate 拒絕明確 patch 所選目標／類別，以及直接 unittest 類別中沒有 decorator 卻要求額外必填參數的測試方法；結構錯誤交 Writer。標準 dependency mock 與 decorator 注入保持原有處理。
+- 探針契約升為 `python-unittest-v4`，舊資格必須重新測試。實作範圍、限制與實驗室重測步驟見 `docs/品質回滾與角色契約修復_2026_09_20.md`。
+- 驗證：中性 static method 的正式 Python／coverage／mutation 部分改善流程、矛盾審查、證據 ID 與有限重試回歸。實際提交快照 Node 339、Python 138 全部通過；含暫停環境功能的工作區 Node 351、Python 146 全部通過。兩者型別、lint、生產建置與 Webview 語法均通過，主專案 tracked files／可達 Git 歷史密鑰掃描與差異格式檢查通過。另僅補齊暫停功能測試的 Windows UTF-8 讀取設定，該測試仍留在工作區未提交。
+- 限制：自然語言矛盾檢查只辨識明確語句，不能證明任意審查正確；未知動態 patch／decorator 仍依既有執行與品質 gate。未重跑原應用、CodeLlama 13B 或 1B～5B，不以中性 fixture 取代實驗室驗收。先前暫停的 Python 環境功能保留於工作區，不納入本次提交。
+
+## 2026-09-18
+
+### 修正時間／隨機 Trace oracle，新增整批進度與環境診斷
+
+- 最新 287 份舊建置報告中沒有完整通過；208 次環境障礙不涉及模型請求。舊 Reviewer／多方法修復問題已有修正，本輪不重做；另以當前程式重現時間 Trace 被寫成固定斷言的 runner 缺陷，分析與實驗室順序見 `docs/時間證據與批次診斷改善_2026_09_18.md`。
+- Dynamic Trace 依實際 callable 身分標記未控制的時鐘、熵、共享 RNG／程序身分讀取，回傳與例外保留為診斷，不再產生固定值基線。涵蓋 alias、helper、constructor／property、async／generator、worker thread 與應用匯入初始化；明確 mock、當次私有 seeded RNG 與純函式路徑保留。Writer／Reviewer／Bug Fixer 使用相同證據限制，不依模型品牌處理。
+- 批次先保存已發現的目標清單，逐項更新 `batch_manifest.json`／`batch_summary.md`，區分執行完成與完整通過；掃描失敗、取消、缺報告及缺 provenance 保持未完成，Dummy／Stub／Reviewer 未完成不算通過。同分鐘重跑建立新的整批根目錄，獨立輸出資料夾排除來源掃描。
+- 預檢診斷補結構化阻擋操作與專案相對位置；批次摘要彙整共同缺套件／匯入副作用，附相依安裝與初始化分離的處理方向，沒有額外模型請求、取消安全 gate 或自動修改私有應用。
+- 驗證包含實際批次 command 的取消後重跑、環境群組、語法錯誤與缺證據回歸，以及時間 mock 經正式 Python／coverage／Reviewer／mutation 管線完整通過。完整本機驗證：Node 330、Python 136 通過；TypeScript、lint、生產建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。
+- 限制：ambient 觀測器不是任意程式純度證明，未涵蓋所有原生 extension 內部讀取；部分可省略時間參數的 C API 採保守診斷。原應用、CodeLlama 13B、Gemma 雲端與 1B～5B 本輪未重新實測，不能將中性 fixture 通過當成實驗室整批通過。
+
+## 2026-09-17
+
+### 修復 18:29 批次分流、統一審查與 scaffold，降低無效雲端等待
+
+- 修正多方法失敗被 Bug Fixer 猜選第一個方法；現在只有 unittest 唯一列出的一個失敗方法能做局部修復，多方法、fixture、import 及定位不明交 Writer。Python 範圍 gate 同時保留其他方法、class 設定、signature、decorator，禁止新增 import 遮蔽既有 binding。
+- Writer 重複候選保留最新診斷；結構與隔離執行通過後才請 Reviewer，避免對已知失敗的測試付出審查請求。Tier 3 scaffold 改完整測試檔契約，傳遞完整 Writer 證據，不再縮排包入另一個 class。
+- async 補測發現模型把未 await 的 context-manager factory 配成 AsyncMock；補更精確的建構規則與 Bug Fixer 指引，small Writer 依已選規則優先檢索可執行的 async-context 範例，不再套用普通 await 範例。重複失敗判斷排除 unittest 耗時與 stack 行號差異，保留方法、例外與內容差異，避免無效 Bug Fixer 重試。
+- 真實 async 樣本重現 runner-owned Trace 的 `__import__` 被安全 gate 拒絕、模型修訂後又被還原的循環；async／generator 基線改一般標準庫 import，async generator 的實際 target 呼叫保留在結果驗證鏈上。Trace 基線在合併前另做結構／安全檢查，系統基線失敗直接停止，不交模型反覆修復。
+- 真實 HTTP fixture 揭露 `UnsupportedProtocol` 已被 Trace 觀測但被例外名稱規則漏掉；改採 AST／Trace 的完整 identifier path 與 `exception_qualname`，不要求 `Error` 等結尾。被副作用阻擋的觀測及混有診斷文字的名稱仍不可作為事實；補基線生成、驗證及真實自訂例外執行回歸。
+- Reviewer 改 `review-v5` 單一 findings 陣列，schema／parser 共用最多五項及固定分類；嚴重程度由程式決定，缺情境／弱 assertion／型別風格屬品質建議。探針契約升至 `python-unittest-v3`，舊資格必須重測。修正 Reviewer／品質分析師把 `<`、`<=`、`>` 比較式當作佔位符的誤擋，仍拒絕未填模板。
+- 預檢使用實際載入 origin 與函式身分解析跨檔相依，修復巢狀專案根目錄猜錯；範圍外、動態及 re-export 來源保持未知，不改變 assertion oracle 規則。
+- 新增 Cloud `cloudThinkingMode`（預設 `minimal`），僅依服務明確拒絕選項回退至預設；不依模型品牌判斷，與傳輸／格式重試共用原 deadline。服務錯誤不再被 scaffold／分治／Tier 降階重複請求；角色事件保留耗時與正確分類，first／last failure 包含 timeout、invalid response 與 retained baseline。
+- provider reasoning／未知 segments 及明示截斷的產物不可當作完整測試；不保存 HTTP body／錯誤 envelope。金鑰仍只透過 SecretStorage 與記憶體請求使用。
+- 新結果明示所選目標行覆蓋與模組整體覆蓋，scorecard 核對同一保留測試／run／source／限定目標後評分；未覆蓋分支仍阻擋，fixture 門檻不降低，舊報告不自動改算。實際 Tier 同步綁定保留候選，避免降階前標頭誤導成績。
+- 補五類 fixture 的 `httpx`／`aiohttp` 環境安裝清單；真實模型驗證與限制記於 `docs/批次修復與雲端驗證_2026_09_17.md`。產品 API 預設仍為 60 秒，突變 20 秒、最大迭代 5 次與資料夾記憶功能保留。
+- 完整本機驗證：Node 326、Python 119 通過；TypeScript、lint、生產建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。Gemma 雲端完整五類批次只有純函式通過，三類遭 HTTP 500，HTTP 類揭露上述例外名稱缺陷；修正後 HTTP 的工具分數 100% 但 Reviewer 遭 HTTP 500，最後 async 單項則以一次 Writer 通過全部 gate、覆蓋與突變均 100%。各批次不拼接成整批通過，不代表原始應用、codellama:13b 或 1B～5B 已驗收。
+
+### 保存資料夾選擇與調整重測預設
+
+- 專案、輸出、批次資料夾各自保存最後選擇至本機 `globalState`；重新開啟 VS Code、重建側邊欄或切換語言／策略後恢復欄位，下一次開啟選擇視窗從對應路徑開始。取消選擇保留紀錄；批次路徑不再被專案路徑覆蓋。既有 projectPath／outputPath 設定作為首次移轉 fallback。
+- 單檔與批次的預設最大迭代次數改為 5，突變階段時限改為 20 秒；空值或無效後端參數使用相同預設，明確輸入的正整數仍可調整。
+- 修正秒數被誤傳成 mutatest／mutmut 逾時倍率：UI 秒數現在控制整個突變階段的程序時限，與 API 請求時限分開；內建引擎單次試驗亦不超過此值。外部引擎自身的單次試驗策略仍依該工具預設，不能把 20 秒解讀為每個 mutant 都保證可跑滿 20 秒。
+- 回歸涵蓋三種 picker 重啟恢復／取消／獨立預設路徑、真實 Webview 腳本的單檔／批次參數、後端預設，以及內建引擎實際執行與外部引擎程序邊界的秒數傳遞；外部工具本體與實際 VS Code 點擊操作仍待實驗室確認。
+- 完整驗證：Node 310、Python 118 全部通過；TypeScript、lint、建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。本機回歸不代表原始應用或實驗室模型整批通過。
+
+### 改善 Writer 語境與小模型提示、Mock 辨識及 Reviewer 診斷
+
+- 依最新批次證據補同模組 helper 的有界符號檢索，保留完整來源、hash、必要 globals 與省略資訊；不執行檢索片段、不把 return expression 當 oracle。
+- 正式 small Writer 改用 `compact-writer-v1`：保留目標、constructor、caller 專屬 Trace、規則與已通過測試，減少重複提示；優先來源檢索，再取最多兩個有相關 AST 特徵且回歸可執行的中性範例。large 路徑同樣不再截取 dependency 的 return/raise 行冒充完整來源。
+- 修正直接 `setUp` Mock 與 `patch(return_value=...)` 的誤擋；補無關 Mock、假 assertion、descriptor、rebind、未執行分支等反例，保留全部隔離與品質 gate。
+- 參數量正確區分 M/B，已知 ≤13B 的 Tier 1/2 採精簡提示。完整角色提示先驗算預算，必要證據太長時明確停止；Ollama 明確傳入對應 `num_ctx`，避免內部預算與 server 預設 context 不一致。新增 logical request 的預估 tokens、耗時與 prompt 版本事件。
+- Reviewer 使用 bounded JSON Schema，沿既有 deadline 處理不支援 schema 的回退；parser 記錄超量、引述不符、reason/action 不可操作等穩定拒絕代碼，無效審查仍不能算通過。
+- 優先以實驗室 `codellama:13b` 的五類小批次驗收，1B～5B 留待逐個實測；不使用模型名稱特例。完整說明與測試方式見 `docs/Writer檢索與模型相容性_2026_09_17.md`。
+- 完整驗證：Node 307、Python 118 全部通過；TypeScript、lint、建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。固定模型回覆的整合測試不代表真實 13B 或小模型已通過；本輪未重跑私有應用、未下載或啟動模型。
+
+## 2026-09-16
+
+### 改善部分批次的預檢效率、Trace／Mock 產物及審查完成判定
+
+- 先依未完成實驗批次的四份執行證據建立 `docs/批次改進計畫_2026_09_16.md`；保留原實驗結果，不重跑或改寫私有應用。原 snapshot 六筆 passed 均帶審查未完成警告，不能宣稱完整驗收通過。
+- 所選目標 AST 後立即預檢環境，環境失敗時不做深度 Trace／呼叫點探索。快取縮至單次分析／批次，同批次去重，新分析可看到修復後相依；暫時工具錯誤不快取，並行成功目標保持各自匯入根。
+- Trace 基線改明確 import，支援底線目標與 `__all__`；例外必須有已執行且可解析的型別身分，未知型別不退成 Exception。SQLite audit 阻擋檔案、共享 URI 與繞過保護的連線別名；獨立 in-memory 連線阻擋 ATTACH／VACUUM INTO，包含 thread 與吞掉例外的回歸。
+- 新增 AST Mock 行為 gate，接受可證明標準庫來源、target 使用點 patch／傳入 target 的 mock 呼叫斷言；拒絕無關、偽裝、重綁定、未執行分支與未 await 的 async target。保留所有原有危險操作與隔離執行 gate。
+- 相同完整審查 prompt 在單次目標分析內重用；連續兩次審查契約失敗後停止額外請求，Reviewer 不合格內容不再另以文字模式重問。Auto Reviewer／Bug Fixer 不繼承舊 Writer 資格，Writer 修訂使用 Writer 自身資格。
+- 候選與 rollback 同步記錄 `reviewStatus`；工具滿分但 Reviewer 未完成改為 `execution-passed-review-incomplete`。scorecard 查核 journal／manifest 與保留測試身分、採同版本分數，拒絕未完成審查、stub／running／失敗、缺證據或未解決品質缺口。
+- 驗證與量測：中性 fixture 證明同批次兩次相同環境失敗只啟動一次預檢、新批次重新檢查；四次不合格審查需求只發出兩次角色請求。完整驗證結果記於本機結報，沒有以模型名稱推測性能。
+- 驗證器改由標準輸入接收完整 source／test 語境，避免 Windows 命令列長度限制；新增超過 60 KB 語境的回歸。
+- 完整驗證：Node 300、Python 113 全部通過；TypeScript、lint、建置、Webview 語法、tracked files／可達 Git 歷史密鑰掃描與 Git 差異格式檢查通過。
+- 限制：原批次仍屬部分結果；原環境五類樣本、原模型成功率與端到端耗時改善仍待實驗室 pull 後量測。複雜 mock fixture／未知控制流程保守拒絕；受控 Trace 不能視為任意不可信程式的安全沙箱。
+
+### 提交後自動推送供實驗室驗收
+
+- 依使用者授權，將專案流程改為每次完成驗證與本機 commit 後，接著 push 至目前分支既有 upstream，供實驗室 pull 測試。
+- 保留不擅自 force push、變更 remote 或揭露密鑰的限制；推送失敗須明確回報並保留本機提交。
+- 驗證：僅更新維護文件，Git 差異格式檢查通過；產品程式與既有測試內容未變更。
+
+### 修正批次失敗的環境分流、角色語境與結果保存
+
+- 在任何模型角色請求前預檢正規目標模組與 coverage，使用相同 Python／匯入路徑並核對來源實體。缺相依、非法名稱、模組遮蔽或被阻擋的載入副作用直接保存原因，不再逐 Tier 消耗生成請求。
+- Trace 保留原始載入例外與 missing_module；共用目標契約保留 class／static／property／instance／async 綁定。修復與審查收到完整目標來源、建構子、imports、globals、相依與觀測，避免把類別方法提示為頂層函式。
+- 結構／證據、測試檔匯入及 fixture 問題交 Writer；只有可唯一定位的實際方法失敗交 Bug Fixer，不再猜選第一個測試。拒絕 placeholder、錯模組及類別方法的頂層 import；完整 package 與 __init__.py 使用正規名稱，保留可證明的相依 alias。
+- Reviewer 升級 review-v4，要求測試原文、具體原因與動作；空泛 focused correction 不再成為阻擋問題。manifest 記錄各角色契約版本；格式不合格仍標示審查未完成，不能替代執行 gate。
+- 錯誤分類排除 traceback 路徑與行號，區分 Python 語法、執行驗證、環境及有明確時限來源的 timeout。歷史 11 筆被誤判 API 的訊息重播後均為 validation；裸 AbortError 保持未知。
+- AST 前建立 running 狀態與進度報告，各階段即時保存來源／觀測及第一個、最近失敗。批次以專案相對來源路徑區分同名檔案；同分鐘重跑保留舊資料並建立新 attempt，結果列表連結對應新報告。
+- 新增環境失敗快取，依 Python、來源雜湊、模組與穩定匯入根識別；不同 output attempt 不會重複啟動相同失敗的預檢。新增 Writer／Reviewer／Bug Fixer 分別資格探針，Auto 只呼叫各自通過的角色；Trace 基線先在獨立 unittest 程序通過才可與模型測試合併。
+- 新增 `lab_batch_manifest.json` 與唯讀批次契約檢查，固定實驗室第一輪純函式、class、DB mock、async、外部邊界五類樣本；UI 相依可在實驗室以同一 category 替換原始 fixture。
+- 補強 `.gitignore`，排除本機虛擬環境、建置／測試快取、coverage、資料庫暫存檔、IDE 狀態與日誌；保留 `package-lock.json`、原始碼、文件與 fixture 供 GitHub 重建環境。
+- 驗證：完整 Node 單元／整合測試、Python 回歸、Webview 語法、型別、lint、建置與密鑰掃描；新整合測試使用真實 Python 缺相依 fixture，確認連續重跑皆為 0 次模型請求且有獨立完整失敗紀錄。另以固定模型回覆及真實 coverage／mutation 驗證既有品質提升流程；目前 Node 291、Python 103 全部通過。
+- 限制：未重跑另一台機器的原專案或 codellama:13b，未安裝其相依；167 個歷史項目缺少完整來源，不能宣稱整批已通過。審查可操作性檢查不證明模型意見正確；外部強制終止只能保留最後檢查點。原環境五類小批次實測仍須在實驗室進行。
+- 提交複核：接手後重新執行完整驗證，仍為 Node 291、Python 103 通過；型別、lint、建置、Webview、已追蹤檔案與可達 Git 歷史密鑰掃描及差異格式檢查通過。既有 44 個修改／新檔案在該輪驗證前後雜湊一致。
+- 下一步優先修正環境失敗快取的復原：隔離案例已重現「缺相依預檢失敗 → 在相同匯入根新增缺少模組 → 同一程序重跑仍讀取舊失敗；清除快取後才通過」。目前 key 未涵蓋相依內容／環境狀態變更，且清除函式尚未接入正式使用流程。後續須補上跨批次重新預檢及同批次去重的回歸驗收；此項未納入本次已完成修復，原環境五類實測仍待執行。
+
+## 2026-09-13
+
+### 統一角色入口、精簡技能選擇與版本化探針
+
+- 新增 ARCHITECTURE.md 閱讀導覽、角色與 Python 工具對照；角色實作统一至 src/roles，移除 src/prompts 的轉發入口，舊分流器移至明確標示的 legacy 目錄。
+- 集中正式 Python 工具路徑；把執行中使用的 test_scenario_inventory.py 更名為 scenario_inventory.py，避免被套件 test_*.py 排除規則誤移除。
+- 新增確定性 Skill Dispatcher 階段；語意分析師提示詞與 provider schema 不再要求 required_skills，移除整份技能目錄與重複選擇規則。舊回應欄位可讀取，但不影響技能分配。
+- 探針資格加入契約版本與端點雜湊識別；過期紀錄保留原格式並要求重新測試，不會自動改標為通過；端點不儲存認證、query 或 API key。新資格戳記由實際連線驗證流程產生。
+- 以 Python AST 取代正式流程的逐行 Trace 斷言比對，補上暫存結果、多行、無參數、布林 identity 與字串空白；保留 Mock／fixture／未知控制流程為未知，避免錯套 Trace。
+- 驗證：完整 TypeScript 單元、Python 回歸、介面語法、型別、lint、建置、套件工具路徑與提交快照檢查。包含固定模型回應搭配真實 Python／coverage／mutation 的端到端測試。
+- 限制：不自動重跑付費／本機模型探針；同一端點下同名模型若被替換仍需手動重測。AST 證據檢查不證明任意狀態、Mock 或類別行為符合業務規格，範圍與未知情況記錄於 docs/assertion-evidence.md。
+
+
+### 拆分審查、執行修復與品質分析流程
+
+- Reviewer 改為輸出有原文證據的問題清單；結構與審查問題交 Writer，實際測試失敗才交 Bug Fixer。移除重複的 Tier 4 Self-repair 呼叫路徑，所有修订候選重新審查與驗證。
+- 執行成功與品質達標分開記錄；覆蓋缺口和存活變異體交分析師制定情境任務，由 Writer 補測。分析師不再輸出並注入 kill_test，等效假設不影響分母。完整證據超過角色預算時明確記錄未完成，禁止截斷測試碼。
+- 新增 run_manifest.json、role_events.jsonl、function_knowledge.json，保存來源版本、原始候選、角色結果、情境指紋、執行證據與未驗證任務。同分鐘既有執行紀錄不覆寫；来源／已解析相依變動後停止使用舊證據。
+- 跨輪正規化 unittest 模組名稱，以 AST 與設定指紋追蹤純更名；保留已通過案例。回滾同步還原測試、執行輸出、覆蓋與存活變異體，避免使用不同版本的證據。連續三輪測量無改善時停止重試。
+- 加入有條件的布林組合／精確回傳斷言策略，並拒絕對 patch(...).start() 回傳的 Mock 呼叫 stop 的無效清理。
+- 驗證：角色狀態機、解析失敗、提示預算、回歸保護、情境更名與 Mock 清理測試；端到端使用固定模型回應，實際執行 Python unittest、coverage 與內建突變引擎，確認品質任務傳到第二輪並提升至 100%。另執行完整單元／Python 回歸、型別、lint、建置與提交快照檢查。
+- 限制：本機未安裝原報告的 codellama:13b，尚未驗證該模型的新提示詞生成品質。Reviewer 格式或傳輸失敗時仍可執行工具驗證，但審查保持未完成；案例指紋僅辨識可證明的結構一致與純更名，不宣稱任意重寫等價；未知動態相依仍須依隔離執行判讀。
+
+## 2026-09-10
+
+### 結果資料夾名稱只保留日期與時分
+
+- 移除結果資料夾名稱尾端的執行 UUID，名稱改為 `<專案或檔案名稱>_YYYY_MM_DD_HH_MM`。
+- 批次與單檔路徑統一使用本機日期時間，精確到分鐘，避免原先 UTC 與本機時分混用。
+- 驗證：命名格式實測、工作區與完整提交快照型別檢查、lint 與建置通過。
+- 同一專案／函式在同一分鐘會使用相同路徑；沿用既有斷點續跑規則，已有完成報告時略過。
+
+### 補齊預先驗證修復所需的 AST 類別型別
+
+- 補上 `AstContext.class_name?: string | null`，對應 Python AST 的類別名稱與頂層函式的 `null`，修正匯入檢查與 Trace 組裝的兩處 TS2339。
+- 原因：前次提交分離未提交修改時漏納必要型別；工作區型別檢查通過，但完整提交內容未通過。此次先以 Git 提交快照重現兩個錯誤，再驗證修正後的完整暫存快照與工作區，而非只檢查工作區。
+- 驗證：完整提交快照與工作區 TypeScript 型別檢查、lint、建置，以及預先驗證修復回歸測試通過；本次只修正型別契約，不改變執行行為。
+
+### 修正預先驗證修復回饋與 Trace／Mock 隔離
+
+- Reviewer 與 Tier 4 Self-repair 每輪使用最新執行或格式錯誤；長堆疊摘要保留各失敗案例及錯誤尾端，報告保留完整執行輸出。重複候選不再重跑。
+- 預先驗證以 verbose unittest 記錄已通過案例；候選讓既有案例失敗、消失或略過時還原前版。修復請求或執行中途例外也會還原前版。
+- 頂層函式與 class/property 的已驗證 Trace 一律使用獨立 TestCase；每次模型修復後還原系統保留的 Trace 類別，避免 model setUp 的 Mock 污染真實執行案例。
+- Writer、Reviewer 與 Self-repair 共用 AST 匯入／patch 檢查，拒絕裸檔名與 package 模組混用，以及已解析相依函式的錯誤 patch 使用點。完整舊式 `[pytest]`／`[python]` 外框先擷取，不完整外框在執行前拒絕。
+- 補強邊界條件、例外傳播與 Mock 使用技能，新增 Trace 隔離與 caller 相依約束技能。布林條件提示加入一真一假的組合；模型提出的等效變異體僅列候選，不再據此停止重試或宣稱排除分母。
+- 修正失敗分類誤把 traceback 的 `last` 當成 AST 錯誤。
+- 驗證：新增 10 個回歸測試，實際執行 Python 驗證 Trace／Mock 隔離、模組綁定、修復退步與 And／Or 區分案例；完整 TypeScript 單元測試、94 個 Python 測試、介面語法、型別、lint、建置與密鑰掃描均通過。
+- 限制：未重新呼叫使用者的本機模型生成整批測試；靜態 patch 檢查針對可解析的標準 unittest.mock.patch 字串與直接相依綁定，動態 patch 仍依執行與 coverage gate 驗證。已通過案例保護依 unittest 執行結果，不代表可證明任意 assertion 改寫的語意等價。
+
+### 補齊同模組繼承類別的建構語境
+
+- AST 現在會在不猜測匯入類別、動態 base 或 metaclass 的前提下，擷取同一個 Python 模組內可解析父類別的 class attributes、`__init__` 賦值及有效繼承建構子簽名。
+- Tier 1 的 deterministic constructor gate、Semantic Analyzer、Writer 與 Reviewer 都會使用該語境辨識子類別實際仍需要的建構參數；語境只作 setup 指引，不能自行產生 constructor 值、回傳值或例外 assertion。
+- 匯入父類別與可能改寫 MRO 的類別不會宣稱有效建構子，寧可要求真實 caller literal 或停止生成，也不會把不可靠推論寫成測試。
+- 若多重繼承鏈含有任何匯入或動態 base，系統也不會跳過它而採用後方本地 base 的 `__init__`；這可避免依錯誤 MRO 猜測建構子。
+- Tier 1 neutral corpus 新增「繼承必要建構參數」的完整驗收，覆蓋 AST、caller literal、Dynamic Trace、deterministic unittest 與 scoped mutation；corpus runner 同時使用 `effective_init`，避免實作端與驗收端對建構子來源不一致。
+
+### 修正 Tier 2 合流遺失合法 unittest 別名
+
+- Tier 2 的子任務先前雖可通過結構驗證，但合併器只識別 `unittest.TestCase` 的固定拼寫；模型若使用 `import unittest as ut` 或 `from unittest import TestCase as Case`，已驗證子測試可能在合併時被漏掉。
+- 合併器現在依每個子檔的標準庫 import 解析允許的 TestCase base，保留普通與非同步別名 TestCase，並仍拒絕未證實來源的任意 class base。
+
+### 隔離不同實例的 Tier 2 Trace 事實
+
+- Dynamic Trace 對已由 caller literal 證實的 instance method／property 呼叫，現在會記錄建構子 args／kwargs；Tier 2 的 caller partition 會要求方法與建構子兩者都精確對應。
+- 因此兩個不同物件即使以完全相同的方法引數呼叫，也不會互借另一個 prefix、config 或 client state 的回傳 oracle；缺少可比較的建構語境時維持保守空 subset。
+
+### 補足內建 mutation fallback 的真除法覆蓋
+
+- 當原生 `mutatest`／`mutmut` 不可用時，內建 fallback 現在會為 Python 真除法 `/` 建立 `/ → //` mutant；先前這類公式運算可能完全不計入 fallback mutation 分數。
+- 新增非整除結果的回歸驗收，確認 generated test 能實際殺死該 mutant，而不是只檢查候選清單有出現。
+
+### 防止未驗證 Auto 模式偷偷啟動模型修補
+
+- 當未完成資格探測的 Auto 模型使用 deterministic Tier 1 fallback，而該 fallback 未通過執行或 coverage gate 時，系統現在會保留報告並停止；不再啟動 Reviewer 或 Self-repair 產生未驗證模型程式碼。
+- 使用者明確選擇任一 Tier，或同一 provider／model 已通過 unittest 資格探測時，既有 Reviewer 與修補流程仍可使用，且持續受結構、Trace、執行、coverage 與 mutation gate 約束。
+
+### 建立 Tier 1 LLM 發行門檻
+
+- `fixture_scorecard.py` 現在會確認報告中的實際 Tier 必須與 corpus fixture 相符，避免把高 Tier 或錯誤路由的分數冒充為 Tier 1 結果。
+- 新增 `--require-tier1-llm-release`：只有全部 Tier 1 fixture 都以 `llm-evidence-bound` 模式、實際 Tier 1、完整 coverage 與 mutation 分數通過各自門檻時，命令才回傳成功。缺報告、fallback、混合模式、執行中斷、未計分或 Tier 不符都會阻擋發行宣稱。
+- final report 現在機讀記錄 provider／model 組成的模型識別；scorecard 與發行 gate 必須指定該識別，不能把 Cloud、Ollama、Custom API 或不同模型的報告拼成單一模型的品質成績。
+
+### 放寬安全的 unittest 資格探測格式
+
+- 正式測試與模型資格探測現在接受明確從標準庫 `unittest` 匯入的 `TestCase`／別名，以及 `import unittest as ...` 的同等寫法；不再要求模型只能輸出唯一的 `unittest.TestCase` 拼寫。
+- 資格探測也接受無副作用的 `actual = increment(...)`、常數 expected value、`assertEqual(..., "訊息")` 與 `-> None` 型別註記。這些寫法仍只可表達固定 fixture 的兩個已知案例，任何檔案、網路、shell、動態執行或任意呼叫仍會在隔離執行前拒絕。
+
+## 2026-09-09
+
+### 修正 Cloud 模型資格名稱比對
+
+- 統一 Cloud 模型資格判斷的模型名稱正規化：Google 回傳的 `models/<name>` 與介面選取的 `<name>` 現在會正確套用同一份資格資料，不會讓已通過探測的模型在 Auto 模式誤回退。
+
+### 修正跨模型格式回退的總時限
+
+- Cloud、Ollama、Custom API 在結構化輸出被拒絕或回覆格式不完整後，改用純文字相容模式時，現在會沿用同一個 API 總 deadline；暫態重試若在等待期間到期，也不會再送出額外請求。
+
+### 以純 Python 統一測試生成
+
+- Cloud、Ollama、Custom API 的 unittest 資格探測與正式測試生成現在一律要求純 Python code fence，不再先要求把完整測試檔 JSON 轉義。語意分析與突變分流仍可使用 JSON 欄位契約，並有本地 parser gate。
+
+### 語意候選回饋為真實 Trace 事實
+
+- Tier 1／Tier 2 的 Semantic Analyzer 提出的安全 scalar 邊界值，現在會在完整 AST signature 檢查後再交給 Dynamic Trace 實測；只有實際回傳或例外才會進入 Writer。原本 Trace I/O 不會被覆寫，並新增中性 corpus 驗證「語意候選→Trace→deterministic unittest→mutation」閉環。
+
+### 隔離 Tier 2 caller 的 Trace 證據
+
+- Tier 2 分治的每個 caller 子任務現在只會看到與該呼叫站 source literal 精確相符的 Trace I/O；無法精確比對時寧可不提供 oracle，也不會借用其他 caller 的回傳值。最終合流仍會附加所有已驗證的全域 Trace baseline。
+
+### 為 Cloud 結構化模型加入分析與 mutation triage schema
+
+- 除了 unittest code 以外，Cloud provider 現在也會對 Semantic Analyzer 與 mutation triage 附上最小任務 JSON Schema；這能讓支援 structured output 的模型在傳輸層先固定必要欄位，降低任意 JSON 或缺少 `verdicts` 的回覆機率。
+- Ollama、OpenAI-compatible provider 與已驗證純文字模型保留相容行為：前兩者照各自 JSON mode 請求，純文字模型仍不被強制 schema；三者都要通過同一份本地 parser，不能僅因 API 聲稱結構化而跳過證據驗證。
+
+### 以 `typing.Literal` 擴充安全 Dynamic Trace 輸入
+
+- Dynamic Trace 現在會辨識目標參數明確標註的 `typing.Literal[...]` 值，並將有限的 scalar 值用於實際函式執行。例如沒有 if/match 分支的 `Literal["draft", "published"]` API 也能取得兩個真實 I/O baseline。
+- 實作只接受字串、數字、布林和 `None`，不會執行 annotation 內的函式、attribute 或其他表達式；結果仍須由 Trace 實測後才能成為 assertion 依據。
+- 內部 Tier 1 corpus 新增無分支 `Literal` fixture，驗證 `draft`／`published` 兩個明示值確實成為 Trace I/O，並由 deterministic unittest 通過 mutation quality gate；這是回歸證據，不是公開模型排行。
+- Tier 1 corpus 的 AST、Trace、生成 unittest 與 mutation 整合驗收現在會使用工作區 `.venv` 的 Python，不再暗中依賴系統 `python`；fixture 的 `trace_inputs` 也會在 TypeScript 與 Python 驗收雙重確認。
+- Semantic Analyzer 現在清楚區分 target call sites 與 dependency calls；模型提出的測資提示會依 AST 目標函式 signature 過濾，避免將相依參數或回傳欄位誤送進 Tier 1／Tier 2 的 target call。
+- Caller Finder 現在可正確解析 package 內的相對 import（如 `from .consumer import target`）；會以完整 package 模組名排除另一個同名 package，並在 Tier 2 corpus 驗證 caller literal 確實進入 Dynamic Trace。
+- 也支援 `from . import module` 後以 `module.target(...)` 呼叫的相對 module alias；只在完整路徑精確對應 target 時收集，避免把未知 package attribute 當成呼叫證據。
+- Module alias 現在也遵守 lexical scope 與 import-rebind 歷史；同名局部變數覆寫 alias 後的 `.target(...)` 不會再污染 Dynamic Trace。
+- 模型資格探測的隔離 Python unittest 執行期限統一為至少 30 秒，與 provider 探測及正式測試的 `.venv` 使用原則一致，避免因過短 3 秒執行期限誤判可用模型。
+
+### 將 AST 型別註記帶入測試生成語境
+
+- Writer、Semantic Analyzer 與 Reviewer 現在會接收 AST 已擷取的目標函式與建構子參數型別註記，例如 `list[str]`、`int` 與 `str`。這讓不同模型能更可靠地選擇可呼叫的輸入形狀，減少把字串、數字或集合混用造成的無效測試。
+- Prompt 明確標示型別註記只屬 source-level input guidance；精確回傳值與例外仍只能來自 Dynamic Trace、明確 source raise 或同測試控制的 mock。
+
+### 讓純 Python 資格模型避開不支援的分析 JSON mode
+
+- 模型若資格探測已證明只能可靠輸出純 Python unittest，Semantic Analyzer 與 mutation triage 現在也會直接走普通文字請求，並由既有 JSON contract／parser 驗證回覆；不再先送一個可預期失敗的 provider JSON schema 請求。
+- mutation triage parser 現在驗證 `verdicts` 資料結構、只保留附有 `kill_test` 的 KILLABLE 項目，並從已驗證結果重算可殺／等效計數。任意 JSON 或不完整分流不會再中斷 mutation loop 或錯誤排除存活變異體。
+
+### 拒絕非語意 schema 的模型 JSON 回覆
+
+- Semantic Analyzer 現在只接受至少含有一個正式分析欄位的 JSON。先前某些 provider 的 metadata、錯誤包裝或任意 JSON 雖可被 JSON parser 讀取，卻可能被誤當成「空分析」並覆蓋掉 AST 推導的技能卡。
+- 不合格回覆會明確記錄並改用程式碼特徵技能基線；這不是把模型策略降級，而是確保沒有經驗證的分析時仍保留可解釋、可重現的 setup 指引。
+
+### 修正直接匯入別名的呼叫站作用域
+
+- AST Caller Finder 現在會依呼叫行號檢查 direct import alias 仍解析到目標函式。函式參數、區域／closure 重綁定與模組層後續覆寫的同名 callable 都會排除，不再錯誤傳入 Dynamic Trace 或 LLM 的 caller context。
+- 無法靜態確認的 `nonlocal`、factory 與動態綁定維持保守排除；已確認的直接匯入呼叫不受影響。
+
+### 讓已驗證純 Python 的模型沿用其正式輸出能力
+
+- 模型若在連線 probe 中只通過「純 Python unittest」，正式 Tier 1／Tier 2、Tier 3、Reviewer 與 Self-repair 現在會沿用純 Python code path，而非又強制 JSON schema。這修正了探測成功、正式生成卻因不支援 structured output 失敗的能力斷鏈。
+- Semantic Analyzer 與 mutation triage 仍獨立需要 JSON；若它們不相容，系統安全採用 AST 證據觸發的技能卡基線，而不會撤銷已驗證的 unittest code-generation 能力。
+
+### 讓 Dynamic Trace 到達多參數 conjunction 分支
+
+- 先前 Trace 一次只替換一個參數；若 `a == literal and b == literal` 的基準輸入兩邊都不符合，便永遠無法執行共同成立的分支。現在只對可靜態驗證的直接 literal、長度與 membership 子條件，建立有限的共同滿足輸入，並優先放進固定 probe 預算。
+- 合成輸入僅用來執行目標；回傳值與例外仍完全由隔離 Dynamic Trace 記錄。巢狀 function／class／lambda 的條件不再污染 selected target 的輸入探索。
+
+### 讓正式模型生成處理暫態供應商錯誤
+
+- 正式的 Semantic Analyzer、Tier 1／Tier 2 Writer、Reviewer 與 mutation triage 現在共用有限三次的指數退避重試。對網路暫斷及 `408`、`429`、`500`、`502`、`503`、`504` 才重試，並加入 bounded jitter，避免批次工作在同一時間再次壓向 provider。
+- `400`、認證與權限等使用者可處理錯誤維持單次回覆；取消或總 timeout 不會因重試而被重設。這是 provider-neutral 行為，Cloud、Ollama 與 Custom API 使用相同規則。
+
+### 修正 AST 將區域 binding 誤當模組語境
+
+- AST extractor 現在依 Python lexical scope 過濾模組 imports、相依與引用 globals。函式參數、區域 assign／loop／with／exception／import binding、巢狀 function／class、`nonlocal` 與 comprehension target 都不會再被錯誤當成目標模組的 setup 事實。
+- 宣告為 `global` 的名稱仍可保留對目前模組常數的正確引用；未遭 shadow 的 module import 與 global 同樣保留。新增正反回歸案例，避免降低有效 AST 語境完整性。
+
+### 拒絕生成測試中未使用的相依設定
+
+- 結構 validator 現在會拒絕模型在測試方法中直接呼叫非 target callable、卻把結果存入從未使用變數的輸出。這類程式碼無法影響 target、assertion 或 Mock，是常見但無效的相依測試假象。
+- target result、實際傳入 target 的 helper 結果、參與 assertion 的值與 mock `return_value`／`side_effect` 設定仍會通過；規則不依任何專案領域或函式名稱判定。
+- Python 執行依賴的說明同步明確化：所有 Python runtime 依賴應安裝於工作區 `.venv`；Cloud Gemini 與 Ollama 由擴充功能以 HTTP 呼叫，無需額外安裝 Python SDK。
+
+## 2026-09-08
+
+### 統一以工作區 `.venv` 執行 Python 工具
+
+- 未設定 `llmUnitTest.pythonPath` 時，extension 現在會優先偵測工作區標準 `.venv`；Windows 使用 `.venv/Scripts/python.exe`，其他系統使用 `.venv/bin/python`。明確設定的自訂或實驗室直譯器仍有最高優先權。
+- 函式掃描、AST、Dynamic Trace、模型資格 probe 的隔離 unittest、coverage、mutation 與 extension 的 Python 回歸會使用同一個選擇；`npm run test:python` 也改為強制使用專案 `.venv`，避免系統 Python、使用者層套件與專案套件混用。
+- 開發文件改為先建立 `.venv`、再安裝 `requirements.txt`，不記錄任何固定磁碟或帳號路徑。
+
+### 降低模型資格 probe 的無關 fixture 格式失敗
+
+- 最小 unittest 資格 probe 現在由隔離 runner 提供固定 `increment` fixture；模型只需產生 `unittest.TestCase` 與兩個已知 target assertion，不必重寫被測函式。這讓資格工作更貼近正式測試生成，也避免模型因函式註解、格式或多餘 fixture 細節被誤判。
+- 舊版自含相同 fixture 的回覆仍相容；所有回覆仍要通過 unittest 結構、固定 target call、雙案例 assertion、安全白名單與隔離執行，沒有放寬為只看文字或 HTTP 成功。
+
+### 依 Context 預算分段保留 Tier 1／Tier 2 語意指引
+
+- Writer 不再因整段 semantic guidance 放不下就完全丟棄；現在只會注入可完整容納的段落，優先順序為已驗證語境、技能卡、測資策略、模型提出的候選路徑。
+- 被省略的段落會在 Prompt 中明確標記為 budget-reduced；不會截斷技能規則或 code fence，也不會把被裁掉的候選建議當成實際執行事實。
+
+### 收斂來源 `return` 表達式的 assertion 邊界
+
+- Writer 現在將來源中的 `return` 表達式標示為「可能結果形狀」，不再暗示可直接作為 `assertEqual` 的 expected value。這避免模型把相依呼叫、屬性或複合運算誤認為可驗證輸出。
+- 精確 assertion 仍限可 assertion Dynamic Trace、明確可到達的 literal return，或同一測試控制的 mock side effect；此限制同時套用初次生成與修復迴圈。
+
+### 讓 AST Caller Finder 辨識完整 dotted import binding
+
+- `import package.module` 後以 `package.module.function(...)`、直接建構 `package.module.Class(...).method(...)` 或先以同一類別直接賦值再呼叫 method，現在都可安全提供 caller literal 與 constructor literal 給 Dynamic Trace。
+- 判定會比對完整 import binding path；`package.other`、同 root 的其他 attribute chain、動態 import 與未知 re-export 仍不會被誤認為目標模組。
+
+### 將 Tier 1 改為 LLM 證據導向生成，並保留可辨識備援
+
+- Tier 1 在選定模型已通過 unittest 資格探測，或使用者手動選擇 Tier 時，現在會真正呼叫 LLM；Prompt 同時約束目標來源碼、AST 語境、Dynamic Trace 與本函式技能卡。模型負責選擇支持的行為、邊界與測試組織，不能把來源分支或技能卡當成未驗證的 assertion。
+- Auto 尚未驗證模型時仍只使用 Dynamic Trace 的確定性備援；報告會明確寫出「Tier 1 實際產生模式」，而且不再把備援產物標為 AI 原始輸出。
+- LLM 與備援兩條路都必須通過既有 unittest 結構、隔離執行、coverage 與 mutation 閘門；本次只驗證架構與回歸，尚未以真實模型取得 Tier 1 品質分數。
+- 驗證：180 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 將 Tier 1 LLM 與確定性成績分開彙整
+
+- `final_report.md` 現在另寫入穩定的 `Tier 1 generation mode` 機讀欄位；保留原本的中文說明，讓人與評分工具都能辨識產物來源。
+- `fixture_scorecard.py` 升級為 schema 2，可用 `--tier1-generation-mode llm-evidence-bound` 或 `deterministic-fallback` 分開產出評分。若未指定模式且同一 fixture 有兩種結果，會標記 `mixed_generation_modes` 而非挑選一個分數混充品質；舊報告缺欄位則為 `incomplete_provenance`。
+- 驗證：180 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：彙整器不會呼叫模型，仍需以使用者授權的真實模型執行 fixture，才能取得可比較的 LLM 品質資料。
+
+### 為 Tier 1／Tier 2 實測加入失敗分類
+
+- 中斷的 `final_report.md` 現在會寫入機讀的失敗分類：`model-api`、`model-format`、`ast-trace`、`validation`、`coverage`、`mutation`、`environment`、`timeout`、`cancelled` 或 `unknown`。
+- 分類不依 provider 或模型名稱，不改變既有路由、重試與品質 gate；用途僅是讓 fixture scorecard 和後續多模型實測能分辨 Prompt／格式問題與環境或工具問題。
+- scorecard 的表格與 JSON 會保留該分類，讓 Tier 2 的 mock／格式失敗不再被混成模型能力不足。
+- 驗證：182 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### Tier 2 保留類別與 Property 的已驗證 Trace
+
+- Tier 2–4 原本只會把頂層函式的 Dynamic Trace 方法附加到模型測試；class instance method、static/class method 與 property 可能只剩模型自行推論的測試。
+- 現在若已有可安全 assertion 的 Trace 與可驗證的 constructor literal，系統會用正式 Tier 1 builder 組出獨立 `TestVerifiedTrace_*` 類別，再加入 LLM 產物。這樣保留真實 I/O oracle，同時不覆寫模型生成類別的 `setUp`、Mock 或測試方法。
+- 建構子必要資料不足時會記錄並安全略過，不會以猜測的 `Class()` 產生必定失敗的測試。
+- 驗證：183 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 收斂 Tier 1／Tier 2 的相依函式測試隔離
+
+- 依既有 Tier 2 報告發現，模型可能先直接呼叫相依函式、再將未使用的結果留在測試中；這既不能控制目標函式的相依行為，也容易讓預期值與實際 target call 脫鉤。
+- Tier 1 evidence-bound Prompt、small／large Writer Prompt 及有相依語境的 User Prompt 現在都明確禁止這種做法。相依行為需要控制時，必須 patch 目標模組使用點，目標函式呼叫才是測試主體。
+- 規則不禁止目標函式內部使用相依，也不把相依的 source／Trace 變成 target assertion；它只避免模型在測試本身做無效的直接 setup 呼叫。
+- 驗證：184 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 在執行前攔下與 Dynamic Trace 矛盾的直接 Assertion
+
+- 新增證據 gate：模型若直接對一個已驗證的 target call 寫 `self.assertEqual(...)`，expected value 必須和同一組 Trace input 的實際結果一致；單引號／雙引號與 whitespace 差異會正規化比較，不會執行或解析模型字串。
+- 第一次發現矛盾時，系統把確切 Trace 事實附到格式／證據修復 Prompt 要求重新生成；第二次仍矛盾才中止。這可在預先驗證前擋下已知 Tier 1／Tier 2 幻覺 assertion。
+- Gate 有意只處理直接 assertion：未被 Trace 的探索輸入、經額外轉換的值及其他測試策略仍交由來源碼、既有結構驗證、執行、coverage 與 mutation gate 判定。
+- 驗證：187 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 擴展 Dynamic Trace 的布林與 None Assertion 一致性
+
+- Trace 證據 gate 現在也會比對完全相同 target call 的 `assertTrue`、`assertFalse` 與 `assertIsNone`；模型不能把已驗證的 `True` 寫成 `assertFalse`，或把 `None` 寫成一般值的 `assertEqual`。
+- 比對仍嚴格限於同一行中可解析的直接 target call 與完全相同 Trace 引數；指派後再 assertion、轉換結果與未追蹤輸入仍交給隔離 Python 執行、coverage 與 mutation gate，避免誤拒絕探索性測試。
+- 驗證：188 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 防止交換 assertEqual 參數繞過 Trace 證據
+
+- `assertEqual` 現在會辨識 target call 位於第一或第二個參數的兩種合法 unittest 寫法；即使模型把 actual／expected 交換，也會將另一側與完全相同的 Dynamic Trace 結果比較。
+- 可選的 assertion 訊息與巢狀 dict／list／tuple 字面值不影響比較；這讓常見不同模型輸出風格仍使用同一個證據標準，而不為特定模型特化。
+- 驗證：189 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 將 Trace 證據 Gate 套用至所有模型寫檔路徑
+
+- 原本只有初次 Writer 候選會在結構驗證前檢查已驗證 Trace assertion；Tier 2 分治合流後的最終檔、Reviewer 修復與 Tier 4 Self-repair 可能只做結構檢查，讓修復內容重新引入已知矛盾。
+- 現在四個路徑共用同一個可重用 evidence validation result。任何一條路徑若直接斷言了與精確 Trace input 相反的結果，都不會寫入測試檔或進入 coverage／mutation 計分；日誌和報告會區分格式失敗與 Trace 證據失敗。
+- 驗證：190 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 修正布林 Assertion 的 Python Truthiness 語意
+
+- `assertTrue(value)` 與 `assertFalse(value)` 驗證的是 Python truthiness，不是 `value == True` 或 `value == False`。先前 gate 會把已驗證回傳 `None`、`0` 或空集合的合法 `assertFalse(...)` 誤判為矛盾，這會不必要地限制不同模型的正確測試寫法。
+- 現在只有 Dynamic Trace 精確回傳 Boolean literal `True`／`False` 時，才以 `assertTrue`／`assertFalse` 直接判定相反 assertion；其他實值保留給隔離 Python unittest 執行決定。`assertEqual` 與 `assertIsNone` 的精確比較不變。
+- 驗證：191 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 接受 JSON Code Fence 中的安全測試 Envelope
+
+- 部分模型會遵循結構化輸出契約，卻將 `{ "code": "..." }` 再包進 ```json code fence；舊流程可找到含 `unittest` 的 fence，但不會第二次解開 `code` 欄位，最後把 JSON 當 Python 拒絕。
+- 現在會先選取含 unittest 證據的單一 code fence，再只解開合法 JSON 的字串 `code` 欄位。未知 JSON 形狀、無 `code` 字串、無 unittest 證據的區塊與 Markdown 說明仍由既有結構驗證拒絕。
+- 驗證：192 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 讓 Reviewer 與 Self-repair 使用完整的證據語境
+
+- Reviewer 原本仍保留從 source 直接猜回傳值、固定切片範例等遺留指令，也未收到 module imports、引用常數、class 初始化、技能購物車。這會讓修復模型在原始 Writer 已受證據約束後又回到猜測。
+- 現在 Reviewer 會收到完整 AST setup context、相依原始碼、精確 Trace args／kwargs／結果與 evidence-bound semantic guidance；來源與技能卡只能指引路徑和 setup，精確 assertion 必須保留 Trace／明確 raise／mock side effect 的事實界線。
+- Tier 4 Self-repair 同步重用此語境建立器，不再只看 stderr 盲修；所有修復流程都會沿用既有結構、Trace、隔離執行、coverage 與 mutation gate。
+- 驗證：194 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### Tier 2 分治合流改為先驗證、再合併
+
+- Tier 2 的分治流程原本只要能擷取到子回覆就加入合併，直到所有子回覆被正則合併成一份檔案後才做驗證；一個格式錯誤或與 Trace 事實矛盾的子測試會拖累其他有效子測試。
+- 現在每個呼叫站子回覆都必須同時通過 Python/unittest 結構 gate 與 Trace assertion evidence gate，才可加入合併。失敗時只重試該子任務，並把明確格式／Trace 原因提供給模型；兩次都失敗的子回覆不會污染合併結果。
+- 新增可獨立驗證的 Tier 2 子回覆 gate，確保結構有效與 Trace 一致兩項條件缺一不可。
+- 驗證：195 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### Tier 2 合流保留各呼叫站的獨立 TestCase
+
+- 舊合併器會將每個子回覆的 `setUp`／`tearDown` body 接成同一個 TestCase；不同 caller context 的 mock、物件和欄位可能覆蓋彼此，使個別原本可執行的子測試在合併後失敗。
+- 現在只合併去重的 imports，並將每個已驗證子回覆完整保留為名稱唯一的 `TestCase`。各自的 setup、teardown、helper 和 async base class 都維持本地隔離，避免跨呼叫站狀態污染。
+- 驗證：196 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 清洗語意分析師的未完成 JSON 分析結果
+
+- 舊版只要 JSON 能解析就直接傳給 Writer；模型可能回傳 `<to be determined>`、`...`、空白欄位或未知 assertion style，這些未完成內容仍會進入測資策略，讓後續模型將佔位符誤認為工作指令。
+- 現在 Semantic Analyzer 的回覆會在 JSON 解析後做結構化清洗：只保留完整文字欄位、合法 assertion style、Boolean mock flag 與非佔位的 input hints／skills／分析結果項目；不完整項目安全略過，並以保守的 `mixed` assertion style 取代未知值。
+- 這裡的「候選」只限 `equivalent_mutant_candidates` 欄位：它是分析師提出、尚待 observability 驗證的突變等價假設，不是系統元件名稱，也不會被升格為事實。Writer／Reviewer 仍以來源結構、精確 Dynamic Trace、明確 raise 或 mock side effect 決定可執行 assertion。
+- 驗證：197 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 以保守繼承解析補回 Base Method 的真實呼叫站 Trace
+
+- 選取 `Base.method` 時，先前 Caller Finder 只接受 `Base(...).method(...)` 或其直接匯入別名；未覆寫方法的子類別雖然實際執行同一個 Base member，卻會遺失可用的 constructor 與方法 literal，降低 Tier 1／Tier 2 的 Dynamic Trace 覆蓋。
+- 現在只接受可靜態證明的子類別：單一直接基類、沒有 class decorator、未在 class body 覆寫選取 member。支援同模組子類別、直接匯入別名、模組別名與同一 caller scope 的安全本地子類別；回收的 constructor literal 仍只用於建立選取的 base class instance。
+- 複數繼承、override、decorated class、同名本地類別、factory／屬性鏈與不確定 MRO 一律不會當作目標呼叫站，因此不會把猜測性資料帶進 Trace 或 Prompt。
+- 驗證：新增安全繼承的正反 Caller Finder 回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
+### 讓語意分析師取得受限的模組與 Class Setup 語境
+
+- Semantic Analyzer 原本只看目標函式、相依與呼叫站；雖然 AST 已擷取 imports、引用常數、class bases 與 `__init__` 資訊，分析師卻無法用它們規劃正確 import、建構子與 dependency-injection Mock 策略。
+- 現在會以固定上限將這些 AST source facts 傳給分析師：最多 12 個 imports、8 個引用 globals、12 個 constructor parameters 與 8 個初始化賦值。這避免小模型因缺少 setup 語境而猜測 `self` 屬性來源，同時維持 prompt 預算。
+- Prompt 明確標記它們不是執行 oracle；Semantic Analyzer、Writer 與 Reviewer 都不得從常數、`__init__` 或 import 臆測回傳值、例外或外部 side effect，精確 assertion 仍只依 Dynamic Trace、明確 raise 或同測試的 mock side effect。
+- 驗證：新增 AST setup 語境 Prompt 回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
+### 補齊反向比較與 literal membership 的分支探索
+
+- Dynamic Trace 原本可從 `mode in ('a', 'b')` 取得部分輸入，但 AST 不會把該條件交給 Writer；而 `3 < value`、`2 >= len(text)` 這類 literal 位於左側的安全比較，AST 與 Trace 都會漏掉。
+- 現在兩條管線會將可證明的反向比較正規化為 parameter-first 條件，並把 parameter-first tuple／list／set literal membership 列為輸入覆蓋事實。Writer 只收到「應探索哪些輸入」而非輸出結論；Trace 執行後的真實結果仍是唯一精確 assertion oracle。
+- `literal in parameter`、非 literal collection、helper／method call、複合條件與巢狀 callable 均維持排除，避免把 Python 容器或外部語意猜成邊界規則。
+- 驗證：新增反向數值／長度比較、membership 正例，以及反向 membership 反例；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
+### 讓 LLM Tier 1 同樣保留已驗證的 Trace 基線
+
+- Tier 2–4 已會在模型候選通過結構與證據 gate 後，附加由 Dynamic Trace 建構的 I/O 測試；但 LLM evidence-bound Tier 1 原本完全依賴模型自行保留這些案例，造成不同模型即使產出可執行 unittest，也可能少測已知行為。
+- 現在所有 LLM-authored Tier（含 Tier 1）都會保留可安全 assertion 的 Trace methods。頂層函式附加到既有 TestCase；class／property 仍維持獨立 TestCase 與已驗證 constructor literal，避免覆寫模型的 `setUp`／Mock 狀態。
+- deterministic fallback Tier 1 不會重複附加，因為它的完整測試檔已直接由同一份 Trace 建構。這保留 LLM 對額外情境與測試組織的判斷空間，也讓最低可驗證行為不依賴模型記憶。
+- 驗證：新增所有 LLM Tier 與 deterministic Tier 1 的 Trace 保留策略回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
+### 完整保留分段的 Cloud 與相容 API 文字回覆
+
+- 正式 Cloud 生成流程先前直接讀取第一個 `candidates[0].content.parts[0].text`；供應商若將 JSON envelope 或 Python code 分成多個 text part，後半段會被靜默丟失，最後看似模型格式不合格。
+- 現在正式生成與資格探測共用 Cloud 文字擷取器，依順序合併所有合法 text parts。OpenAI-compatible Custom API 同步接受標準字串 content 與 typed text segment 陣列，忽略 tool、image、reasoning 與未知內容。
+- 合併後仍必須通過原有 JSON／code-fence、unittest AST、隔離執行、coverage 與 mutation gates；本次不放寬任何模型輸出品質條件，也不將非文字片段視為程式碼。
+- 驗證：新增 Cloud 分段 JSON 與 Custom typed text 回覆回歸；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
+### 將安全的 Match Case 輸入事實交給 Writer
+
+- Dynamic Trace 已能探索部分 `match/case` literal，但 Writer 的 AST branch facts 沒有對應欄位，小模型只能從原始碼自行辨識 case 值。
+- 現在 AST 會擷取直接目標參數上、沒有 guard 的 scalar literal 與 `case A | B` pattern，並以「輸入探索提示」傳入 Writer；不會將 case 對應的回傳值當作 assertion。
+- guarded case、capture、mapping、class pattern 與可變匹配都不會產生事實；Dynamic Trace 同步不再把含 guard 的 pattern 視為可安全到達，避免把 runtime dependency 誤當成固定路徑。
+- 驗證：新增 literal／or／None case 正例與 guarded case 反例；完整 TypeScript、Webview、Python、型別、lint、建置與差異格式檢查通過。
+
+## 2026-09-07
+
+### 在資格失敗日誌附上固定探測回覆
+
+- 當模型連線成功但未通過 unittest 資格時，側邊欄系統日誌現在會在 `[模型探測回應]` 後附上實際 provider 回覆，保留換行、上限 6,000 字元並標示截斷。
+- 這只適用於不含專案原始碼、固定 `increment` fixture 的連線探測；資格成功與正式測試生成不會記錄模型回覆，API Key、header 與 provider 原始 HTTP error 也不會透過此欄位寫入。
+- 隔離執行改為重用共同的 evidence-gated code-fence 解包器，修正前段能找到「前言 + Python fence」但最後安全檢查又使用舊解包邏輯的資料流不一致。
+- 驗證：178 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
+### 讓 Cloud unittest 探測可重現且保留安全界線
+
+- Cloud Gemini 的兩段最小 unittest 資格探測現在明確使用 `temperature: 0`，避免採用模型預設隨機性；這只影響測試連線，不改變正式測試生成請求的溫度策略。
+- 隔離 fixture 白名單新增無害註解與 `unittest.main(verbosity=N)`，以避免常見教學式輸出被誤拒；`open()`、任意 import、動態執行與其他未列入最小 fixture 的語句仍不能執行。
+- 若仍被安全限制拒絕，系統日誌會顯示不允許語句的行數，而非模糊地只顯示「最小 fixture 不符合」。
+- 驗證：176 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
+### 修正 Provider 前言造成的 unittest 資格誤判
+
+- 測試連線資格探測改用與正式生成相同、具 `unittest` 證據限制的 Python code-fence 擷取器；模型在單一有效 Python code fence 前後加入簡短 Markdown 前言時，不再因外層文字而被誤判失敗。
+- 擷取後仍必須通過完整 unittest 結構、`increment(1)`／`increment(-1)` 雙行為 assertion、最小安全 fixture 限制與隔離 Python 執行；Markdown 計畫、無 unittest 證據的 fence 或不安全程式碼仍會被拒絕。
+- 新增 Gemma 類模型常見「前言 + Python fence」回歸案例。
+- 驗證：175 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
+### 將模型資格結果寫入系統日誌
+
+- 連線成功但未通過 unittest 生成驗證時，Local Ollama、Cloud Gemini、Custom API 現在都會寫入側邊欄系統日誌；內容包含 provider、模型、探測模式、固定驗證原因與 Auto 的 Tier 1 安全路由。
+- 成功資格、探測 timeout 及 failure 資格狀態也採用同一個 `formatModelQualificationLog` 格式；Local／Custom 同步補上完整 `modelProbeResult`，讓 UI 狀態與日誌一致。
+- 日誌只使用已驗證的非密鑰 metadata，排除 API Key、authorization header、原始 provider response 與模型原文輸出。
+- 驗證：174 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+
+### 分離跨 Provider 的 unittest 資格契約
+
+- 新增 `src/llm/testGenerationQualification.ts`，集中所有 provider 共用的測試連線 Prompt、JSON schema、回應結構驗證與雙案例 assertion 規則。
+- `ollamaCapability.ts` 現在只負責將共同契約轉為 Ollama 的 `format: json` 或純文字 request；Cloud Gemini 與 Custom API 直接使用共同契約，不再從名稱為 Ollama 的模組取得規則。
+- `modelProbeExecution.ts` 同步改依賴共同資格契約，因此隔離執行標準對 Ollama、Cloud Gemini、Custom API 保持一致。
+- 驗證：172 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+- 限制：本次只消除 provider 名稱與共用資格規則的耦合；Gemma 4 31B 的上游 5xx／503 仍須由連線重試與實際 provider 狀態處理。
+
+### 更正 Fixture 資料集定位並提升 Cloud 連線暫時故障韌性
+
+- `test/fixtures/python/` 與 README 現在明確稱為「內部回歸 Fixture Corpus」：它用於防止 AST、技能卡、Prompt 與驗證器退步，不是公開模型排名、公開驗收成績，也不代表 Tier 2–4 已成熟。
+- Cloud AI Studio 的連線測試針對 `500`、`502`、`503`、`504` 這類 provider 端暫時錯誤，會等待 750ms 後重試一次；`400`、認證、權限、模型不存在、配額等可操作錯誤不會重試或被隱藏。
+- 驗證：172 個 TypeScript 單元測試、Webview script 語法檢查、Python 回歸與差異格式檢查通過。
+- 限制：若 Google 在兩次最小 `generateContent` 探測都回傳 5xx，extension 仍會如實回報服務端錯誤；此修正不會把未通過 unittest 資格的模型誤判為合格。
+
+### 新增 AST 綁定的 Tier 4 Async Context Manager 技能卡
+
+- 新增 `async_context_manager_testing`，只在目標 callable 真的含有 `async with` 時才放入技能購物車；同步 `with` 與字串文字不會誤觸發。
+- 技能卡區分 `async with client.method(...)` 和 `await client.method(...)`，要求使用 `__aenter__`／`__aexit__`，並警告裸 `AsyncMock` 回傳 coroutine 不能直接充當 async context manager。
+- 一般 context-manager 卡同步補上 sync／async protocol 的分界；Tier 4 async fixture 已將此項列為可驗證的技能期待。
+- 驗證：170 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此項證明 AST 觸發與 Prompt 規則正確，尚未以真實 async provider 回應完成 Tier 4 端到端 coverage／mutation 評分。
+
+### 補齊 Tier 3 檔案 I/O Mock Scaffold 與 Tier 3／4 語境安全
+
+- `mock_scaffold_generator.py` 現在會將目標函式直接使用的 Python built-in `open()` 視為目標模組使用點，產生 `@patch('target_module.open')`；避免 file I/O fixture 因為它不是 import binding 而漏 patch、接觸真實檔案。
+- 新增正反 AST 回歸：真正 `open()` 會產生 patch，僅包含 `"open"` 字樣的字串不會被誤判。
+- Tier 3 專屬 Prompt 現在包含目標 source 與 evidence-bound skill guidance，不再只給 TODO scaffold 與有限 Trace；Tier 4 repair system prompt 也不再要求習慣性 None／空值測試。
+- 驗證：169 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此項驗證 mock patch 路徑與 Prompt 資料流，尚未透過真實模型完成 Tier 3 file／HTTP／DB、Tier 4 async／time／dataclass 的端到端得分。
+
+### 支援指定 Python／venv 直譯器以維持完整品質鏈路
+
+- 新增 VS Code 設定 `llmUnitTest.pythonPath`，預設為可攜的 `python`；使用者可指定實驗室、RDP 或 virtual environment 的直譯器，不含任何固定磁碟或帳號路徑。
+- 同一個選擇會套用於全檔／批次函式掃描、AST、Caller Finder、Dynamic Trace、格式驗證、coverage、內建 mutation fallback 與外部 mutatest／mutmut。
+- mutmut 改為由指定直譯器的 `python -m mutmut` 啟動，並以同一個直譯器執行 unittest runner；含空白的 venv 路徑有回歸測試，避免在子程序拆成錯誤命令。
+- 驗證：167 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未在實際 RDP／實驗室環境指向一個已安裝 requirements 的 venv 完成端到端模型測試；本機沙箱的不同權限 Python user-site 問題，現在可由這個設定避開。
+
+### 將 Coverage 缺失改為品質閘門失敗而非 N/A 成績
+
+- 預先驗證發現 extension 使用的 Python 無法匯入 `coverage` 時，現在會停止分析與 mutation 計分，將原因與可攜的 `python -m pip install -r requirements.txt` 修復指令寫入 `final_report.md`。
+- 不再以「unittest 可以執行」掩蓋未執行的 line／branch coverage gate；這能防止任何 Tier 或模型取得沒有覆蓋率證據的表面成功結果。
+- 新增可攜診斷訊息回歸測試，不含特定硬碟、帳號或本機路徑。
+- 驗證：166 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：本機沙箱的一般 Python 與提升權限 Python 使用不同 user-site；一般執行器目前仍未載入 coverage。這是環境部署問題，必須在 VS Code 實際使用的 Python 環境安裝 requirements 後，才可完成真實 coverage gate 驗收。
+
+### 讓技能購物車真正進入 Writer Prompt 並移除例外過度推論
+
+- 修正 Orchestrator 資料流：語意分析師產出的 evidence-bound skill cart 與 guidance 現在會傳入主 Writer Prompt 與 Tier 2 分治子 Prompt；先前這段內容只會寫進報告，沒有實際提供給測試生成模型。
+- 新增 token 預算 gate：只有整段 guidance 放得下時才注入，預算不足時安全略過，避免規則被截成不完整片段；注入內容再次標示來源碼與精確 Trace 優先於模型候選建議。
+- Writer Prompt 不再因為存在 `try/except` 而宣稱函式「永不」拋例外，也不再把 dependency 的 `raise` 警示直接變成測試契約；兩者都必須以實際 source path 或 Trace 佐證。
+- 語意分析師的不可達路徑、等效 mutant、mock 需求都改為「候選」並要求驗證，不能據此自動刪除測試或忽略 mutation。
+- 驗證：165 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未以真實 provider 對 Tier 2 跑出可執行率、coverage 與 mutation 成績；Tier 3–4 仍未實測。
+
+### 收斂 Tier 1／2 技能卡的證據界線並補足 Generator 支援
+
+- 修正長度邊界、除零與類別實例技能卡：不再預設某個輸入「必定」拋例外，也不再假設可用無參數建構子；它們只能要求依來源條件選擇輸入，並以明確 source／精確 Trace 支持 assertion 與 constructor setup。
+- 新增 `generator_result_testing`：僅在 AST 證實目標 callable 自身含有 `yield`／`yield from` 時注入，要求有限序列以 `list(target(...))` 具體化後再斷言，禁止比較 generator repr。
+- AST 會區分目標函式的 yield 與巢狀 helper 的 yield；Tier 2 generator fixture 已宣告這項 AST 證據與技能卡期待。
+- 驗證：163 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：仍未以真實模型量測 Tier 1／2 的生成成功率與 mutation 成績；Tier 3–4 也尚未實測，不可據此宣稱功能成熟。
+
+### 將直接 AST 分支條件安全提供給 Tier 2 Prompt
+
+- `ast_extractor.py` 現在只擷取目標函式內、直接作用於參數的單一比較條件，例如 `value <= 3` 與 `len(text) > 4`；巢狀函式、一般 helper call 與無法安全解析的表達式一律排除。
+- Writer Prompt 將這些資料標示為「選擇輸入以覆蓋條件兩側」的 source-derived facts，明確禁止將它們解讀成回傳值或例外；assertion 仍須由原始碼或精確 Dynamic Trace 支持。
+- 新增正反回歸：驗證直接 parameter／`len(parameter)` 比較可辨識，helper call 和 nested callable 不會污染事實；Prompt 也不得把條件改寫成輸出結論。
+- 驗證：161 個 TypeScript 單元測試、Python 回歸、完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此項只建立 Tier 2 的通用靜態證據輸入，尚未以真實模型完成 Tier 2 端到端品質量測；Tier 3–4 仍未完成實測。
+
+### Tier 1 Corpus 完成 Trace、unittest 與 Mutation 端到端 Gate
+
+- 新增 Tier 1 corpus integration test：對每個 Tier 1 fixture 實際執行 AST Extractor、Caller Finder、Dynamic Tracer、正式 `tier1TestFileBuilder`、Python unittest 與內建 AST mutation runner，並驗證 baseline 與 manifest mutation 門檻。
+- 修正 boundary fixture 的等效 mutant：原本 `<`／`<=` 兩側回傳相同值，無法由任何觀察性測試殺死；改為可觀察的 `below`／`inside`／`above` 分支，避免把等效 mutant 假裝成 Tier 1 測試缺陷。
+- 驗證：四項 Tier 1 fixture 的 deterministic unittest 與 builtin mutation 均通過各自門檻；160 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：本機 Python 沒有安裝 `coverage`，因此此 gate 不宣稱已驗證 line coverage；Tier 2–4 尚未以真實模型端到端驗收。
+
+### 抽出正式 Tier 1 完整 unittest Builder
+
+- 將原本嵌在 orchestrator 的 deterministic Tier 1 unittest 組裝抽為 `tier1TestFileBuilder.ts`，正式 extension 與回歸測試共用相同的模組、instance、static/class method、property、async 與 constructor 綁定規則。
+- 必要建構子只接受 Caller Finder 已驗證的 literal；沒有事實時回傳缺失原因，Auto 模式維持拒絕猜測建構子，手動 Tier 才能進入既有受驗證的 LLM fallback。
+- 新增 builder 回歸測試，覆蓋可攜模組匯入、建構子與方法參數分離、必要建構子拒絕，以及 property 不可加括號。
+- 驗證：159 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：下一步仍須以這個正式 builder 對四項 Tier 1 corpus 產物實際執行 unittest 與 builtin mutation，不能僅以字串 builder 測試作為品質證明。
+
+### 讓 Tier 1 Corpus 以真實 Caller／Trace 取得建構子事實
+
+- `Labeler.render` fixture 補上同檔、字面值建構子的真實 caller，讓 Caller Finder 能以 `Labeler('label').render('value')` 提供建構子與方法引數的分離事實。
+- Python corpus 回歸新增 Tier 1 Dynamic Trace gate：每個 Tier 1 fixture 都必須透過正式 `ast_caller_finder.py` 與 `dynamic_tracer.py` 取得至少一筆安全、可 assertion 的成功或例外結果；必要建構子沒有實證時不會假裝可測。
+- 驗證：155 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：此 gate 驗證 Trace 事實可用，不取代下一步的「將 Tier 1 builder 產物逐項執行並檢查 mutation 門檻」。
+
+### 修正 Tier 1／2 Prompt 對有限 Trace 的過度推論
+
+- Writer Prompt 不再根據少數成功／失敗 Dynamic Trace 範例宣稱某段字串長度「必定」拋例外、另一段「必定」正常，或宣稱所有未觀測輸入都回傳 `None`。
+- Trace 現在只可作為精確呼叫的 assertion 事實；額外邊界必須由目標 AST 原始碼與已選取技能卡支持，`assertRaises` 也只能依明確 `raise` 或精確 Trace error 建立。
+- 語意分析師提出的 input hints 在 Writer prompt 中改標示為候選值，必須再由原始碼／Trace 驗證，避免模型產生的 JSON 被誤認為程式規格。
+- 驗證：155 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未以真實模型測量此改動對 Tier 2 的可執行率；下一步是以已驗證 provider 跑同一批 fixture，比較格式、驗證與 mutation 結果。
+
+### 以真實報告建立 Fixture 模型／Tier Scorecard
+
+- 新增 `python_scripts/fixture_scorecard.py`：遞迴讀取 extension 既有 `final_report.md`，依公開 fixture manifest 對照目標、coverage 與 mutation score，輸出 `fixture_scorecard.json` 與人類可讀 `fixture_scorecard.md`。
+- 未找到報告、缺少計分、低於門檻、報告記錄執行中斷皆不會被標為通過；同一 fixture 的多次結果明確選用最新報告，單次多修復迴圈則採 rollback 所保留的最高已驗證分數。
+- `--require-complete` 可在後續有真實模型執行資料時作為 CI／release gate；本工具不呼叫模型、不讀取 Key，也不會捏造 coverage 或 mutation 成績。
+- 驗證：153 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：目前尚無使用者授權的真實雲端模型或可用本機模型結果可匯入，故 scorecard 尚未產生可宣稱的模型排名。
+
+### 新增跨 Tier 的公開 Python 驗收 Corpus
+
+- 新增 13 個無業務資料的 Python fixture（Tier 1 四項、Tier 2–4 各三項），涵蓋邊界、例外、類別方法、property、match/case、相對 import、generator、檔案 context manager、HTTP client、資料庫隔離、時間、async context manager 與 dataclass／enum。
+- 每個 fixture 在 `manifest.json` 定義目標、可證實的 AST／技能卡事實、建議 Tier、最低 coverage／mutation score 及不可接受的假測試；它們是後續模型評分共同輸入，不是假造的模型實測成績。
+- 新增 TypeScript corpus 測試與 Python AST corpus 測試，確保四個 Tier 各有三項、所有目標均能由正式 AST Extractor 解析，且技能預期持續受 source／import／call 證據約束。
+- 驗證：153 個 TypeScript 單元測試、Python 回歸與完整 Git 歷史密鑰掃描、Webview script 語法檢查、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚未以真實模型生成並計算這 13 項的 coverage／mutation 實測矩陣；外部資源案例只允許 mock 或隔離資源，不能在本機回歸時觸網或使用共享資料庫。
+
+### 以 AST 證據擴充 Context Manager 與 HTTP 技能卡
+
+- 新增 `context_manager_testing`：僅在被測函式存在 `with`／`async with` 敘述時，才要求測試驗證區塊內可觀察行為，並在相依資源時以 use point 的 mock 設定 `__enter__`／`__exit__`。
+- 新增 `http_client_mocking`：只有目標函式的 call 與已匯入 `requests`、`httpx`、`aiohttp` 或 `urllib` client 綁定相符時才注入；禁止產生真實網路連線的測試。
+- 新增正反回歸測試，確認字串中的 `with`、未使用的 HTTP import 與未證實的 `client.get()` 不會污染技能購物車。
+- 驗證：151 個 TypeScript 單元測試、60 個 Python 測試、Webview script 語法檢查、完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+- 限制：尚待公開 fixture corpus 實測不同 HTTP client 的同步／非同步 context-manager 回應型態；本次不宣稱已完成真實雲端模型的端到端驗證。
+
+### 開源社群、安全回報與 package metadata
+
+- 新增 `SECURITY.md`、`CONTRIBUTING.md`、`CODE_OF_CONDUCT.md`、GitHub Bug Report／Pull Request 模板，明確禁止在公開回報中提供 Key、Token、私有程式與完整授權資訊。
+- `package.json` 補上 repository、issues 與 homepage metadata，讓 extension 發布與 GitHub 專案關聯可被工具與使用者辨識。
+- 驗證：149 個 TypeScript 單元測試、60 個 Python 測試、Webview script 語法檢查、完整 Git 歷史密鑰掃描、型別檢查、lint、extension 建置與差異格式檢查通過。
+
+### 補齊 MIT 授權檔
+
+- 補上 `LICENSE` 的標準 MIT 條文，與 `package.json` 已宣告的 MIT 授權及 README 連結一致。
+- Copyright holder 使用本機 Git 作者設定 `Lane`；本次不改變程式行為、依賴或模型流程。
+- 驗證：授權檔存在、README 的 `LICENSE` 連結目標存在，且 Markdown／差異格式檢查通過。
+
+### 清理失效開發工具與同步進度
+
+- Webview 擷取工具改讀 src/ui/webviewContent.ts，提供翻譯 callback，統一由腳本位置解析來源與 out 產物位置，並直接檢查實際生成 JavaScript 的語法；test:unit 納入 test:webview。
+- 移除已無正式程式讀取的 modelName／apiKeys 設定及修改舊來源路徑的 test/patch.js；金鑰管理維持 SecretStorage。
+- 將 5 個已追蹤的 Python .pyc 快取移出 Git 索引，保留本機檔案；未清除 VS Code 測試下載快取。
+- 重整 target/task.md，以已實作、驗收界線與後續工作取代舊 34% 統計；早期計畫與概覽加上歷史文件說明。
+- 驗證：149 個 TypeScript 測試、60 個 Python 測試、Webview 擷取／語法檢查、密鑰歷史掃描、型別、lint、建置及差異格式檢查通過；擷取工具於專案根目錄與子目錄均成功執行。
+- 限制：Webview 檢查涵蓋生成 JavaScript 語法，未取代瀏覽器 DOM 或 VS Code 真實互動驗收；跨工作目錄寫入產物的驗證需要放行本機沙箱檔案限制。
+
+### 每次分析獨立取消、模型快照與行程管理
+
+- 新增 ExecutionContext／ExecutionManager，以 AsyncLocalStorage 將每批工作、所有 worker 及其資源綁定同一不可重設的取消狀態；模型能力在分析開始時複製，後續連線探測不改變既有工作。
+- 中止後可立即開始新分析；舊工作的 log、coverage、完成通知與取消後寫檔均被阻擋，session 目錄加入唯一識別，避免快速重跑覆寫結果。
+- 抽出共用 processRunner，Python 掃描與分析使用相同的取消追蹤；保留引數陣列、stdout／stderr、timeout 與跨平台終止。Windows taskkill 回傳失敗時補上直接子行程終止後備。
+- LLM 請求的 timeout／取消範圍延伸至回應本文讀取完成；相同時間僅允許一批未取消的分析，避免重複啟動。
+- 驗證：149 個 TypeScript 測試、60 個 Python 測試、密鑰歷史掃描、型別、lint、建置與差異格式檢查通過；新增真實命令中止／重跑、模型快照及雙 Python 行程隔離測試。
+- 限制：未在 Linux／macOS 桌面實測；若 Windows 禁止 taskkill，後備僅保證直接子行程終止。單檔分析與報告主體仍待後續按責任拆分。
+
+### 修復斷言救援與公開命令入口
+
+- 裸 assert 改用 Python AST 解析後轉為 unittest，保留完整布林、連鎖比較、多行表達式及跨 assertion 的 setup；不再以逗號或比較正則拆解語意。
+- 不支援的控制流程、函式定義及動態 assertion message 保守拒絕；Python 解析程序不執行模型內容，產物仍通過原有結構、簽名、執行與突變驗證。
+- 單次／批次命令沒有 Webview 參數時開啟設定側邊欄；公開批次設定與中止命令，模型規格更新維持內部命令。
+- Google／Custom 純文字資格探測失敗時，回報該次重試的 HTTP 狀態與內容，避免讀取已消耗的第一次回應。
+- 驗證：143 個 TypeScript 測試、60 個 Python 測試、密鑰歷史掃描、型別、lint、建置與差異格式檢查通過；新增可執行的正反斷言案例與真實命令 callback 測試。
+- 限制：動態 message 的延遲求值與複雜控制流程不猜測轉換；沒有真實雲端連線或桌面手動驗收。
+
+### 固定模組分層重構基準
+
+- 將 34 個 TypeScript 模組分至 llm、tier、prompts、validation、mutation、ui 與 utils，統一提示詞檔名並同步修正正式程式與測試的引用。
+- 保留本次既有的中英文 README、虛擬環境排除、Python 啟動錯誤處理、UTC session 日期及重複邏輯整理；移除既有暫存修補檔。
+- 驗證：140 個 TypeScript 測試、53 個 Python 測試、tracked files／Git 歷史密鑰掃描、型別檢查、lint、extension 建置與 git diff --check 通過。
+- 限制：此為既有修改的回歸基準；裸 assert 複合表達式救援、命令無參數入口、連線重試錯誤回報與跨批次中止隔離將分階段修復；未進行真實雲端模型或 VS Code 手動驗收。
+
+## 2026-09-03
+
+### 修正 Webview 開始測試時遺漏傳遞 Cloud Key 名稱
+
+- 修正前端 `btn-run` 與 `btn-batch-run` 點擊時，從 `getStartParams()` 取得的 `cloudKeyName` 未被納入 `vscode.postMessage`，導致後端收到空值並誤報「找不到此模型的 Google AI Studio API Key」的缺陷。
+- 在前端檢查若為 Cloud 模式但未選擇 Key 設定時提早提示，避免無效請求。
+- 在 `src/test/webviewContent.test.ts` 新增合約測試，驗證 `startAnalysis` 與 `startBatchAnalysis` 均完整傳遞 `cloudKeyName`。
+- 驗證：單元測試通過、ESLint 0 warnings、型別檢查與 extension 編譯完成。
+
+### 修正批次測試缺失 API Key 與終止時 UI 凍結
+
+- 修正 Cloud 模式下若未取得 API Key 提早中斷時，未通知 Webview 復原狀態，導致畫面永久停留在「Batch Testing...」的問題。
+- 在 `SidebarProvider` 的 `startAnalysis` 與 `startBatchAnalysis` 補上 `analysisFinished` 通知，確保缺少 Key 彈錯後按鈕立即可重試。
+- 在 `abortTest` 指令執行時發送 `analysisFinished` 與中斷日誌，使手動點擊「終止測試」時能立即恢復按鈕可點擊狀態。
+- 將 `runTestCmd` 納入 `try...finally` 防護，並在批次並行任務補上錯誤日誌，避免未捕捉異常造成流程卡死。
+
+### 公開前的本機憑證與產物忽略規則
+
+- 補齊 `.gitignore`：忽略 `.env`、衍生 `.env.*`、私鑰／憑證副檔名、本機暫存目錄、`test/result/` 與本機 VS Code settings，同時保留可提交的 `.env.example`。
+- 未忽略既有追蹤的 `output/pdf` 報告或任何測試 fixture，避免以安全名義刪失可重現的公開資產。
+- 驗證：Git 追蹤清單與 ignore 規則檢查通過；本次僅變更版本控制邊界，未改變執行程式。
+
+### 零 lint warning 的公開 CI 基準
+
+- 以 ESLint 的機械修正補齊 7 個 TypeScript 檔案中 42 處單行控制流程的大括號；修正只改變格式，不改變條件、呼叫或回傳行為。
+- `npm run lint` 現在達到 0 warnings、0 errors，讓公開 CI 可以把 lint 視為真正的品質 Gate。
+- 驗證：139 個 TypeScript 單元測試、53 個 Python 測試、TypeScript 型別檢查、lint 與 extension 建置皆通過。
+
+### 無密鑰的 GitHub CI 與歷史掃描
+
+- 新增公開 GitHub Actions workflow：在讀取權限下執行 Node／Python 依賴安裝、完整 Git 歷史密鑰掃描、TypeScript／Python 回歸測試與 extension 建置，不注入雲端模型 API Key。
+- 新增可於本機與 CI 共用的 Python 密鑰掃描器；只檢查高可信 Google、GitHub、OpenAI、Slack 格式，失敗時只回報 pattern 類型和安全位置，絕不列印匹配內容。
+- `npm run test:python` 現在會執行 scanner 的正反回歸測試與完整歷史掃描，避免安全檢查只存在於 CI。
+- 驗證：139 個 TypeScript 單元測試、53 個 Python 測試（含 3 個 scanner 回歸）、完整 Git 歷史掃描、TypeScript 型別檢查與 extension 建置皆通過；Lint 為既有 42 個 warning、0 error。GitHub Actions 遠端執行待下一次明確推送後確認。
+
+### 公開前的密鑰歷史稽核
+
+- 以不輸出疑似密鑰內容的方式，掃描目前工作目錄與 `git rev-list --all` 的完整 Git 歷史，檢查常見 Google、GitHub、OpenAI、Slack API Key／Token 格式；結果為 0 個命中。
+- 此稽核為公開前基準，不能取代後續 CI secret scan，亦不會讓曾在對話中揭露過的 Key 重新安全；該 Key 仍須由專案擁有者撤銷並重建。
+- 驗證：工作目錄與完整 Git 歷史高可信格式掃描通過，未輸出或保存密鑰內容。
+
+### 開源 v1.0 本機實作待辦
+
+- 在被 Git 忽略的 `log/OPEN_SOURCE_V1_TODO.md` 建立一個月開源 v1.0 待辦清單，將安全、CI、公開 fixture、AST／Trace、多模型驗收、技能卡、突變與 Release Candidate 分為可單獨驗證的項目。
+- 清單固定記錄每項的完成日期、驗證、可量化結果、限制與 bilingual commit，並明確禁止紀錄 API Key 或使用者資料。
+- 更新 `log/README.md` 說明本機待辦的用途與資料安全界線。
+- 驗證：Markdown 差異格式檢查通過；本次為文件與本機工作計畫改動，未改變執行程式。
+
+## 2026-09-02
+
+### 結構化輸出的跨供應商文字回退
+
+- 修正正式 Tier 2–4 生成流程只在 HTTP 400 才從 JSON／schema 格式回退為純 Python 的問題；部分 OpenAI 相容服務會以 415、422 或 501 表示不支援該格式。
+- 現在 Local、Cloud、Custom 的正式生成會在 400、415、422、501 統一以純文字重試，讓可生成 unittest 但不支援 JSON mode 的模型仍可使用；401、403、404、429、5xx 等認證、模型、配額或服務錯誤不會被吞掉。
+- 新增回歸測試，確認文字輸出不重試，以及帳號或服務錯誤不會被錯誤偽裝為格式回退。
+- 驗證：139 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 手動 Tier 不再被模型探測強制降階
+
+- 修正模型尚未探測或探測失敗時，即使使用者明確選擇 Tier 2、3、4 仍被強制改成 Tier 1 的行為；這會讓新模型與本地模型無法實際使用完整系統。
+- 現在模型 unittest 探測只控制 **Auto** 路由：Auto 仍會保守選用 Dynamic Trace 驅動的 Tier 1；手動選擇則會被保留，並以既有的測試結構、隔離 Python 執行、coverage 與突變閘門驗證輸出。
+- 未探測模型在手動 Tier 可使用語意分析、Reviewer 與突變修補；沒有使用者明確授權時，Auto 仍不會用未驗證模型猜測測試，保留穩定性與可控成本。
+- 驗證：138 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### Tier 3 Scaffold 的已驗證建構子設定
+
+- 修正 Tier 3 Mock Scaffold 只提供 `Class(...)` TODO、沒有把 caller 已驗證的建構子設定傳給模型的問題。
+- 現在會將可靜態驗證且已用於 Trace 的 constructor expression（例如 `Service('prefix:')`）明確提供給 Tier 3，並標示它不可作為被測方法的引數。
+- 新增 constructor expression 與 Tier 3 Prompt 的回歸測試，維持純量／結構證據導向，不依模型、供應商或業務名稱特化。
+- 驗證：138 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 合格非同步實例方法的隔離突變驗證
+
+- 新增內建 AST 突變 runner 的端到端回歸案例：必要建構子、限定 `Class.method` scope、`asyncio.run` 的成功與例外測試會在每個隔離 mutant 上執行。
+- 驗證原始 baseline 可通過、選取 scope 存在、所有候選 mutant 都被測試殺死，且沒有 runner error 或 survived mutant；防止類別／非同步情境只在測試生成通過、但突變分數失真的問題。
+- 驗證：137 個 TypeScript 單元測試、50 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### Tier 1 一般 Coroutine 的可執行斷言
+
+- 修正一般 `async def` 目標的 Dynamic Trace 已等待並取得真實結果，但 Tier 1 測試直接對 coroutine 物件做 assertion 的問題。
+- Tier 1 現在根據 AST 的 `is_async` 事實，以標準 library event loop 執行一般 coroutine 的成功與例外呼叫；同步與 async generator 的既有流程不受影響。
+- 新增正常回傳、`assertRaises`、必要建構子實例方法與實際執行 unittest 的 coroutine 整合回歸測試。
+- 驗證：137 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### Stub 快速通道的類別綁定安全性
+
+- 修正 Stub 快速通道一律使用 `Class()` 與實例方法呼叫的問題；這會讓必要建構子參數、靜態／類別方法與 property 產生不正確或無法執行的 smoke test。
+- 新增通用測試計畫器，依 module、instance、static、class、property 綁定方式產生正確呼叫；實例 Stub 僅能重用已驗證的 constructor literal。
+- 必要建構子沒有可驗證設定時，快速通道會在報告標示安全略過，且不會呼叫 LLM 或寫入必定失敗的測試。
+- 驗證：134 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 類別方法的目標綁定結構驗證
+
+- 修正寫入前驗證器只要看到任意 `.method()` 就視為已測到選取類別方法的漏洞；這會讓錯誤物件上的同名方法通過行為驗證。
+- 現在選取 `Class.method` 時，驗證器會要求呼叫經由目標類別直接匯入、目標模組 alias 的 `module.Class.method(...)`，或由目標類別直接建立的實例而來。
+- 已加入正確實例、錯誤同名實例與模組別名靜態／類別方法的回歸測試；所有一般頂層函式與 property 驗證維持既有相容行為。
+- 驗證：129 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### Tier 1 類別實例的可執行建構子設定
+
+- 修正 Tier 1 在 Dynamic Trace 已成功執行實例方法後，仍因 `__init__` 有必要參數而拒絕產生測試的問題。
+- AST 呼叫端會把「已 literal 驗證」的建構子原始碼表示與實際值分開保存；Tier 1 只在兩者皆存在時，將相同設定寫入 `setUp`，例如 `self._instance = Service('prefix:')`，再呼叫該實例方法。
+- Writer Prompt 同步看到這個已驗證建構子設定，明確禁止把建構子值誤傳給方法本身；沒有此證據時仍維持保守停止／要求 source-supported setup 的行為。
+- 新增確定性 setUp、Prompt 與實際執行 unittest 的整合回歸測試。
+- 驗證：126 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 局部實例變數的安全呼叫端追蹤
+
+- 呼叫端掃描現在支援同一函式作用域的直接實例建立模式，例如 `subject = Service("prefix")` 後的 `subject.render("value")`；可用的建構子與方法字面值仍會分開提供給 Dynamic Trace。
+- 只採用明確、同 scope 且呼叫前的直接賦值；條件式／巢狀 scope／factory／屬性鏈不會被猜測為目標類別。若同一變數已被重新賦值成未知物件，也會排除，降低將錯誤 caller 參數注入 Trace 的風險。
+- 補充同名頂層函式、同名本地類別、模組屬性、匯入別名、局部實例與重新賦值的回歸測試。
+- 驗證：123 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 類別方法的呼叫端與建構子 Trace 語境
+
+- 修正選取合格名稱 `Class.method` 時，呼叫端掃描無法辨識 `from module import Class`、模組別名與 `Class(...).method(...)` 的問題；同名但未匯入目標模組的本地類別不會被誤認。
+- 呼叫端現在會獨立保存可靜態驗證的建構子字面值和方法字面值。Dynamic Trace 使用前者安全建立實例、以後者呼叫目標方法，避免把建構子設定誤傳為方法參數。
+- 有已知建構子實例時，原始碼導向的其他分支探針會沿用同一組建構子事實，因此必要建構子參數不再使已驗證的實例方法 Trace 整體失敗。
+- 新增匯入別名、模組別名、同名碰撞與必要建構子實例方法的回歸測試。
+- 驗證：123 個 TypeScript 單元測試、49 個 Python AST pipeline 測試、TypeScript 型別檢查與完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 精確的 `__init__` 初始化語境
+
+- 修正 AST 擷取器會走進 `__init__` 內部巢狀 helper 的問題；helper 中的 `self.xxx` 不會再被當成建構子完成後可用的實例欄位。
+- Class Method 的 Prompt、Mock Scaffold 與 Reviewer 因此只會收到可由真正建構子建立的狀態事實，降低模型憑錯誤欄位猜測 setup 的機率。
+- 新增回歸測試，確認 `self.config`、`self.ready` 會保留，而巢狀 helper 中的 `self.transient` 會被排除。
+- 驗證：123 個 TypeScript 單元測試、47 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 可執行目標的函式清單
+
+- 修正函式選單與批次掃描把局部 helper、函式內非同步 helper、巢狀類別方法也列為可分析目標的問題。
+- 現在僅列出頂層函式與直接 `Class.method`；這些名稱與 AST、Dynamic Trace、Mock Scaffold、Tier 路由及突變測試支援的目標協定一致，不會再排入必定失敗的任務。
+- 新增回歸測試，驗證局部函式與巢狀類別會被排除，而正常的模組函式與直接類別方法仍會保留。
+- 驗證：123 個 TypeScript 單元測試、46 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### Class Method 的合格名稱端到端解析
+
+- 修正 UI 傳入 `Class.method` 時，多個 Python 分析工具只比對裸函式名稱的問題；這會讓同名方法被錯誤的類別或頂層函式取代。
+- AST Context、Dynamic Trace、Mock Scaffold、複雜度評估與內建 AST 突變引擎現在都接受合格名稱，並維持同一個選定類別範圍；生成／Reviewer 驗證則使用 AST 已確認的實際方法名建立 Python 呼叫。
+- 複雜度評估移除依 `db`、`http`、`file` 等關鍵字猜測外部資源的邏輯，改保留可驗證的 AST 匯入與呼叫結構，避免領域污染 Tier 路由。
+- 新增同名 `First.label`／`Second.label` 的整合測試，驗證選取 `Second.label` 不會誤追蹤、Mock 或突變另一個類別。
+- 驗證：122 個 TypeScript 單元測試、46 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 模型無關的 Writer 輸出契約
+
+- 測試生成師不再根據模型名稱決定是否要求 `<thinking>` 分析標籤；所有 Cloud、Ollama 與 Custom API 模型統一只需回傳一個 `python` code fence。
+- 補齊大型 Prompt、Tier 4 全自主生成與 Self-repair 的固定輸出文字；這些路徑不再要求分析標籤，避免部分 Tier 仍把推理內容混入測試檔。
+- 這可避免模型把推理文字混入測試檔，並讓既有程式碼區塊擷取、unittest 結構檢查與 Python AST 驗證以同一套規則處理所有 Tier。
+- 新增回歸測試，防止重新引入供應商／模型名稱黑白名單或任何 Writer 的 `<thinking>` 標籤。
+- 驗證：122 個 TypeScript 單元測試、45 個 Python AST pipeline 測試、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 42 個 warning、0 error。
+
+### 可攜式 Python 預先驗證
+
+- 生成測試的 unittest／coverage 預先驗證不再執行 Windows 專用的 `chcp`、`set PYTHONPATH`、`cd /d` shell 字串。
+- 改由直接啟動 Python，透過明確工作目錄與繼承、去重後的 `PYTHONPATH` 傳入被測模組、父 package 與測試輸出位置。
+- 新增跨平台環境與引數組合回歸測試，確認不含 `%PYTHONPATH%`、`$PYTHONPATH` 等 shell placeholder；coverage 失敗仍會保留輸出供 Reviewer 修復。
+- 驗證：112 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 仍為既有 44 個 warning、0 error。
+
+### 模型無關的 Prompt 詳細度路由
+
+- 移除依 `gpt-4`、`claude`、`gemini`、`pro`、`opus` 等模型名稱片段判斷 Prompt 大小的舊邏輯。
+- 現在只根據探測到的參數量、Context 與已解析 Tier 決定 small／large Prompt；例如本地 31B 與未來新增模型不會因名稱不在清單內而被當作小模型。
+- Tier 2 的分治策略也使用相同的能力資料，避免供應商品牌造成策略分歧。
+- 驗證：121 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
+### 例外斷言的 AST／Trace 事實閘門
+
+- AST 語境新增 `raised_exceptions`，只擷取被測函式本體中明確 `raise` 的類型，不會把巢狀 helper 的例外混入。
+- 生成、Reviewer 與 Tier 4 Self-repair 在寫入前，會將 AST 例外和可 assertion 的 Dynamic Trace 例外合併為可用事實。
+- 沒有這些事實的 `assertRaises(ValueError)` 等猜測性斷言會被拒絕；明確的 mock `side_effect` 仍能安全測試相依錯誤傳播。
+- 驗證：120 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
+### 模型資格探針的獨立時限
+
+- 所有 provider 的基本連線、模型清單與 Ollama 模型列表請求已統一至少 30 秒，不再使用 2／5／10 秒的短時限。
+- Cloud、Local Ollama、Custom API 的結構化 unittest 探針與純 Python 回退各自有獨立 60 秒時限；前一步列模型或結構化輸出較慢，不會消耗回退驗證的時間。
+- 此修正避免把延遲較高、首次載入較慢或經 RDP／實驗室網路使用的可用模型，錯誤標示為未通過 Tier 2–4 資格。
+- 驗證：116 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
+### 可攜式原生突變引擎執行
+
+- `mutatest` 與 `mutmut` 的啟動流程不再以 Windows／Unix shell 字串組合 `chcp`、`set`、`export` 或 `cd`。
+- 兩者現在共用直接執行的命令計畫、明確工作目錄與隔離 Python 環境；目標與報告路徑作為獨立引數傳遞，支援含空白或非 ASCII 的專案位置。
+- 原生引擎若回傳非零結束碼，stdout 與 stderr 仍會完整納入報告，讓分數解析、診斷與下一輪修復保有事實依據。
+- 驗證：114 個 TypeScript 單元測試、Python AST pipeline、TypeScript 型別檢查、完整建置皆通過；Lint 為既有 43 個 warning、0 error。
+
+### 儀表板結果直達與 Dummy 前置略過
+
+- 覆蓋率儀表板中已完成的函式卡片現在可直接點擊，會在 VS Code 開啟該函式的 `final_report.md`；鍵盤 Enter／Space 也可開啟，勾選框不會誤觸。
+- 僅在報告實際寫入後才啟用點擊；找不到報告時會顯示提示，避免開啟錯誤檔案。
+- 名稱含明確 `dummy` token 的函式現在於複雜度與 AST 之前就直接略過，同時跳過 Dynamic Trace、LLM、突變測試與不可靠的 `None` Smoke Test；報告會保留略過原因。
+- 新增 Dummy 名稱邊界與儀表板報告開啟的回歸測試。
+
+### 可攜且不洩露路徑的執行追溯
+
+- 報告不再寫入本機的擴充功能絕對路徑與工作目錄；改為 extension ID、版本、建置時間識別與 development／production／test 執行模式。
+- 開源與跨平台使用者可用版本與建置識別確認實際執行的擴充功能，同時不會暴露磁碟代號、帳號或資料夾結構。
+
+### 資料庫測試隔離技能卡
+
+- 新增以資料庫 driver 靜態證據觸發的技能卡；不依專案、資料表或函式名稱判斷，因此不會污染一般測試 Prompt。
+- 技能卡要求使用 module point-of-use patch、每測試獨立的 mock／in-memory／暫存資料庫，避免共用 SQLite 資料造成重複資料、鎖定與跨測試污染。
+- 同時禁止裸用未匯入的私有連線 helper，並限制例外斷言只能依明確原始碼或 Verified Dynamic Trace 產生。
+- 結構驗證新增硬性保護：拒絕連至檔案型 SQLite 的生成測試與直接操弄被測模組私有 helper；保留 `:memory:` 與 mock 的安全測試做法。
+- Mock Scaffold 現在可追蹤同模組內、實際會碰到 imported I/O 的 helper，會自動產生該 helper 的 point-of-use patch；例如目標呼叫連線 helper 時，不再漏掉 SQLite 隔離。
+- 跨模型輸出清理現在可辨識 `python`、`Python`、`py` 與未標記 code fence，僅擷取含 unittest 證據的區塊；模型分析文字不會再混入 Python 驗證造成 Markdown／缺 import 類錯誤。
+
+## 2026-09-01
+
+### Stub/Dummy 快速通道的結構式判定
+
+- 修正快速通道過度寬鬆的分類：短小的純計算或「賦值後回傳」函式不再被錯當成 Stub/Dummy 而略過測試與突變分析。
+- 判定不看任何業務字詞；除了 `pass`、空函式或移除 docstring 後的單一安全 literal 回傳外，函式名稱含明確 `dummy` token（如 `dummy_noise_function_001`）也視為使用者標記的雜訊／佔位函式，走最小 Smoke Test。
+- 新增回歸測試，涵蓋 `dummy_noise_function_*` 命名標記，以及 `add`、容器操作等仍應進入正常測試流程的案例。
+
+### 未探測模型的 Tier 品質閘門
+
+- 尚未透過「測試連線」驗證的 provider／model 現在會先限制為 Dynamic Trace 驅動的 Tier 1，不再因參數量猜測而直接進入 Tier 2–4。
+- 「測試連線」仍會讀取供應商可回報的模型參數量與 Context；另外以隔離的最小 unittest fixture 驗證模型是否真的能輸出並執行測試。兩種資料用途不同，會一併顯示於執行日誌與報告。
+- 修正 Tier 1 的退回旁路：未驗證模型遇到 Trace 缺失或需要建構子引數時，現在會停止並提示先測試連線，不會暗中改用 LLM 猜測測試。
+- 未驗證模型現在也會跳過 LLM 語意分析與存活突變體修補，改用 AST 技能卡並保留 deterministic Tier 1 的真實分數與報告；不再以不可靠模型嘗試灌高突變分數。
+
+### 可執行的模型 unittest 探測
+
+- 探測 fixture 從單一正向案例提升為正值與負值兩個已知行為案例；模型必須同時建立、assert 並在 isolated Python 中執行通過，才能開放 Tier 2–4。
+- 「測試連線」不再只檢查模型輸出的 unittest 結構與 assertion；探測碼必須符合嚴格、無外部副作用的最小 fixture，並在 Python isolated mode 中實際執行通過。
+- 連線資格結果因此能區分「格式看似正確」與「真的能產生可執行 unittest」，且不會執行模型任意輸出的程式碼。
+
+### 匯入別名的簽名驗證
+
+- 目標函式以 `from module import target as alias` 匯入時，Python AST 簽名閘門現在同樣會檢查別名呼叫的 positional 與 keyword 引數。
+- 合法別名不再成為繞過未知 keyword／多餘 positional 引數防護的途徑；`assertRaises(TypeError)` 的明確錯誤簽名測試仍可保留。
+
+### Package 模組一致匯入與 Mock Patch
+
+- 目標檔位於 package／namespace package 時，系統會依 AST imports 推導一致的模組路徑，例如 `src.service_order`，不再強制以檔名 `service_order` 匯入。
+- Tier 1、Tier 3、救援、Reviewer 與自動補 import 現在共用此路徑；Mock Scaffold 的 `patch` 也會對準實際載入的模組命名空間，避免 patch 到另一份模組實例。
+
+### 生成測試匯入別名相容性
+
+- 結構驗證現在可辨識 `from module import target as alias` 與 `import module as alias` 的合法目標呼叫，降低不同模型因程式風格不同而被誤拒絕的機率。
+- 匯入別名若在測試碼中被重新定義仍會拒絕，防止模型以假的 helper 冒充被測函式。
+
+### Dynamic Trace 副作用隔離
+
+- Dynamic Trace 現在會在載入模組、建構實例與呼叫目標時阻擋檔案寫入、刪除、子程序、shell 與網路 socket 操作。
+- 被阻擋的操作只會作為診斷資料，不會被誤寫為 `assertRaises(RuntimeError)` 測試事實；純函式與唯讀匯入維持可追蹤。
+- 同時封鎖 `io.open()`、`os.open()` 與常見的 `Path` 寫入／連結／權限修改操作，避免低階檔案 API 繞過追蹤隔離。
+- 兩個非字串／非布林數值參數現在會補充少量不同相對尺度的探索組合，避免只測到 `(50, 50)` 這類同位置配對而錯過衍生數值的多分支；斷言仍只使用真實 Trace 結果。
+
+### 直接檔案 I/O 安全閘門
+
+- 生成測試結構驗證現在拒絕直接呼叫 `open()` 與常見 `Path.read_*`／`Path.write_*` 操作，避免模型測試碼讀寫使用者專案或本機檔案。
+- `unittest.mock.mock_open` 與 `patch("builtins.open")` 維持可用，檔案相依測試必須透過 mock 模擬。
+
+### 目標行為斷言關聯閘門
+
+- 強化生成測試結構驗證：被測函式的呼叫必須直接出現在 assertion、其回傳值必須被 assertion 使用，或必須位於對應的 `assertRaises` 區塊中。
+- 阻擋「先呼叫目標函式、再 `assertTrue(True)`」這類無法驗證目標行為的虛假測試；同時保留變數接收回傳值與例外測試等正常寫法。
+- 註解、docstring 與字串中的 `target(...)`／`assert...` 文字現在不會再通過行為閘門，避免模型以說明文字或註解假裝有測試行為。
+
+## 2026-08-31
+
+### 生成測試安全操作閘門
+
+- unittest 結構驗證現在會拒絕模型測試碼中的 shell／子程序啟動、直接網路存取、`eval`／`exec` 等動態程式碼執行，以及破壞性檔案操作。
+- 標準 `unittest.mock.patch("os.system")` 等 mock 字串不受影響；測試必須透過 mock 模擬外部與危險行為，而非在使用者環境直接執行。
+
+### 突變分數隔離 Baseline 閘門
+
+- 內建 AST 突變引擎現在會在與 mutant 完全相同的暫存匯入環境中，先執行未修改原始碼的 unittest baseline。
+- baseline 失敗、逾時或無法啟動時，不再將每個 mutant 的測試失敗誤算為 killed；流程會拒絕該輪不可信的突變分數並顯示隔離 baseline 原因。
+
+### Dynamic Trace 非決定性 Oracle 隔離
+
+- Dynamic Trace 現在會辨識含記憶體位址的自訂物件、循環／過長容器、非有限浮點數等不可重現結果，將它們標示為不可作為 deterministic assertion 的語境資料。
+- Tier 1 只會從可重現的 Python literal I/O 建立機械式斷言；不可穩定的結果不再生成會在下一次程序失敗的 `assertEqual`。
+- 未通過模型能力驗證時，只有至少一筆可安全斷言的 Trace（或可安全呼叫的預期例外）才會啟用 Tier 1；其餘情況不會以不穩定資料誤判為可生成。
+- 非可序列化物件現在不會呼叫自訂 `__repr__`；Trace 僅保留穩定的型別標記，避免 diagnostic 階段觸發副作用或例外。
+
+### 已驗證的相依函式行為語境
+
+- 深度 AST 相依解析現在會對可載入的專案內相依函式進行獨立 Dynamic Trace，將真實 Python I/O 事實傳給語意分析師與測試生成師。
+- 語意分析師輸出的相依回傳值不再被視為未經驗證的事實；缺少 Trace 時改以相依原始碼與 `mock.patch` 為準，避免將 Python dict 誤寫為 `[object Object]`。
+- Trace 失敗只記錄原因並保留靜態語境，不會中斷目標函式的測試生成流程。
+
+### 跨 Tier 的 Trace 行為保底
+
+- Tier 2–4 對頂層函式產生的合法 unittest，現在會自動加入所有可安全 assertion 的 Dynamic Trace 測試方法。
+- LLM 仍可專注於 Mock、跨模組與存活突變體修補；但不能漏掉已由 Python 實際執行證實的輸入／輸出行為。
+
+### 目標函式簽名相容性閘門
+
+- 產生、Reviewer 與 Tier 4 自癒階段現在會以 AST 檢查測試對目標函式的呼叫；未定義 keyword 或超出 positional 上限的呼叫，若未明確以 `assertRaises(TypeError)` 驗證，會在寫檔前拒絕。
+- 此閘門只使用函式簽名，並保留合法的錯誤簽名測試與 `**kwargs` 函式；可避免將相依函式的參數誤加到目標函式上。
+- 內建突變引擎的子測試輸出現在以 UTF-8 搭配替代解碼處理，且 CLI JSON 保持 ASCII-safe；被測程式輸出非 UTF-8 位元組時，不再讓 Reader thread 中斷整個突變流程。
+
+### Dynamic Trace JSON 輸出隔離
+
+- Dynamic Tracer 現在會隔離目標模組載入、建構子與函式執行的 stdout/stderr，保證 CLI stdout 僅保留可解析 JSON。
+- 新增含 stdout 與 stderr 的被測函式回歸案例，防止 print／日誌再度破壞 Orchestrator 的 Trace 資料。
+
+### 目標分支覆蓋品質閘門
+
+- 預先驗證現在以 `coverage run --branch` 收集分支資料；即使所有目標行都執行過，只要 `if`、loop 或其他控制流仍有未走分支，仍會交由 Reviewer／Tier 4 補測。
+- 只會判定來源行位於被測函式本體的缺失 branch arc，避免同一檔案中其他函式的分支影響目前目標；coverage 報告無法安全解析時保持不誤攔。
+
+### 可追溯的模型能力結果
+
+- 每個 provider／model 的測試連線現在會保存非敏感的驗證結果說明與通過模式（結構化 JSON 或純 Python），並在最終報告列出。
+- 使用者可直接判斷 Tier 限制是因格式、已知行為 assertion 或探針逾時，不需猜測「未通過」的原因；不保存 API Key、原始 API 錯誤或任何 Authorization 資訊。
+
+### 類別綁定的技能卡精準化
+
+- 「需要實例」技能卡現在只會套用至 instance method 與 property；`staticmethod`、`classmethod` 不再收到相互矛盾的實例化指令。
+- property 的卡片明確要求以屬性存取而非加上括號，並新增 static、class 與 instance binding 的回歸測試。
+
+### 相對匯入的動態追蹤
+
+- Dynamic Tracer 現在會沿著 `__init__.py` 找出 package 邊界，並以完整模組名稱載入目標，讓 `from .helper import ...` 的相對匯入能提供真實 I/O Trace。
+- 同名暫存 package 在不同追蹤間會被隔離，避免後一次 Trace 靜默使用前一個專案已快取的模組。
+
+### 模型語意能力連線驗證
+
+- 「測試連線」中的最小 unittest 探針現在要求驗證明確事實 `increment(1) == 2`；只產生 unittest 外殼、呼叫函式或 `assertTrue` 的模型不再被誤判為可用於 Tier 2–4。
+- 結構化 JSON 與純 Python 相容回退均採用相同的領域無關行為契約，讓本地、Cloud 與 Custom API 的資格判定一致。
+
+### 回傳值 assertion 的突變驗證
+
+- 內建 AST 突變引擎新增通用 `return_value → None` 突變，會檢驗生成測試是否真的驗證函式的回傳結果，而不只覆蓋控制流程。
+- 新增結構化字典回傳的回歸測試；此機制不使用任何業務詞彙，適用於字串、數值、tuple、dict 與其他可觀測回傳值。
+
+### 套件匯入的突變真實性
+
+- 內建 AST 突變引擎現在會依 unittest 的 `package.module` 匯入形式鏡像必要套件目錄，並覆寫其目標檔為突變副本；不再只寫入頂層檔案而意外載入原始模組。
+- 新增 namespace package 型式 `from src.choose import choose` 的回歸測試，確保突變結果確實由被修改的模組產生。
+
+### 跨模組相依測試有效性
+
+- 結構驗證器現在會拒絕「修改本地相依回傳物件，卻未把它傳入被測函式或注入 mock」的偽相依測試；此類測試無法改變實際呼叫結果。
+- 正確以 `patch`、`return_value` 或 `side_effect` 注入相依回傳值的 unittest 維持可接受，避免誤擋標準 mock 寫法。
+
+### 目標函式完整覆蓋品質閘門
+
+- Coverage 現在會區分「被測函式至少曾執行」與「被測函式每個可執行陳述式均已覆蓋」；後者仍有缺行時，不再因 unittest 通過或突變分數偏高而直接接受。
+- 預先驗證、Reviewer 與 Tier 4 自癒均會收到具體未覆蓋目標行號，要求補足對應路徑後才視為完成；coverage 資料缺失或無法安全解析時維持保守不誤攔。
+
+### 本機日誌與模型連線資訊釐清
+
+- 新增 `log/` 本機 Agent／執行日誌目錄；除 `log/README.md` 外一律由 Git 忽略，且明訂不得記錄 API Key、Token 或含密鑰網址。
+- 「模型資格」改名為「模型 unittest 生成能力（測試連線驗證）」，明確區分模型可連線、參數／Context 資訊與實際生成可執行 unittest 的能力。
+- Cloud AI Studio 的測試連線現在採用 ListModels 實際宣告的輸入 token 上限；只有模型名稱明示 `31B` 等資訊時才標為「依模型名稱推定」，API 未公開時採保守預算，不再固定宣稱 1M Context。
+
+### match/case 突變測試
+
+- 內建 AST 突變引擎新增 literal `match/case` 模式的通用突變與回歸測試，讓各 case 分支未被測試時能被突變分數偵測；不加入任何領域專屬規則。
+
+### 專案執行規則與維護規範完善
+
+- 在 `PROJECT_RULES.md` 補充動態追蹤標準輸出（stdout）重定向隔離規範，避免被測函式內的 print 語句污染 Tracer 的 JSON 輸出。
+- 在 `PROJECT_RULES.md` 新增 Reviewer 語境對等原則，要求自癒修復階段必須提供完整常數、Class 結構與 Trace 數據；同時明訂禁止透過竄改本地變數進行偽 Mock。
+- 在 `AUTO_MAINTENANCE.md` 每次變更驗證流程中加入 `python_scripts/test_ast_pipeline.py` 回歸測試，並新增 `test/result` 歷史測試產物的定期清理與歸檔策略。
+
+### 選定函式的突變範圍隔離
+
+- 當使用者指定單一函式或方法時，內建突變引擎現在會排除其內部宣告的巢狀函式、lambda 與類別；這些 callable 不再被誤算進外層目標的突變分數。
+- 候選發現與實際突變套用共用同一走訪規則，避免範圍調整造成候選索引不一致。
+- 未指定函式的全檔案模式維持原本完整走訪，確保批次分析不遺漏任何可測 callable。
+- 新增巢狀 helper 含分支時，仍只計算外層目標突變的回歸測試。
+
+### Python match/case 分支追蹤
+
+- 動態 Trace 現在可從 Python structural pattern matching 的 MatchValue、MatchSingleton 與 MatchOr 萃取安全純量 case 值，為每個 case 建立真實 I/O 範例。
+- 字串、布林與數值 case 會加入不匹配值，以覆蓋 case _ 或未匹配預設路徑；不推測任何領域詞彙或複雜 pattern。
+- 技能購物車新增 pattern_matching 卡，只有 AST／原始碼確實出現 match/case 時才提示模型逐一測試 literal 與預設分支。
+- 新增 OR case、預設路徑與技能卡證據邊界的回歸測試。
+
+### 純 Python 模型能力探測回退
+
+- 本地 Ollama、Cloud Gemini 與 Custom API 的連線探測現在優先驗證結構化輸出；若模型不支援 JSON mode，會再以純 Python unittest 探測確認實際測試生成能力。
+- 只有產出完整、可驗證且包含目標呼叫的 unittest 時才會通過 Tier 2–4 資格；不會因單純可連線或簡短文字回覆而放行。
+- 純 Python 回應可安全接受單一 python code fence，讓遵守程式碼格式但不提供 JSON envelope 的模型可被正確辨識。
+- 語意 JSON 仍採保守語法技能卡回退，避免非結構化模型污染 Prompt。
+
+### 內建突變引擎控制流程擴充
+
+- 內建 AST 後備引擎新增 while 迴圈條件、三元運算式條件與 augmented assignment（如 +=）的通用突變，不依賴特定業務函式。
+- 修正不支援的運算子位於前方時，後續突變候選索引錯位的問題，避免錯誤套用或遺漏可突變語法。
+- 單一突變體使原本會結束的測試逾時時，現在視為該突變已被偵測並計為 KILLED，不再誤列為基礎設施 ERROR。
+- 新增控制流程、增量賦值、候選索引對齊與逾時行為的 Python 回歸測試。
+
+### 目標覆蓋執行證據
+
+- AST 現在提供被測函式本體的可執行行號，排除只因 import 而執行的定義／decorator 行，以及巢狀 callable 的行號。
+- 預先驗證會把這些行號與 coverage report 的缺行資料交叉驗證；若目標本體完全沒有執行，即使 unittest 成功也會交給 Reviewer 或 Tier 4 自我修復，而不會誤判為成功。
+- coverage 未安裝、目標列不存在或缺行格式無法安全解析時維持保守模式，不會製造假失敗。
+- 新增 coverage 解析、未覆蓋目標偵測與 AST 可執行行號的回歸測試。
+
+### 測試行為關聯品質閘門
+
+- 生成測試的格式驗證現在要求同一個 test_ 方法同時包含被測函式／property 的使用與行為 assertion，避免以無關的 assertTrue(True) 偽裝成有效測試。
+- 保留對 async 測試、assertRaises、property 存取與外部相依 mock 的相容性。
+- 新增「目標呼叫與 assertion 分散在不同測試」的拒絕測試，以及同一方法正確驗證行為的接受測試。
+
+### 多模型能力紀錄與 Tier 路由
+
+- 連線探測結果現在會依「供應商＋模型」保存最多 50 筆非機密能力資料；切換回先前已驗證的本地、Cloud 或 Custom 模型時，可恢復正確的 Tier 資格與 context 預算。
+- 能力紀錄僅包含模型名稱、參數量、context 長度與 unittest 探測結果，明確不保存 API Key、端點或其他密鑰。
+- 重新啟動擴充功能後會過濾無效舊資料；尚未探測的模型會明確提示先測試連線，且不會誤用其他模型的資格。
+- 新增多模型切換、同模型重新探測、Google 模型名稱正規化與安全還原的回歸測試。
+
+### 產生器 Trace 與 Tier 1 斷言
+
+- 動態追蹤現在會將同步與非同步產生器安全收集為最多 100 項的真實值前綴，不再把含記憶體位址的 generator repr 當作測試預期結果。
+- Tier 1 可對有限 generator 使用 list(...) 斷言；對截斷序列只比對已驗證前綴，對 async generator 則在標準 unittest 方法中安全收集後斷言。
+- 新增同步與非同步 generator 的 Trace 回歸測試，以及實際執行生成測試的整合驗證。
+
+### Cached Property 動態追蹤
+
+- 動態追蹤新增 functools.cached_property 支援，與一般 property 一樣以 descriptor 存取取得真實回傳值。
+- 僅辨識標準庫 cached_property，避免把任意自訂 descriptor 誤判為安全可追蹤目標。
+
+### Stub Smoke Test 斷言
+
+- 純 pass、return None 與安全固定 literal 的 Stub 測試現在會使用精確 assertion，不再只確認未拋出例外。
+- 若回傳值是運算式或其他不應在產生器中執行的內容，維持保守的 smoke 行為，不會杜撰預期值。
+
+### 執行環境追溯
+
+- 每份結果報告現在記錄實際執行的 extension.js 路徑、工作目錄、模型、請求與實際 Tier，以及模型 unittest 資格。
+- 可直接辨識舊版或不同安裝位置的擴充功能產生的結果，避免將部署問題誤判為測試生成缺陷。
+
+### Python Property Descriptor 語境
+
+- AST 會辨識 @property、getter、setter 與 deleter，並把同一 descriptor 的 accessor 語境提供給測試生成流程。
+- 動態 Trace 能安全建立無參數類別實例並讀取 property getter；Tier 1 會生成 self._instance.property 存取，而不是錯誤地呼叫 property()。
+- 結構驗證器與測試 Prompt 支援 property 存取語法；有 setter 時會保留其存在與安全測試提醒。
+
+### Trace 回復與突變報告可信度
+
+- 動態 Trace 若 caller 字面值只造成參數數量或關鍵字不符的 TypeError，會自動改用原始碼條件導向測資重試，不再讓錯範圍的呼叫站阻斷 Tier 1。
+- 技能卡現在必須有 AST 語法或已解析相依的證據；語意模型回傳的無關卡片不會再污染測試 Prompt。
+- 內建突變引擎新增一般 if 條件反轉；沒有可突變點時會標示 N/A 並停止重複迴圈，不再誤報 0% 或重跑相同測試。
+
+### 改進實作報告 PDF
+
+- 新增五頁繁體中文 PDF 報告，整理 AST 語境富化、技能卡、Tier 路由、模型資格、測試品質閘門、突變後備引擎與密鑰安全管理。
+- 報告明確列出已通過的 TypeScript 49 項、Python 15 項、編譯與 lint 檢查結果，以及尚待以合格模型完成的 Tier 2-4 端到端驗收。
+- PDF 已以系統繁中字型完成文字擷取、頁數與逐頁渲染檢查。
+
+### 相對匯入語境與相依解析
+
+- AST 現在保留 Python 相對匯入的層級資訊，支援 from .helpers、from ..shared 與 from . import sibling。
+- 深度相依解析會以被測檔案所在目錄處理相對路徑，不再錯誤以專案根目錄定位。
+- 新增絕對／相對路徑解析與 AST 匯入層級的回歸測試。
+
+### 未驗證 Trace 的安全停止
+
+- 未通過模型資格的情況下，Tier 1 現在必須取得至少一筆成功或例外的動態 Trace；否則會停止並提示改用通過探測的模型。
+- 不再讓失敗的確定性流程暗中退回未合格模型的 LLM 生成。
+- 新增 Tier 1 Trace 可用性回歸測試。
+
+### Tier 資格強制回退
+
+- 未通過 unittest 生成資格探測的模型，即使使用者手動選擇 Tier 2、3 或 4，也會安全改走使用已驗證動態 Trace 的 Tier 1。
+- 將 Tier 路由抽成可獨立驗證的規則，新增未合格回退、合格手動策略與 Auto 路由回歸測試。
+
+### 原始模組完整性
+
+- 生成測試不得透過 sys.modules 或動態建立同名模組來替換被測模組，避免測試呼叫到偽造實作而出現假通過。
+- 仍允許對外部相依建立替身或使用標準 unittest.mock.patch，不影響正常的依賴隔離。
+- 新增目標模組替換拒絕與外部相依替身允許的回歸測試。
+
+### 數值常數突變
+
+- 內建 AST 突變引擎新增數值常數變異，能檢查門檻值、增減量與計算常數被錯改時，生成測試是否能偵測。
+- 新增數值常數變異被殺死的回歸測試；既有突變範圍測試同步涵蓋新的候選數量。
+
+### 模型資格隔離
+
+- 模型的 unittest 生成資格現在綁定到「提供者 + 模型名稱」，切換模型後不會錯誤沿用前一個模型的探測結果。
+- 未探測或探測失敗的本機模型會安全地進入 Tier 1；完成自身探測後才可由 Auto 路由使用 Tier 2–4。
+- 新增跨模型與跨提供者的資格隔離回歸測試。
+
+### 目標範圍突變測試
+
+- 內建 AST 突變引擎現在只針對使用者選定的函式或類別方法產生變異體，不再把同檔案的無關邏輯納入分數。
+- 報告會標示實際突變範圍；若找不到選定函式，流程會明確失敗，避免誤報為「沒有突變點」。
+- 新增同檔案含無關函式時的範圍隔離回歸測試。
+
+### 目標呼叫品質閘門
+
+- 生成測試現在必須實際呼叫使用者選定的函式或方法，且不得在測試檔內重新定義同名函式來偽造通過結果。
+- 本機、雲端與自訂 API 的模型資格探測改為要求最小可自我驗證的 unittest 範例；空洞的常數 assertion 不再被視為可用模型。
+- 新增「未呼叫目標」與「覆寫目標函式」的回歸測試。
+
+### Caller Trace 與分支取樣合流
+
+- Dynamic tracer 不再讓 AST 擷取到的字面呼叫站輸入覆蓋自動分支取樣。
+- 現在會保留真實 Caller I/O，同時加入條件導向輸入並去重；沒有 Caller 時才補上型別邊界輸入，讓固定呼叫站不會掩蓋其他可達分支。
+- 新增「真實 caller 值與另一分支同時存在」的回歸測試。
+
+### 類別 static／class 方法的跨 Tier 呼叫語境
+
+- AST 現在會標示模組函式、實例方法、static method 與 class method 的綁定型態。
+- Dynamic tracer 對 static／class 方法不再嘗試建立實例，因此必填建構子不會阻擋真實 I/O Trace。
+- Tier 1 與 Tier 3 的測試骨架可直接呼叫 Class.method；Prompt 也會明確禁止為這兩種方法多餘實例化。
+- 新增帶必填建構子的 static／class 方法回歸測試。
+
+### 生成測試的行為斷言品質閘門
+
+- 生成測試驗證器現在要求至少一個 unittest assertion、assertRaises 或原生 assert，不再將只有 pass 的空測試方法視為可用產物。
+- 此規則套用於模型初次生成、Reviewer 修復與 Tier 4 自癒；Stub 函式的專用 Smoke Test 快速通道維持原設計。
+- 新增空測試方法的拒絕回歸測試。
+
+### 動態追蹤的條件導向測資
+
+- Dynamic tracer 新增純 AST 的條件導向取樣：辨識參數比較、數值邊界、長度邊界與集合成員判斷，產生少量可達分支的真實 I/O。
+- 這些輸入只取自目標函式已存在的語法，不使用業務詞彙或特定函式規則；既有的型別邊界輸入仍會保留。
+- 小型或不穩定模型現在更常能取得可直接生成 Tier 1 斷言的有效 trace，而不是只停在前置條件例外。
+- 新增多分支與字串長度界線的 tracer 回歸測試，以及「Trace → Tier 1 → 內建突變器」端到端測試，驗證邊界突變確實被殺死。
+
+### 內建突變器的布林邏輯覆蓋
+
+- Python 3.12+ Windows 無外部突變工具時使用的內建後備引擎，新增 and／or 互換突變。
+- 新增回歸測試，驗證測試案例能殺死布林邏輯運算子突變，而不是只覆蓋比較與算術運算子。
+
+### 跨提供者結構化輸出能力驗證
+
+- Cloud Gemini、Ollama 與 OpenAI-compatible Custom API 的「測試連線」改為實際驗證 JSON 內含完整 unittest 的最小生成能力，而非只送出一般文字或只檢查 JSON。
+- 若提供者拒絕 JSON 格式，系統會確認純文字請求仍可連線後顯示能力警告；正式生成流程可沿用既有的文字回退，不會把「不支援 JSON」誤報為整個 API 無法使用。
+- 新增 Cloud／Custom 回覆安全提取函式與回歸測試，不會假設外部 API 回傳的 JSON 一定具備預期巢狀結構。
+- Auto 路由會在模型已明確未通過 unittest 生成資格時改選 Tier 1；使用者手動指定 Tier 則維持原選擇。
+
+### 本地模型結構化輸出能力驗證
+
+- 本地 Ollama 的「測試連線」現在會在模型資訊探針後，使用極小且不涉及業務領域的 JSON 任務驗證結構化輸出能力。
+- 若模型輸出不完整 JSON、空內容或不符合預期格式，介面會明確警告：Tier 1 的確定性測試可繼續使用，但 Tier 2–4 建議選用 Instruct 模型。
+- 這可提前識別小型 code-completion 模型的能力限制，避免使用者誤以為連線成功就代表能可靠產生進階測試。
+- 新增探針請求與回應判定的單元測試。
+
+### Keyword-only 動態追蹤與 Tier 1 生成
+
+- Dynamic tracer 會把 required keyword-only 引數建立為 kwargs 並在結果中保留 Python repr，不再只記錄位置引數。
+- Tier 1 確定性生成可將 trace 的 kwargs 還原為 `function(..., name=value)`，例外與成功斷言皆適用。
+- 保持無 kwargs 的既有 trace 格式不變，避免不必要的 schema 破壞。
+- 新增 keyword-only trace、Tier 1 生成及實際 Python unittest 端到端回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、29 個 TypeScript 單元／端到端測試、8 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+## 2026-08-30
+
+### AST 函式與建構子簽章語境
+
+- AST 提取新增參數 kind、型別註解、必填狀態與預設值，涵蓋位置限定、一般、keyword-only、`*args`、`**kwargs`。
+- 測試 Writer 依實際簽章區分必填與可選參數，不再要求所有函式固定傳入所有參數。
+- 類別建構子同樣區分 required／optional，Tier 1 只在真正存在必填建構子參數時才避免無參數實例化。
+- 新增包含位置限定、預設值、keyword-only 與 variadic 的 AST 回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、27 個 TypeScript 單元／端到端測試、7 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+### 結構化回覆內容驗證與文字回退
+
+- 結構化輸出不再只依 HTTP 400 判斷支援性；HTTP 200 但回傳空白、半截 JSON、缺少 `code` 的程式碼 envelope 也會自動改以文字格式重試。
+- 保留純 Python 程式碼作為測試生成的相容格式，避免要求 JSON 的小型本地模型被不必要拒絕。
+- 這項修正由本機 `codegemma:2b` 實測的不完整 JSON 回覆觸發，並加入結構化回覆有效性回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、27 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+### 非同步 unittest 格式閘門
+
+- 生成測試驗證器現在同時接受 `unittest.TestCase` 與 `unittest.IsolatedAsyncioTestCase`，也接受 `async def test_*`。
+- 修正 Tier 3／Tier 4 對 coroutine 目標產生正確 async unittest 後，卻被同步格式規則錯誤拒絕的問題。
+- 新增非同步 unittest 結構回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、26 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+### 跨提供者結構化輸出相容性
+
+- Custom OpenAI-compatible API 在需要語意／測試程式碼結構化輸出時，會要求 JSON mode；Cloud、Ollama、Custom 共用同一份通用輸出契約。
+- 任一提供者以 HTTP 400 回報不支援結構化輸出時，會自動以文字格式重試，確保不同模型可加入同一個 Tier 流程。
+- 新增 Custom API 請求內容與通用 JSON／程式碼 envelope 的回歸測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、25 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+### 類別動態追蹤可信度
+
+- 動態追蹤無法安全建立類別實例時，不再以 `__new__` 跳過建構子；避免把未初始化屬性造成的 `AttributeError` 誤當成目標方法的真實行為。
+- Tier 1 偵測到類別建構子有參數時不再猜測 `ClassName()`，改交由具有完整類別語境的生成／Reviewer 路徑處理。
+- 新增回歸測試，確認需要建構子參數的類別不會產生偽造 I/O 與錯誤斷言。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、6 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+### Coverage 缺件時的可執行預先驗證
+
+- 預先驗證改為先偵測 `coverage` 是否可用；未安裝時仍會直接執行 `unittest`，只將覆蓋率標為 N/A。
+- 避免把環境缺少 coverage 誤判成 LLM 生成測試失敗，導致不必要的 Reviewer／Self-repair 呼叫與所有 Tier 降階。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、5 個 Python 回歸測試、完整建置與 Git diff 檢查。
+
+### 無外部套件的 AST 突變測試後備引擎
+
+- 新增標準函式庫 AST 基本突變引擎；外部 `mutatest`／`mutmut` 可用時仍優先使用，否則可在 Windows + Python 3.13 等環境繼續執行比較、算術與布林突變。
+- 每個突變都在暫存副本中執行生成的 unittest，原始碼不會被覆寫；存活突變會回饋給下一輪生成作為精準修補焦點。
+- 當無法安裝外部工具時，系統不再直接中斷，並在 Log 明確說明完整引擎（WSL／Python 3.11）仍可提供更廣覆蓋。
+- 新增回歸測試，確認邊界比較突變能被殺死且原始檔案保持不變。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、5 個 Python AST／Mock Scaffold／async trace／mutation 回歸測試、完整建置與 Git diff 檢查。
+
+### 非同步動態追蹤結果
+
+- 動態追蹤器現在會偵測 awaitable 並以 `asyncio.run` 取得真正回傳值，不再把 coroutine 物件當作函式輸出。
+- 新增 async 函式追蹤回歸測試，確認已驗證 I/O 可正確提供給低階與一般測試生成路徑。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、4 個 Python AST／Mock Scaffold／async trace 回歸測試、完整建置與 Git diff 檢查。
+
+### Cloud 模型可用性預檢
+
+- Cloud 連線測試先呼叫 Google Model List API，僅接受 API 宣告支援 `generateContent` 的模型，再發送生成探針。
+- 模型不存在、無權使用或不支援生成時，介面會回報可用模型建議，讓使用者直接替換 Model 名稱，而非只看到 404。
+- 支援使用者貼上 API resource 形式的 `models/名稱`，系統會正規化成正確的生成端點，且 API Key 持續只放在 Header。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、23 個 TypeScript 單元／端到端測試、3 個 Python AST／Mock Scaffold 回歸測試、完整建置與 Git diff 檢查。
+
+### Tier 3 Mock 使用點與非同步骨架
+
+- Tier 3 的 mock patch 路徑改為被測模組的實際使用點，可正確處理 `import ... as ...` 與 `from ... import ... as ...`，不再錯 patch 到原始套件。
+- 修正多個 `@patch` decorator 對應的 mock 參數順序，避免 mock 回傳值套用到錯誤相依項目。
+- Mock 骨架現在辨識 `async def`，使用 `unittest.IsolatedAsyncioTestCase` 與 `await`；類別方法也會產生 instance 呼叫及建構子必填參數提示。
+- 清除 Writer、Reviewer 與回歸測試中殘留的舊領域函式／欄位名稱，並加入防回歸檢查。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、21 個 TypeScript 單元／端到端測試、3 個 Python AST／Mock Scaffold 回歸測試、完整建置與 Git diff 檢查。
+
+### 通用技能卡保底與進階測試能力
+
+- 完整移除歷史遺留的業務領域 Few-shot，基礎範例只保留算術、例外與布林分支等通用 Python 行為。
+- 擴充三張按需技能卡：非同步協程、檔案 I/O mock、固定時間；只依目標程式碼的語法／標準函式庫使用情況選取。
+- Semantic Analyzer 正常運作時會與保守的語法級選卡合併；模型無法回傳語意 JSON 時仍注入保底技能卡，不會替任何特定專案或函式寫規則。
+- 移除會把函式引數誤判為 tuple 回傳的保底推論，tuple 判斷繼續交由 AST／語意分析處理。
+- 新增技能卡選擇回歸測試，確認 async、檔案與時間能力可被選取，且沒有除法時不會誤加除零規則。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、20 個 TypeScript 單元／端到端測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### Tier 1 端到端回歸測試
+
+- 新增 Python `unittest` 端到端回歸：由 Tier 1 產生測試程式碼、載入相依函式並實際執行。
+- 驗證精確字串回傳可正確斷言，避免再出現預期值被額外加引號而全部失敗的結果。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、18 個 TypeScript 單元／端到端測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### 基礎 Prompt 去領域污染
+
+- 共用 Few-shot 僅保留通用的算術、例外與字串處理案例；舊專案領域案例不再注入任何模型 Prompt。
+- Reviewer、Semantic Analyzer、技能卡與 Writer 的範例改為從實際函式簽章、原始碼與 AST 資料推導，不再預設特定欄位、模組或閾值。
+- 新增回歸測試，禁止實際共用 Prompt 與啟用的基礎案例出現既有專案領域詞。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、17 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### Tier 1 確定性測試生成
+
+- Tier 1 不再請小模型補全 assertion；它直接根據已驗證的 dynamic trace 產生 `assertEqual`、`assertIsNone` 與 `assertRaises`。
+- 修正模型即使回覆語法正確、但把字串多包一層引號時仍被接受的問題。
+- 例外測試不再因 LLM 請求失敗而遺失，讓小模型、離線或不穩定連線仍能產出基本可執行測試。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、16 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### Cloud／Local 結構化輸出與相容回退
+
+- Google Cloud 生成測試時可要求受 JSON Schema 限制的 `{ "code": "..." }` 回應；回覆會在寫入前還原成 Python 程式碼並接受既有驗證。
+- Semantic Analyzer 與突變分流師使用 JSON 輸出；本地 Ollama 對這類工作啟用 JSON mode。
+- Cloud 或 Local 模型若以 HTTP 400 回報不支援結構化輸出，系統會自動回退至一般文字輸出，不會犧牲模型可用性。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、15 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### 動態追蹤資料可信度
+
+- 呼叫站中的變數、運算式與不可安全還原的資料不再被當成真實輸入執行；它們只保留在語意提示中。
+- 可由 Python `ast.literal_eval` 安全還原的字面值位置／關鍵字參數，才會傳入 dynamic tracer；追蹤器同時支援這種 args／kwargs 格式。
+- Tier 4 Self-repair 補上與生成器、Reviewer 相同的 Python／unittest 格式閘門。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、13 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### 生成驗證、AST 語境與專案維護規範
+
+- 新增 `PROJECT_RULES.md`、`AUTO_MAINTENANCE.md` 與本中文變更紀錄；規定每個已驗證改動必須更新 Log 並建立中英文 commit。
+- 測試生成結果現在必須通過 unittest 結構檢查與 Python AST 解析，Markdown／說明文字不可再寫入測試檔；格式錯誤會以嚴格輸出要求重試。
+- Reviewer 使用相同驗證規則，避免說明文字覆寫有效測試；Tier 1 會保留動態追蹤的 Python 字串 repr，修正額外引號造成的錯誤斷言。
+- AST 提取新增完整 imports、被引用模組常數、類別基底、類別屬性及 `__init__` 初始化資料；屬性呼叫也會被識別。
+- 呼叫站搜尋以目標模組與匯入別名確認，避免不同模組同名函式污染語境；動態追蹤移除業務領域關鍵字，改採型別註解與通用候選值。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、13 個 TypeScript 單元測試、2 個 Python AST 回歸測試、完整建置與 Git diff 檢查。
+
+### Cloud Gemini 憑證欄位分離
+
+- 改為儲存 API Key 名稱、API Model、API Key 三個欄位，名稱不再被用作模型 ID。
+- 儲存完成後清空三個輸入欄位，且不將 API Key 回傳至 Webview。
+- 舊版 `{ 名稱: Key }` 資料可讀取；建議重新儲存以補上明確模型名稱。
+- 驗證：TypeScript 型別檢查、Lint（0 error、既有 54 warnings）、9 個單元測試、完整建置、Git diff 檢查。
+- Commit：`a5af175`。
+
+### Google API 與突變工具相容性
+
+- Google API Key 改走 HTTP Header，並可由 SecretStorage 或 CI 環境變數取得。
+- 依 Python／平台選擇可用突變引擎，避免 Windows + Python 3.12 以上錯誤執行不相容工具。
+- 驗證：型別、Lint、單元測試、建置及 Python 相依性檢查。
+- Commit：`7961b8c`。
+
+### 語意策略與技能卡基礎
+
+- 加入語意分析策略、技能卡庫與相關提示詞調整。
+- 驗證：型別、Lint、Git diff 檢查。
+- Commit：`9a6af74`。

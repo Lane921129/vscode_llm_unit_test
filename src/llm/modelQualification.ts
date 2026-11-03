@@ -1,0 +1,174 @@
+import { localize } from '../i18n/core';
+import { createHash } from 'node:crypto';
+import { RoleQualificationProfile } from './roleQualification';
+import { LocalThinkingMode, localThinkingMode } from './localThinking';
+
+/** Bump only when the executable probe contract changes, not for unrelated UI releases. */
+export const QUALIFICATION_VERSION = 'python-unittest-v9';
+
+export const LOCAL_RUNTIME_QUALIFICATION_VERSION = 'ollama-context-v1';
+
+export interface LocalRuntimeQualification {
+    version: typeof LOCAL_RUNTIME_QUALIFICATION_VERSION;
+    numCtx: number;
+    thinkingMode?: LocalThinkingMode;
+}
+
+export function isLocalRuntimeQualification(value: unknown): value is LocalRuntimeQualification {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return false; }
+    const runtime = value as Partial<LocalRuntimeQualification>;
+    return runtime.version === LOCAL_RUNTIME_QUALIFICATION_VERSION
+        && typeof runtime.numCtx === 'number' && Number.isSafeInteger(runtime.numCtx) && runtime.numCtx > 0
+        && (runtime.thinkingMode === undefined || ['provider-default', 'disabled'].includes(runtime.thinkingMode));
+}
+
+export function qualificationEndpointKey(envType: string, endpoint?: string): string {
+    const fallback = envType === 'local' ? 'http://127.0.0.1:11434' : envType === 'cloud'
+        ? 'https://generativelanguage.googleapis.com' : 'https://api.openai.com/v1/chat/completions';
+    try {
+        const url = new URL(endpoint || fallback);
+        // Never persist credentials, query parameters, or API keys with metadata.
+        return createHash('sha256').update(url.origin + url.pathname.replace(/\/+$/, '')).digest('hex');
+    } catch { return 'invalid-endpoint'; }
+}
+
+export interface ModelQualificationProfile {
+    envType?: 'local' | 'cloud' | 'custom';
+    modelName?: string;
+    testGenerationReady?: boolean;
+    /** Non-secret explanation captured from the deterministic connection probe. */
+    testGenerationReason?: string;
+    /** Structured JSON or plain-Python compatibility path that passed the probe. */
+    testGenerationMode?: string;
+    qualificationVersion?: string;
+    endpointKey?: string;
+    roleQualification?: RoleQualificationProfile;
+    /** Local role probes ran with this explicit /generate num_ctx. */
+    qualificationRuntime?: LocalRuntimeQualification;
+}
+
+export interface ModelQualificationRequest {
+    envType: 'local' | 'cloud' | 'custom';
+    modelName: string;
+    endpointKey?: string;
+    /** Effective local num_ctx, after resolving the configured value and metadata. */
+    runtimeContextTokens?: number;
+    localThinkingMode?: LocalThinkingMode;
+}
+
+export type TestGenerationResponseFormat = 'test-code-json' | 'text';
+export type AnalysisResponseFormat = 'json' | 'text';
+
+/**
+ * Google exposes identical models both as `models/name` and `name`.
+ * Capability identity must use the same provider-neutral spelling wherever a
+ * saved probe is looked up or applied; otherwise a successful Cloud probe can
+ * be found by the registry but rejected by the final qualification check.
+ */
+function normalizedModelName(modelName: string): string {
+    return modelName.trim().replace(/^models\//i, '').toLowerCase();
+}
+
+/**
+ * A complete unittest is source code, not a data record. Always request it as
+ * ordinary Python so models do not have to escape a whole file inside JSON.
+ * The local code extractor and execution gates remain the authority.
+ */
+export function selectTestGenerationResponseFormat(
+    _profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
+): TestGenerationResponseFormat {
+    return 'text';
+}
+
+export const TEST_GEN_MODE_PYTHON = '純 Python unittest';
+export const TEST_GEN_MODE_JSON = '結構化 JSON unittest';
+
+/**
+ * Analyst structure is independent of Writer's Python qualification. Only an
+ * explicit provider format rejection establishes that the transport needs a
+ * text fallback; a Writer probe cannot establish that JSON is unsupported.
+ */
+export function selectAnalysisResponseFormat(
+    _profile: Pick<ModelQualificationProfile, 'testGenerationReady' | 'testGenerationMode'>
+): AnalysisResponseFormat {
+    return 'json';
+}
+
+function compactLogValue(value: string | undefined, fallback: string): string {
+    const compact = value?.replace(/[\r\n]+/g, ' ').trim();
+    return compact || fallback;
+}
+
+/**
+ * Formats non-secret probe metadata for the user-visible system log. A bounded
+ * reply preview is allowed only for the fixed, source-free connection fixture.
+ */
+export function formatModelQualificationLog(profile: ModelQualificationProfile, responsePreview?: string): string {
+    const provider = profile.envType === 'cloud'
+        ? 'Cloud Gemini'
+        : profile.envType === 'custom'
+            ? 'Custom API'
+            : 'Local Ollama';
+    const model = compactLogValue(profile.modelName, localize("未指定模型"));
+    const mode = localize(['plain', 'plain-python'].includes(profile.testGenerationMode || '')
+        ? TEST_GEN_MODE_PYTHON : compactLogValue(profile.testGenerationMode, localize("unittest 生成探測")));
+    const reason = compactLogValue(profile.testGenerationReason, localize("未提供原因"));
+
+    if (profile.testGenerationReady !== undefined && profile.qualificationVersion !== QUALIFICATION_VERSION) {
+        return localize("[模型資格] {0}／{1}：舊探針結果已過期（原紀錄：{2}）；請重新執行測試連線。正式測試生成使用純 Python。", provider, model, mode);
+    }
+
+    const summary = profile.roleQualification?.writer.state === 'not-run' && profile.testGenerationReady === false
+        ? localize('[模型資格] {0}／{1}：服務可連線，但 {2} 探針未完成（{3}）；模型能力尚未判定。', provider, model, mode, reason)
+        : profile.testGenerationReady === true
+        ? localize("[模型資格] {0}／{1}：連線成功，已通過 {2}。", provider, model, mode)
+            + ' ' + localize('短探針只認證固定樣本；正式函式仍須檢查完整提示容量、實際執行與審查品質。')
+        : localize("[模型資格] {0}／{1}：連線成功，但未通過 {2}（{3}）。若開啟事先資格要求，請先完成角色驗證。", provider, model, mode, reason);
+    return profile.testGenerationReady !== true && responsePreview
+        ? localize("{0}\n[模型探測回應]\n{1}", summary, responsePreview)
+        : summary;
+}
+
+/**
+ * A probe result only applies to the exact provider/model pair that produced
+ * it. A different selected model must be treated as unqualified until it has
+ * completed its own probe, rather than inheriting a previous model's result.
+ */
+export function qualificationAppliesToRequest(
+    profile: ModelQualificationProfile,
+    request: ModelQualificationRequest
+): boolean {
+    if (profile.qualificationVersion !== QUALIFICATION_VERSION) { return false; }
+    const profileEndpoint = profile.endpointKey || qualificationEndpointKey(profile.envType || request.envType);
+    const requestEndpoint = request.endpointKey || qualificationEndpointKey(request.envType);
+    if (profileEndpoint !== requestEndpoint) { return false; }
+    if (profile.envType && profile.envType !== request.envType) { return false; }
+    if (profile.modelName && normalizedModelName(profile.modelName) !== normalizedModelName(request.modelName)) { return false; }
+    if (request.envType === 'local') {
+        // Check independently of Writer success: Reviewer and Bug Fixer must
+        // never inherit another runtime's qualification through that boolean.
+        return profile.envType === 'local' && Boolean(profile.modelName?.trim())
+            && isLocalRuntimeQualification(profile.qualificationRuntime)
+            && Number.isSafeInteger(request.runtimeContextTokens) && request.runtimeContextTokens! > 0
+            && profile.qualificationRuntime.numCtx === request.runtimeContextTokens
+            && localThinkingMode(profile.qualificationRuntime.thinkingMode) === localThinkingMode(request.localThinkingMode);
+    }
+    return true;
+}
+
+export function qualificationForRequest(
+    profile: ModelQualificationProfile,
+    request: ModelQualificationRequest
+): boolean | undefined {
+    if (profile.testGenerationReady === undefined) { return undefined; }
+    if (!qualificationAppliesToRequest(profile, request)) { return false; }
+    if (!profile.envType || !profile.modelName) {
+        // Preserve non-local compatibility; local legacy profiles failed the
+        // complete model/endpoint/runtime identity check above.
+        return profile.testGenerationReady;
+    }
+    return profile.envType === request.envType
+        && normalizedModelName(profile.modelName) === normalizedModelName(request.modelName)
+        ? profile.testGenerationReady
+        : false;
+}

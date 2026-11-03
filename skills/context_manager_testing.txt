@@ -1,0 +1,6 @@
+CONTEXT MANAGER TESTING:
+  - Exercise the observable behavior inside the with block, not only construction of the manager.
+  - For ordinary with, when a dependency supplies the manager, patch it at the module-under-test use point and configure its __enter__ return value with MagicMock.
+  - For async with, use the async context-manager protocol (__aenter__/__aexit__) instead; do not reuse the ordinary __enter__ setup.
+  - Assert __enter__/__exit__ calls only when that interaction is observable and relevant to the target behavior.
+  - Do not open real resources merely to test the context-manager syntax.

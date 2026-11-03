@@ -1,0 +1,738 @@
+import { ollamaRuntimeMetadataFixture, readObservedSeedCaseForModelFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
+import { functionReportDirectory, resultArtifactPath, roundDirectory } from '../pipeline/resultLayout';
+import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { estimatePromptTokens } from '../prompts/promptBudget';
+
+test('orchestrator carries measured quality into Writer and verifies improvement with real Python mutation', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'role-orchestrator-'));
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const Module = require('module');
+    const originalLoad = Module._load;
+    const originalFetch = globalThis.fetch;
+    const utilities = require('../utils/utils');
+    const originalEngine = utilities.detectMutationEngine;
+    const processRunner = require('../utils/processRunner');
+    const originalSpawn = processRunner.runSpawn;
+    // The single-case seed is followed by separate coverage and precision additions.
+    // Strict quality keeps both measured improvements instead of stopping at 80%.
+    const policies = require('../pipeline/qualityPolicy');
+    const originalPolicy = policies.createDefaultQualityPolicy;
+    policies.createDefaultQualityPolicy = policies.createStrictQualityPolicy;
+    const traceBuilder = require('../tier/tier1TestFileBuilder');
+    const originalTraceBuilder = traceBuilder.buildTier1TestFile;
+    const writerPrompts = require('../roles/unittestWriter');
+    const originalWriterPrompt = writerPrompts.getUserPrompt;
+    let configuredImportFixtures: unknown[] = [];
+    const mutationRuns: Array<{ args: string[]; timeout: number }> = [];
+    let expectedMutationSeconds = 60;
+    let externalEngine: 'mutatest' | 'mutmut' | undefined;
+    let externalRuns = 0;
+    let failBuiltinMutation = false;
+    let mutateDuringMutation: 'source' | 'test' | undefined;
+    let changeBeforeNextRound = false;
+    let externalEvidence: 'passed' | 'isolation-blocked' | 'missing' = 'passed';
+    processRunner.runSpawn = (command: string, args: string[], options: any) => {
+        if (externalEngine && (args[1] === 'from mutatest.cli import cli_main'
+            || (args[1] === 'mutmut' && args[2] === '--version'))) {
+            return Promise.resolve({ code: 0, stderr: '', stdout: '' });
+        }
+        if (externalEngine && (args.includes('mutmut') || args.some(arg => arg.includes('mutatest.cli')))) {
+            assert.equal(options.timeout, expectedMutationSeconds * 1000);
+            assert.ok(!args.includes('--timeout_factor'));
+            assert.ok(!args.includes('--test-time-multiplier'));
+            const runner = args[args.indexOf(externalEngine === 'mutmut' ? '--runner' : '-t') + 1];
+            const report = runner.match(/["']--violation-report["'] ["']([^"']+)["']/)?.[1];
+            assert.ok(report, 'native engines must invoke the guarded runner with an evidence report');
+            const runId = 'a'.repeat(32);
+            if (externalEvidence !== 'missing') {
+                fs.writeFileSync(report, [JSON.stringify({ runId, event: 'started' }),
+                    JSON.stringify({ runId, event: 'completed', status: externalEvidence })].join('\n'));
+            }
+            externalRuns++;
+            return Promise.resolve({ code: 0, stderr: '', stdout: externalEngine === 'mutmut'
+                ? '1 mutants\n0 survived\n' : 'TOTAL RUNS: 1\nSURVIVED: 0\n' });
+        }
+        if (args[0]?.endsWith('basic_mutation_runner.py')) {
+            if (failBuiltinMutation) { return Promise.reject(new Error('mutation stage timeout')); }
+            mutationRuns.push({ args, timeout: options.timeout });
+            assert.equal(options.timeout, (expectedMutationSeconds + 5) * 1000);
+            assert.equal(args[3], '0', 'selected function measurement enumerates the full candidate set');
+            assert.equal(args[4], String(Math.min(5, expectedMutationSeconds)));
+            assert.equal(args[7], String(expectedMutationSeconds));
+            if (mutateDuringMutation) {
+                const changed = args[mutateDuringMutation === 'source' ? 1 : 2];
+                return originalSpawn(command, args, options).then((result: unknown) => {
+                    fs.appendFileSync(changed, '\n# changed during mutation\n');
+                    return result;
+                });
+            }
+        }
+        return originalSpawn(command, args, options);
+    };
+    const handlers = new Map<string, (...args: any[]) => any>();
+    const logs: string[] = [];
+    const roles: string[] = [];
+    const reviewerTransport: Array<{ format: 'schema' | 'text'; temperature: number; numCtx: number }> = [];
+    let writers = 0;
+    let reviewerAvailable = true;
+    let rejectedReviewSchema = false;
+    let rejectAllModelRequests = false;
+    let scaffoldMode = false;
+    const code = `import unittest
+from unittest.mock import patch
+from sample import target
+class Cases(unittest.TestCase):
+    def test_true(self):
+        with patch('sample.read', return_value={'ready': True, 'kind': 'plain'}):
+            self.assertTrue(target())
+`;
+    const falseAddition = `def test_false(self):
+    with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):
+        self.assertFalse(target())
+`;
+    // One new method kills the remaining truthiness and comparison survivors;
+    // the host retains both already executed methods byte-for-byte.
+    const stronger = `def test_mixed(self):
+    with patch('sample.read', return_value={'ready': True, 'kind': 'other'}):
+        self.assertIs(target(), False)
+    with patch('sample.read', return_value={'ready': True, 'kind': 'zebra'}):
+        self.assertIs(target(), False)
+`;
+    const vscode = {
+        ExtensionMode: { Development: 2, Test: 3 },
+        window: {
+            registerWebviewViewProvider: (_: string, provider: any) => {
+                provider.webview = { postMessage: (message: any) => { if (message.text) { logs.push(message.text); } return Promise.resolve(true); } };
+                return { dispose() {} };
+            },
+            showInformationMessage: async () => {}, showTextDocument: async () => {}
+        },
+        workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'importFixtures' ? configuredImportFixtures
+                    : key === 'importFixtureRoot' && configuredImportFixtures.length ? directory : fallback }), openTextDocument: async () => ({}) },
+        commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
+            handlers.set(name, handler); return { dispose() {} };
+        } },
+        env: { openExternal: async () => true }, Uri: { file: (file: string) => file }
+    };
+    Module._load = function (name: string, ...args: any[]) {
+        return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
+    };
+    utilities.detectMutationEngine = () => null;
+    globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+        if (metadata) { return metadata; }
+        assert.equal(rejectAllModelRequests, false, 'oversize evidence must never reach the provider');
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
+        assert.deepEqual(runtimeOptions, { temperature: 0, num_ctx: 8572 },
+            'formal local roles use the same sampling and context as qualification probes');
+        if (outputCap !== undefined) {
+            assert.ok(Number.isSafeInteger(outputCap) && outputCap > 0 && outputCap <= Math.ceil(8572 * 0.3),
+                'explicit role output caps stay inside the preserved output reserve');
+        }
+        let response: string;
+        if (request.roleInstructions.includes('You are the test Reviewer')) {
+            reviewerTransport.push({ format: typeof request.format === 'object' ? 'schema' : 'text',
+                temperature: request.options.temperature, numCtx: request.options.num_ctx });
+            if (!rejectedReviewSchema && typeof request.format === 'object') {
+                assert.equal(request.format.properties.findings.maxItems, 5);
+                rejectedReviewSchema = true;
+                return new Response('unsupported schema', { status: 400 });
+            }
+            roles.push('reviewer'); response = reviewerAvailable ? '{"findings":[]}' : 'invalid review';
+        } else if (request.roleInstructions.includes('Analyst after successful')) {
+            roles.push('analyst-quality'); response = '{"tasks":[]}';
+            if (changeBeforeNextRound) {
+                changeBeforeNextRound = false;
+                fs.appendFileSync(path.join(directory, 'sample.py'), '\n# source changed between rounds\n');
+            }
+        } else if (request.roleInstructions.includes('dependency_behaviors')) {
+            assert.equal(outputCap, 1024, 'the short Analyst plan uses its paired output cap');
+            roles.push('analyst-planning'); response = JSON.stringify({ dependency_behaviors: [], test_strategy: {
+                approach: 'Patch sample.read with controlled ready/kind mappings and call target to exercise both conditions.',
+                input_hints: [], assertion_style: 'mixed', mock_needed: true,
+                key_rules: ['Call sample.target unchanged and control only its sample.read dependency.']
+            } });
+        } else {
+            roles.push('writer'); writers++;
+            const seedRequest = request.roleInstructions.includes('WRITER_SEED_V1');
+            const scaffoldRequest = scaffoldMode && seedRequest;
+            assert.match(request.prompt, scaffoldRequest ? /Complete Writer evidence/ : /^compact-writer-v2/);
+            assert.match(request.prompt, scaffoldRequest ? /def read/ : /RETRIEVED DEPENDENCY read/);
+            if (!seedRequest && !scaffoldMode) { assert.match(request.prompt, /mixed truth values|Return-value survivor/); }
+            if (seedRequest) {
+                const selected = readObservedSeedCaseForModelFixture(request.prompt, 'target');
+                assert.ok(selected, 'a formal seed must use the selected executed case');
+                assert.deepEqual(selected.args, []);
+                assert.equal(selected.observedOutcome, 'returned');
+                assert.equal(selected.observedResult, 'True');
+                response = '```python\n' + code + '\n```';
+            } else {
+                assert.match(request.prompt, /WRITER_ADDITION_V1/);
+                response = '```python\n' + (/def test_false\(/.test(request.prompt) ? stronger : falseAddition) + '\n```';
+            }
+        }
+        return new Response(JSON.stringify({ response }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const fixtureFetcher = globalThis.fetch;
+    try {
+        fs.writeFileSync(path.join(directory, 'helper.py'), "def read(): return {'ready': True, 'kind': 'plain'}\n");
+        fs.writeFileSync(path.join(directory, 'sample.py'), "from helper import read\ndef target():\n    state = read()\n    if state['ready'] and state['kind'] == 'plain':\n        return True\n    return False\ndef unrelated():\n    return 'not selected'\n");
+        const { activate } = require('../orchestrator');
+        activate({ extension: { id: 'fixture.extension', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
+            globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
+        handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
+            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 8572 }, testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', promptStrategy: 'tier1',
+            maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'results') });
+        const outputFor = (root: string, target = 'target'): string => {
+            const matches = fs.readdirSync(root, { recursive: true }).map(String)
+                .filter(name => path.basename(name) === 'target.json')
+                .map(name => path.dirname(path.join(root, name))).filter(folder => {
+                    const location = JSON.parse(fs.readFileSync(path.join(folder, 'target.json'), 'utf8'));
+                    return location.target === target;
+                });
+            assert.equal(matches.length, 1, 'one result location must identify the requested target');
+            return matches[0];
+        };
+        const output = outputFor(path.join(directory, 'results'));
+        const report = fs.readFileSync(path.join(functionReportDirectory(output), 'final_report.md'), 'utf8');
+        assert.doesNotMatch(report, /執行中斷/, logs.join('\n'));
+        const manifest = JSON.parse(fs.readFileSync(path.join(output, 'run_manifest.json'), 'utf8'));
+        assert.equal(manifest.validationMode, 'full', 'omitting mode still requires the complete mutation pipeline');
+        assert.equal(manifest.promptVersion, 'role-contracts-v7');
+        assert.equal(manifest.roleContracts.reviewer, 'review-v8');
+        assert.equal(manifest.evidenceContracts.analystEvidence, 'analysis-evidence-v2');
+        assert.equal(manifest.evidenceContracts.semanticPlan, 'semantic-plan-v2');
+        assert.equal(manifest.evidenceContracts.ruleSelection, 'rule-selection-v2');
+        assert.equal(manifest.evidenceContracts.writerEvidence, 'writer-evidence-v3');
+        const events = fs.readFileSync(path.join(output, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        const firstStage = (stage: string) => events.findIndex(event => event.stage === stage);
+        assert.ok(firstStage('evidence-collection') < firstStage('analyst-planning'));
+        assert.ok(firstStage('analyst-planning') < firstStage('rule-dispatcher'),
+            JSON.stringify({ stages: events.map(event => ({ stage: event.stage, status: event.status })), roles }));
+        assert.ok(firstStage('rule-dispatcher') < firstStage('writer-handoff'));
+        assert.ok(firstStage('writer-handoff') < firstStage('writer'), JSON.stringify(events.map(event => ({
+            stage: event.stage, status: event.status, reasonCode: event.detail?.reasonCode,
+            methodCount: event.detail?.methodCount, callCount: event.detail?.literalTargetCallCount
+        }))));
+        assert.equal(events[firstStage('rule-dispatcher')].detail.provenance, 'deterministic');
+        assert.equal(events[firstStage('evidence-collection')].detail.dependencyCount, 1);
+        assert.ok(firstStage('validation') < firstStage('reviewer'));
+        const requests = events.filter(event => event.stage === 'model-request' && event.status === 'requested');
+        assert.ok(requests.length > 0);
+        assert.ok(requests.every(event => event.detail.estimatedInputTokens <= event.detail.inputBudget));
+        assert.ok(events.some(event => event.stage === 'model-request' && event.status === 'completed'
+            && event.detail.elapsedMs >= 0 && event.detail.writerContext === 'compact-writer-v2'));
+        assert.equal(rejectedReviewSchema, true);
+        assert.deepEqual(reviewerTransport.slice(0, 2), [
+            { format: 'schema', temperature: 0, numCtx: 8572 },
+            { format: 'text', temperature: 0, numCtx: 8572 }
+        ], 'the actual structured-output fallback retains sampling and context');
+        const seedStart = events.findIndex(event => event.stage === 'writer-seed' && event.status === 'started');
+        const seedAccepted = events.findIndex(event => event.stage === 'writer-seed' && event.status === 'accepted');
+        const firstReviewer = events.findIndex(event => event.stage === 'reviewer' && event.status === 'parsed');
+        assert.ok(seedStart >= 0 && seedAccepted > seedStart && firstReviewer > seedAccepted);
+        const seedCheckpoint = events.slice(seedStart, seedAccepted).find(event => event.stage === 'executable-baseline');
+        assert.equal(seedCheckpoint.detail.reviewStatus, 'incomplete');
+        const mutations = events.filter(event => event.stage === 'mutation' && event.status === 'measured');
+        assert.equal(mutations.length, 3, logs.join('\n'));
+        assert.equal(mutationRuns.length, 3);
+        assert.ok(mutations[0].detail.score < 100);
+        assert.ok(mutations[1].detail.score > mutations[0].detail.score);
+        assert.ok(mutations[1].detail.score < 100);
+        assert.equal(mutations[2].detail.score, 100);
+        assert.deepEqual(roles.filter(role => role !== 'analyst-planning'),
+            ['writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer']);
+        const knowledge = JSON.parse(fs.readFileSync(path.join(output, 'function_knowledge.json'), 'utf8'));
+        assert.equal(knowledge.schemaVersion, 2);
+        assert.equal(knowledge.selectedRules.schemaVersion, 'rule-selection-v2');
+        assert.equal(knowledge.planningHypotheses.schemaVersion, 'semantic-plan-v2');
+        assert.ok('initialTargetObservations' in knowledge);
+        assert.ok('supplementalTargetObservations' in knowledge);
+        assert.equal(knowledge.mutationScore, 100);
+        assert.deepEqual(knowledge.survivors, []);
+        assert.ok(knowledge.scenarios.length >= 3);
+        assert.equal(knowledge.reviewStatus, 'completed');
+        assert.equal(knowledge.terminalStatus, 'passed');
+        assert.notEqual(knowledge.coverage.coverageText, '100%', 'unrelated callable remains outside target scope');
+        assert.equal(knowledge.coverage.selectedTarget.qualifiedName, 'target');
+        assert.deepEqual(knowledge.coverage.selectedTarget.missingLines, []);
+        assert.equal(knowledge.resolvedTier, 1);
+        assert.match(fs.readFileSync(path.join(output, 'workflow_report.md'), 'utf8'), /Reviewer status\*\*: completed/);
+        assert.doesNotMatch(report, /Reviewer status|### AST|### 語意分析師/);
+        assert.match(report, /\*\*覆蓋率\*\*: 100.00%/);
+
+        reviewerAvailable = false;
+        expectedMutationSeconds = 40;
+        writers = 0;
+        roles.length = 0;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+            maxLoops: 3, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: path.join(directory, 'incomplete-results') });
+        const incompleteRoot = path.join(directory, 'incomplete-results');
+        const incompleteOutput = outputFor(incompleteRoot);
+        const incomplete = JSON.parse(fs.readFileSync(path.join(incompleteOutput, 'function_knowledge.json'), 'utf8'));
+        const incompleteEvents = fs.readFileSync(path.join(incompleteOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        const incompleteDiagnostic = JSON.stringify({ terminalStatus: incomplete.terminalStatus,
+            failureStage: incomplete.failureStage, failureCategory: incomplete.failureCategory,
+            failureKeys: incomplete.failure && typeof incomplete.failure === 'object' ? Object.keys(incomplete.failure) : [],
+            events: incompleteEvents.map(event => ({ stage: event.stage, status: event.status,
+                role: event.detail?.role, category: event.detail?.category, httpStatus: event.detail?.httpStatus,
+                elapsedMs: event.detail?.elapsedMs, reasonLength: typeof event.detail?.reason === 'string' ? event.detail.reason.length : undefined,
+                diagnostics: Array.isArray(event.detail?.diagnostics) ? event.detail.diagnostics.filter((value: unknown) =>
+                    typeof value === 'string' && /^[a-z][a-z0-9-]*$/.test(value)) : undefined })) });
+        assert.equal(incomplete.mutationScore, null, JSON.stringify({ failure: incomplete.failure, stage: incomplete.failureStage, diagnostic: incomplete.diagnostic }));
+        assert.equal(incomplete.reviewStatus, 'incomplete');
+        assert.equal(incomplete.terminalStatus, 'review-blocked', incompleteDiagnostic);
+        assert.equal(roles.filter(role => role === 'reviewer').length, 2, 'the first candidate gets one contract correction then stops before mutation');
+        assert.ok(incompleteEvents.some(event => event.stage === 'reviewer' && event.status === 'invalid-response'
+            && event.detail.diagnostics.includes('invalid-json')));
+
+        // The first executable candidate must survive even if mutation never returns a score.
+        failBuiltinMutation = true;
+        reviewerAvailable = true;
+        writers = 1;
+        const interruptedRoot = path.join(directory, 'first-mutation-timeout');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+            maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: interruptedRoot });
+        const interruptedOutput = outputFor(interruptedRoot);
+        const interrupted = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(interrupted.terminalStatus, 'retained-after-failure');
+        assert.equal(interrupted.mutationScore, null);
+        assert.equal(interrupted.reviewStatus, 'completed');
+        assert.equal(interrupted.mutationStatus, 'incomplete');
+        const checkpoint = JSON.parse(fs.readFileSync(path.join(interruptedOutput, 'executable_baseline.json'), 'utf8'));
+        assert.equal(interrupted.acceptedCodeHash, checkpoint.codeHash);
+        assert.equal(fs.readFileSync(resultArtifactPath(interruptedOutput, 'loop1_test.py'), 'utf8'), checkpoint.code);
+        assert.ok(fs.existsSync(path.join(interruptedOutput, checkpoint.testFile)));
+        assert.match(fs.readFileSync(path.join(functionReportDirectory(interruptedOutput), 'final_report.md'), 'utf8'), /尚未完成有效測量/);
+        failBuiltinMutation = false;
+        for (const changed of ['source', 'test'] as const) {
+            mutateDuringMutation = changed;
+            writers = 1;
+            const sourceFile = path.join(directory, 'sample.py');
+            const originalSource = fs.readFileSync(sourceFile, 'utf8');
+            const changedRoot = path.join(directory, 'changed-' + changed);
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: sourceFile, funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+                maxLoops: 1, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: changedRoot });
+            const changedOutput = outputFor(changedRoot);
+            const changedKnowledge = JSON.parse(fs.readFileSync(path.join(changedOutput, 'function_knowledge.json'), 'utf8'));
+            assert.ok(fs.existsSync(path.join(changedOutput, 'executable_baseline.json')), JSON.stringify({
+                scenario: changed, terminalStatus: changedKnowledge.terminalStatus,
+                failureStage: changedKnowledge.failureStage, failureCategory: changedKnowledge.failureCategory,
+                stages: fs.readFileSync(path.join(changedOutput, 'role_events.jsonl'), 'utf8').trim().split('\n')
+                    .map(line => JSON.parse(line)).map(event => ({ stage: event.stage, status: event.status,
+                        role: event.detail?.role, category: event.detail?.category }))
+            }));
+            const saved = JSON.parse(fs.readFileSync(path.join(changedOutput, 'executable_baseline.json'), 'utf8'));
+            assert.equal(changedKnowledge.mutationScore, null);
+            assert.equal(fs.existsSync(path.join(changedOutput, 'quality_baseline.json')), false);
+            assert.equal(fs.readFileSync(resultArtifactPath(changedOutput, 'loop1_test.py'), 'utf8'), saved.code);
+            if (changed === 'source') {
+                assert.equal(changedKnowledge.terminalStatus, 'source-changed');
+                assert.equal(changedKnowledge.evidenceValid, false);
+                assert.equal(changedKnowledge.coverage, null);
+            } else { assert.equal(changedKnowledge.failureStage, 'candidate-changed'); }
+            fs.writeFileSync(sourceFile, originalSource, 'utf8');
+        }
+        mutateDuringMutation = undefined;
+
+        // A previously measured baseline becomes historical when the next round sees changed source.
+        writers = 0;
+        changeBeforeNextRound = true;
+        const betweenSource = path.join(directory, 'sample.py');
+        const beforeBetweenChange = fs.readFileSync(betweenSource, 'utf8');
+        const betweenRoot = path.join(directory, 'changed-between-rounds');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: betweenSource, funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+            maxLoops: 2, mutpyTimeout: 40, timeoutSeconds: 60, outputPath: betweenRoot });
+        const betweenOutput = outputFor(betweenRoot);
+        const betweenKnowledge = JSON.parse(fs.readFileSync(path.join(betweenOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(changeBeforeNextRound, false, 'fixture changes source after measurement and before the next Writer');
+        assert.equal(writers, 1);
+        assert.equal(betweenKnowledge.terminalStatus, 'source-changed');
+        assert.equal(betweenKnowledge.evidenceValid, false);
+        assert.equal(betweenKnowledge.mutationScore, null);
+        assert.equal(betweenKnowledge.coverage, null);
+        assert.equal(betweenKnowledge.historicalBaseline.artifactOnly, true);
+        assert.ok(fs.existsSync(path.join(betweenOutput, 'quality_baseline.json')));
+        fs.writeFileSync(betweenSource, beforeBetweenChange, 'utf8');
+
+        // Available module-scope engines must not substitute for a selected function measurement.
+        reviewerAvailable = true;
+        expectedMutationSeconds = 25;
+        for (const engine of ['mutatest', 'mutmut'] as const) {
+            externalEngine = engine;
+            utilities.detectMutationEngine = () => engine;
+            writers = 0;
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+                maxLoops: 1, mutpyTimeout: 25, timeoutSeconds: 60, outputPath: path.join(directory, engine + '-results') });
+            const scopeRoot = path.join(directory, engine + '-results');
+            const scopeOutput = outputFor(scopeRoot);
+            const measured = JSON.parse(fs.readFileSync(resultArtifactPath(scopeOutput, 'loop1_mutation.json'), 'utf8'));
+            assert.equal(measured.engine, 'builtin');
+            assert.equal(measured.targetScope.kind, 'function');
+            assert.equal(measured.targetScope.qualifiedName, 'target');
+        }
+        assert.equal(externalRuns, 0, 'module engines cannot certify function scope');
+        externalEvidence = 'passed';
+        externalEngine = undefined;
+        utilities.detectMutationEngine = () => null;
+
+        // A returned analyst format error gets one correction; an oversized
+        // Writer revision is then diagnosed before transport and never lowers Tier.
+        let planningAttempts = 0, generatedAttempts = 0;
+        const rejectedLargeTest = code.replace('class Cases(unittest.TestCase):',
+            'class Cases(unittest.TestCase):\n    def setUp(self):\n        self.required_fixture()')
+            + '# ' + 'retained candidate context '.repeat(1200) + '\n';
+        globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+            if (metadata) { return metadata; }
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+            let response: string;
+            if (request.roleInstructions.includes('dependency_behaviors')) {
+                planningAttempts++;
+                response = planningAttempts === 1 ? 'INVALID_ANALYST_PRIVATE_REPLY' : '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
+                if (planningAttempts === 2) { assert.match(request.prompt, /SEMANTIC_CONTRACT_REPAIR_V1/); }
+            } else {
+                generatedAttempts++;
+                response = '```python\n' + rejectedLargeTest + '\n```';
+            }
+            return new Response(JSON.stringify({ response }), { status: 200 });
+        };
+        const revisionBudgetRoot = path.join(directory, 'revision-budget');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier2',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: revisionBudgetRoot });
+        const revisionBudgetOutput = outputFor(revisionBudgetRoot);
+        const revisionEventsText = fs.readFileSync(path.join(revisionBudgetOutput, 'role_events.jsonl'), 'utf8');
+        const revisionEvents = revisionEventsText.trim().split('\n').map(line => JSON.parse(line));
+        assert.equal(planningAttempts, 2);
+        assert.equal(generatedAttempts, 1, 'oversized revision stops before any provider call or Tier fallback');
+        assert.doesNotMatch(revisionEventsText, /INVALID_ANALYST_PRIVATE_REPLY/);
+        assert.ok(revisionEvents.some(event => event.stage === 'analyst-planning' && event.status === 'repair-requested'));
+        assert.ok(revisionEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'
+            && event.detail.role === 'writer-revision' && event.detail.estimatedInputTokens > event.detail.inputBudget));
+        assert.ok(!revisionEvents.some(event => event.stage === 'tier' && event.status === 'fallback'));
+        const revisionKnowledge = JSON.parse(fs.readFileSync(path.join(revisionBudgetOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(revisionKnowledge.failureCategory, 'validation');
+        globalThis.fetch = fixtureFetcher;
+
+        rejectAllModelRequests = true;
+        handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
+            paramSize: '1B', contextLength: 128, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 128 },
+            testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'oversize-results') });
+        const oversizeRoot = path.join(directory, 'oversize-results');
+        const oversizeOutput = outputFor(oversizeRoot);
+        const oversizeEvents = fs.readFileSync(path.join(oversizeOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
+        assert.ok(!oversizeEvents.some(event => event.stage === 'model-request' && event.status === 'requested'));
+
+        // Service failures retain their category and never launch lower-Tier Writer retries.
+        handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture-model',
+            paramSize: '13B', contextLength: 32768, qualificationVersion: QUALIFICATION_VERSION,
+            qualificationRuntime: { version: 'ollama-context-v1', numCtx: 8572 },
+            testGenerationReady: true, testGenerationMode: TEST_GEN_MODE_PYTHON });
+        let serviceCalls = 0, discoveryCalls = 0;
+        globalThis.fetch = async url => {
+            if (/\/api\/(?:show|ps)$/.test(String(url))) { discoveryCalls++; }
+            else { serviceCalls++; }
+            return new Response('PROVIDER_BODY_MUST_REMAIN_PRIVATE', { status: 500 });
+        };
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'service-failure') });
+        const serviceRoot = path.join(directory, 'service-failure');
+        const serviceOutput = outputFor(serviceRoot);
+        const serviceJournal = fs.readFileSync(path.join(serviceOutput, 'role_events.jsonl'), 'utf8');
+        assert.doesNotMatch(serviceJournal, /PROVIDER_BODY_MUST_REMAIN_PRIVATE/);
+        const serviceEvents = serviceJournal.trim().split('\n').map(line => JSON.parse(line));
+        assert.equal(serviceCalls, 3, 'planning transport retries are bounded; an incomplete Analyst does not start the Writer');
+        assert.equal(discoveryCalls, 2, 'startup metadata requests are discovery, not role transport retries');
+        assert.equal(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'requested' && event.detail.role === 'writer').length, 0);
+        assert.ok(serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error').every(event => event.detail.category === 'model-api'));
+        const serviceErrors = serviceEvents.filter(event => event.stage === 'model-request' && event.status === 'error');
+        assert.ok(serviceErrors.length > 0, 'a real failed transport request must produce a journal event');
+        assert.ok(serviceErrors.every(event => event.detail.httpStatus === 500),
+            'journals preserve the transport numeric status without exposing or parsing its response body');
+
+        // A prompt builder may use its entire advertised optional-material budget.
+        // The host must reserve the complete setup/resource envelope before it
+        // gives that allowance to the builder, not reject the finished request.
+        const resourceSource = path.join(directory, 'sample.py');
+        configuredImportFixtures = [{ file: 'sample.py', resourceSourceHash: require('node:crypto')
+            .createHash('sha256').update(fs.readFileSync(resourceSource)).digest('hex'),
+        resources: [{ kind: 'sqlite', path: 'neutral-budget.sqlite', tables: [{ name: 'neutral_items',
+            columns: [{ name: 'id', type: 'INTEGER', primaryKey: true }] }] }] }];
+        let resourceWriterRequests = 0, optionalBudgetUsed = false;
+        writerPrompts.getUserPrompt = (...args: any[]) => {
+            const allowance = args[6] as number;
+            let prompt = originalWriterPrompt(...args);
+            const example = '\nOPTIONAL SETUP PATTERN: neutral arrangement only; never an assertion oracle.';
+            assert.ok(estimatePromptTokens(prompt) < allowance - 64, 'neutral fixture leaves optional prompt space');
+            while (estimatePromptTokens(prompt + example) <= allowance - 32) { prompt += example; }
+            optionalBudgetUsed = estimatePromptTokens(prompt) >= allowance - 64;
+            return prompt;
+        };
+        globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+            if (metadata) { return metadata; }
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+            if (request.roleInstructions.includes('dependency_behaviors')) {
+                return new Response(JSON.stringify({ response: '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the selected target with controlled inputs and use verified observations for assertions."}}' }), { status: 200 });
+            }
+            resourceWriterRequests++;
+            assert.match(request.prompt, /OPTIONAL SETUP PATTERN/);
+            assert.match(request.prompt, /\[Import test setup\]/);
+            assert.match(request.prompt, /HOST_ISOLATED_RESOURCE_CONTEXT/);
+            assert.match(request.prompt, /neutral_items/);
+            assert.match(request.prompt, /def target\(\)/, 'complete target source survives optional packing');
+            assert.match(request.prompt, /VERIFIED OBSERVATIONS/, 'execution evidence survives optional packing');
+            const wire = request.options as { num_ctx: number; num_predict?: number };
+            const inputBudget = wire.num_predict === undefined ? Math.floor(wire.num_ctx * 0.7) : wire.num_ctx - wire.num_predict;
+            assert.ok(estimatePromptTokens(request.transmittedPrompt) <= inputBudget,
+                'the whole role/evidence/setup/resource payload must fit the input budget paired with the actual wire output cap');
+            return new Response('NEUTRAL_STOP_AFTER_WIRE_VALIDATION', { status: 400 });
+        };
+        const resourceBudgetRoot = path.join(directory, 'resource-envelope-budget');
+        try {
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: resourceSource, funcName: 'target', validationMode: 'full', promptStrategy: 'tier2',
+                maxLoops: 1, timeoutSeconds: 60, outputPath: resourceBudgetRoot });
+        } finally {
+            configuredImportFixtures = [];
+            writerPrompts.getUserPrompt = originalWriterPrompt;
+        }
+        assert.equal(optionalBudgetUsed, true, 'the fixture exercises a nearly full advertised Writer allowance');
+        const resourceOutput = outputFor(resourceBudgetRoot);
+        const resourceEvents = fs.readFileSync(path.join(resourceOutput, 'role_events.jsonl'), 'utf8')
+            .trim().split('\n').map(line => JSON.parse(line));
+        const resourceKnowledge = JSON.parse(fs.readFileSync(path.join(resourceOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(resourceWriterRequests, 1, JSON.stringify({
+            expectation: 'a fitting Writer request reaches transport, then stops on the deliberate non-retryable HTTP response',
+            terminalStatus: resourceKnowledge.terminalStatus,
+            failureStage: resourceKnowledge.failureStage, failureCategory: resourceKnowledge.failureCategory,
+            stages: resourceEvents.map(event => ({ stage: event.stage, status: event.status, role: event.detail?.role,
+                estimatedInputTokens: event.detail?.estimatedInputTokens, inputBudget: event.detail?.inputBudget,
+                reservedInputTokens: event.detail?.reservedInputTokens, contextWindow: event.detail?.contextWindow,
+                category: event.detail?.category, httpStatus: event.detail?.httpStatus,
+                reasonCode: typeof event.detail?.reasonCode === 'string' && /^[a-z][a-z0-9-]*$/.test(event.detail.reasonCode)
+                    ? event.detail.reasonCode : undefined })) }));
+        assert.ok(!resourceEvents.some(event => event.stage === 'model-request' && event.status === 'budget-exceeded'));
+        assert.ok(resourceEvents.some(event => event.stage === 'model-request' && event.status === 'error'
+            && event.detail.role === 'writer' && event.detail.httpStatus === 400));
+
+        globalThis.fetch = fixtureFetcher;
+        rejectAllModelRequests = false;
+        scaffoldMode = true;
+        writers = 1;
+        roles.length = 0;
+        expectedMutationSeconds = 60;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier3',
+            maxLoops: 3, timeoutSeconds: 60, outputPath: path.join(directory, 'scaffold-results') });
+        const scaffoldRoot = path.join(directory, 'scaffold-results');
+        const scaffoldOutput = outputFor(scaffoldRoot);
+        const scaffoldKnowledge = JSON.parse(fs.readFileSync(path.join(scaffoldOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(scaffoldKnowledge.terminalStatus, 'passed', scaffoldKnowledge.failure);
+        assert.equal(scaffoldKnowledge.resolvedTier, 3);
+        assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer', 'analyst-quality', 'writer', 'reviewer',
+            'analyst-quality', 'writer', 'reviewer'], 'complete scaffold seed and additions need no wrapping repair or Tier fallback');
+
+        // Partial progress must survive even while coverage/mutation remain below 100.
+        fs.writeFileSync(path.join(directory, 'partial.py'), `def read(): return {'mode': 'a'}
+class Widget:
+    @staticmethod
+    def normalize():
+        state = read()
+        if state['mode'] == 'a':
+            return 1
+        if state['mode'] == 'b':
+            return 2
+        if state['mode'] == 'c':
+            return 3
+        return 0
+`);
+        const partialFirst = `import unittest
+from unittest.mock import patch
+from partial import Widget
+class Cases(unittest.TestCase):
+    def test_keep(self):
+        with patch('partial.read', return_value={'mode': 'a'}):
+            self.assertEqual(Widget.normalize(), 1)
+`;
+        const partialSecond = partialFirst + `    def test_more(self):
+        with patch('partial.read', return_value={'mode': 'b'}):
+            self.assertEqual(Widget.normalize(), 2)
+`;
+        let partialWriters = 0, partialReviews = 0, qualityCalls = 0;
+        globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+            if (metadata) { return metadata; }
+            const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+            let response: string;
+            if (request.roleInstructions.includes('You are the test Reviewer')) {
+                partialReviews++;
+                response = '{"findings":[]}';
+            } else if (request.roleInstructions.includes('Analyst after successful')) {
+                qualityCalls++;
+                assert.equal(typeof request.format, 'object', 'quality Analyst uses its own schema independently of the plain Python Writer');
+                assert.equal((request.format as any).properties.tasks.maxItems, 1);
+                const focus = JSON.parse(request.prompt.split('FOCUS\n')[1].split('\n')[0]);
+                response = qualityCalls === 1 ? 'INVALID_PRIVATE_RESPONSE' : JSON.stringify({ tasks: [{
+                    evidence_id: focus.id, hypothesis: 'Another controlled input may cover the next branch.',
+                    scenario: 'Mock read with mode b.', verification: 'Run original and mutants with the same mock.'
+                }] });
+                if (qualityCalls === 2) {
+                    assert.match(request.prompt, /CONTRACT CORRECTION/);
+                    assert.doesNotMatch(request.prompt, /INVALID_PRIVATE_RESPONSE/);
+                }
+            } else if (request.roleInstructions.includes('dependency_behaviors')) {
+                response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
+            } else {
+                partialWriters++;
+                if (partialWriters === 2) { assert.match(request.prompt, /Mock read with mode b/); }
+                response = '```python\n' + (partialWriters === 1 ? partialFirst : partialSecond) + '\n```';
+            }
+            return new Response(JSON.stringify({ response }), { status: 200 });
+        };
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'partial.py'), funcName: 'Widget.normalize', validationMode: 'full', promptStrategy: 'tier1',
+            maxLoops: 2, timeoutSeconds: 60, outputPath: path.join(directory, 'partial-results') });
+        const partialRoot = path.join(directory, 'partial-results');
+        const partialOutput = outputFor(partialRoot, 'Widget.normalize');
+        const partialKnowledge = JSON.parse(fs.readFileSync(path.join(partialOutput, 'function_knowledge.json'), 'utf8'));
+        const partialEvents = fs.readFileSync(path.join(partialOutput, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        const accepted = partialEvents.filter(event => event.stage === 'baseline' && event.status === 'accepted');
+        const covered = [...new Map(partialEvents.filter(event => event.stage === 'coverage' && event.status === 'measured')
+            .map(event => [event.loop, event] as const)).values()];
+        assert.equal(accepted.length, 2, JSON.stringify({ failureCategory: partialKnowledge.failureCategory,
+            failureStage: partialKnowledge.failureStage, baselines: accepted.map(event => ({ loop: event.loop, score: event.detail.score })),
+            requests: partialEvents.filter(event => event.stage === 'model-request').map(event => ({ status: event.status,
+                role: event.detail.role, category: event.detail.category, httpStatus: event.detail.httpStatus })) }));
+        assert.ok(accepted[1].detail.score > accepted[0].detail.score);
+        assert.ok(covered[1].detail.missingTargetLines.length < covered[0].detail.missingTargetLines.length);
+        assert.ok(covered[1].detail.missingTargetLines.length > 0, 'this is partial improvement, not a full pass');
+        assert.equal(partialKnowledge.mutationScore, accepted[1].detail.score);
+        assert.equal(partialKnowledge.reviewStatus, 'completed');
+        assert.equal(partialWriters, 2, JSON.stringify(partialEvents.filter(event =>
+            (event.stage === 'model-request' && event.status === 'requested') || ['rejected', 'tier-failed', 'failed'].includes(event.status))
+            .map(event => ({ stage: event.stage, status: event.status, role: event.detail.role, reason: event.detail.reason }))));
+        assert.equal(qualityCalls, 2, 'one invalid response receives one bounded format repair');
+
+        assert.ok(!partialEvents.some(event => event.stage === 'baseline' && event.status === 'rollback'));
+        assert.match(fs.readFileSync(path.join(partialOutput, partialKnowledge.acceptedTest), 'utf8'), /test_more/);
+        globalThis.fetch = fixtureFetcher;
+
+        let hostBuilderCalls = 0;
+        traceBuilder.buildTier1TestFile = (...args: any[]) => {
+            hostBuilderCalls++;
+            const built = originalTraceBuilder(...args);
+            return { ...built, code: built.code?.replace('import unittest', "import unittest\n__import__('math')") };
+        };
+        scaffoldMode = false;
+        writers = 0;
+        roles.length = 0;
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+            filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier1',
+            maxLoops: 1, timeoutSeconds: 60, outputPath: path.join(directory, 'bad-runner-baseline') });
+        const badRoot = path.join(directory, 'bad-runner-baseline');
+        const badOutput = outputFor(badRoot);
+        const badKnowledge = JSON.parse(fs.readFileSync(path.join(badOutput, 'function_knowledge.json'), 'utf8'));
+        assert.equal(hostBuilderCalls, 0, 'the AI workflow never builds a runner-owned test to augment the model');
+        assert.notEqual(badKnowledge.failureStage, 'trace-baseline');
+        assert.deepEqual(roles, ['analyst-planning', 'writer', 'reviewer']);
+
+        traceBuilder.buildTier1TestFile = originalTraceBuilder;
+        for (const mode of ['format', 'scope'] as const) {
+            const marker = 'PRIVATE_FIXER_REPLY_MUST_NOT_APPEAR';
+            let fixerCalls = 0;
+            globalThis.fetch = async (_url, options) => {
+                const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture-model', metadataAvailable: false });
+                if (metadata) { return metadata; }
+                const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+                const { num_predict: outputCap, ...runtimeOptions } = request.options as { num_predict?: number; temperature: number; num_ctx: number };
+                assert.deepEqual(runtimeOptions, { temperature: 0, num_ctx: 8572 },
+                    'Bug Fixer and its surrounding roles retain the qualified local runtime');
+                if (outputCap !== undefined) { assert.ok(Number.isSafeInteger(outputCap) && outputCap > 0 && outputCap <= Math.ceil(8572 * 0.3)); }
+                let response: string;
+                if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
+                else if (request.roleInstructions.includes('Python unittest Bug Fixer')) {
+                    fixerCalls++;
+                    assert.equal(request.format, undefined);
+                    const fragment = "def test_false(self):\n    with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):\n        self.assertFalse(target())";
+                    response = mode === 'format' ? marker + '\n```python\n' + fragment + '\n```'
+                        : '```python\nfrom datetime import datetime\n' + fragment + '\n```';
+                } else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+                else {
+                    const failingMethod = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
+                        + 'class Cases(unittest.TestCase):\n    def test_false(self):\n'
+                        + "        with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):\n"
+                        + '            self.assertTrue(target())\n';
+                    response = '```python\n' + (mode === 'scope' ? 'import datetime\n' : '')
+                        + failingMethod + '\n```';
+                }
+                return new Response(JSON.stringify({ response }), { status: 200 });
+            };
+            const repairRoot = path.join(directory, 'repair-' + mode);
+            await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture-model',
+                filePath: path.join(directory, 'sample.py'), funcName: 'target', validationMode: 'full', promptStrategy: 'tier2',
+                maxLoops: 1, timeoutSeconds: 60, outputPath: repairRoot });
+            const repairOutput = outputFor(repairRoot);
+            const eventText = fs.readFileSync(path.join(repairOutput, 'role_events.jsonl'), 'utf8');
+            const repairEvents = eventText.trim().split('\n').map(line => JSON.parse(line));
+            const repairKnowledge = JSON.parse(fs.readFileSync(path.join(repairOutput, 'function_knowledge.json'), 'utf8'));
+            const repairReport = fs.readFileSync(path.join(roundDirectory(repairOutput, 1), 'failure_report.md'), 'utf8');
+            if (mode === 'format') {
+                assert.equal(fixerCalls, 1);
+                assert.ok(repairEvents.some(event => event.stage === 'bug-fixer' && event.status === 'format-normalized'));
+                assert.ok(repairEvents.some(event => event.stage === 'validation' && event.status === 'passed'));
+                assert.ok(repairKnowledge.executableBaseline, 'normalized repair retains a genuinely executable candidate');
+                assert.ok(['passed', 'round-limit'].includes(repairKnowledge.terminalStatus),
+                    'successful repair does not waive any remaining mutation or coverage requirement');
+                assert.ok(!eventText.includes(marker) && !repairReport.includes(marker));
+                continue;
+            }
+            const reason = 'import-conflict';
+            assert.ok(fixerCalls > 0, mode);
+            const rejected = repairEvents.filter(event => event.detail?.diagnostic?.reasonCodes.includes(reason));
+            assert.ok(rejected.length > 0, JSON.stringify(repairEvents.map(event => [event.stage, event.status])));
+            assert.equal(rejected[0].stage, 'bug-fixer');
+            assert.ok(repairKnowledge.repairFailureCounts[reason] > 0);
+            assert.match(repairReport, /修復失敗診斷/);
+            assert.match(repairReport, new RegExp(reason));
+            assert.match(repairReport, /修復後續處理/);
+            assert.equal(repairKnowledge.terminalStatus, 'failed');
+            assert.ok(!eventText.includes(marker) && !repairReport.includes(marker));
+            assert.ok(!fs.readFileSync(resultArtifactPath(repairOutput, 'loop1_test.py'), 'utf8').includes('from datetime import datetime'));
+        }
+    } finally {
+        globalThis.fetch = originalFetch;
+        Module._load = originalLoad;
+        utilities.detectMutationEngine = originalEngine;
+        processRunner.runSpawn = originalSpawn;
+        policies.createDefaultQualityPolicy = originalPolicy;
+        traceBuilder.buildTier1TestFile = originalTraceBuilder;
+        writerPrompts.getUserPrompt = originalWriterPrompt;
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+

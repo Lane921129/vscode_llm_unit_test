@@ -1,0 +1,4 @@
+TUPLE RETURN VALUE: this function returns a tuple.
+  - Unpack or index the result: `val1, val2 = func(...)` or `result[0]`, `result[1]`.
+  - Use assertEqual for each element separately, or assertEqual on the full tuple.
+  - Do NOT use assertEqual(result, single_value) — the result is a tuple.

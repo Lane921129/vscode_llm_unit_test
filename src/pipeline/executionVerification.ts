@@ -1,0 +1,175 @@
+import { localize } from '../i18n/core';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { AnalysisJournal, evidenceHash } from './analysisJournal';
+import { reserveArtifactFiles } from './artifactPaths';
+import { ExecutionBaseline, verifyExecutionEvidence } from './executionEvidence';
+import { validateTestCandidate, CandidatePipelineHooks } from './testCandidatePipeline';
+import { generatedUnittestArguments } from '../utils/pythonTestEnvironment';
+import { ProcessTimeoutError, runSpawn } from '../utils/processRunner';
+import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { throwIfExecutionCancelled } from './executionContext';
+import { pythonToolPath } from './pythonTools';
+import { currentImportFixtures } from './importFixtures';
+import { readResourceSetupFailure } from './resourceSetupFailure';
+import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics, readNativeTimeoutFeedback } from './generatedRunnerDiagnostics';
+import { digestReferenceHypotheses } from './digestReference';
+import { currentStopPolicy } from './stopPolicy';
+import { currentTargetBudget } from './targetBudget';
+import { canRepairTestMethod } from '../roles/bugFixer';
+
+interface ExecutionVerificationOptions {
+    directory: string; artifactDirectory?: string; file: string; target: string; python: string; env: NodeJS.ProcessEnv;
+    dependencies: Array<{ file: string; hash: string }>; journal: AnalysisJournal;
+    targetModule?: string;
+    generate(): Promise<string>;
+    hooks: Pick<CandidatePipelineHooks, 'validate' | 'revise' | 'repairRole' | 'validateRevision' | 'event'>;
+}
+
+/** Execution-only path: same validation/repair gates, no behavioral probes or quality measurements. */
+export async function runExecutionVerification(options: ExecutionVerificationOptions): Promise<ExecutionBaseline> {
+    const { directory, file, target, python, env, dependencies, journal, hooks } = options;
+    const artifacts = options.artifactDirectory || directory;
+    fs.mkdirSync(artifacts, { recursive: true });
+    let accepted: ExecutionBaseline | undefined;
+    let attempt = 0;
+    const expected = { runId: journal.runId, sourceHash: journal.sourceHash, target };
+    const checkCurrent = () => {
+        throwIfExecutionCancelled();
+        let current = false;
+        try {
+            current = evidenceHash(fs.readFileSync(file, 'utf8')) === journal.sourceHash
+                && dependencies.every(item => evidenceHash(fs.readFileSync(item.file, 'utf8')) === item.hash);
+        } catch { /* Missing source invalidates the run as well. */ }
+        if (!current) {
+            journal.knowledge({ evidenceValid: false });
+            throw new AnalysisStageError('validation', 'source-changed', localize("來源或相依已變更；請重新執行，舊證據不能計入通過。"));
+        }
+    };
+    checkCurrent();
+    let initial: string;
+    for (;;) {
+        currentStopPolicy()?.beginAttempt();
+        try { initial = await options.generate(); break; }
+        catch (error) {
+            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            currentStopPolicy()!.reject('writer-response-format');
+            hooks.event('writer', 'format-rejected', { reasonCode: 'writer-response-format', previousTestUnchanged: true });
+        }
+    }
+    hooks.event('writer', 'candidate', { code: initial, validationMode: 'execution' });
+    const candidate = await validateTestCandidate(initial, {
+        ...hooks, reviewRequired: false, continueUnexecutedWriterDraft: true,
+        review: async () => undefined, checkCancelled: checkCurrent,
+        repairEvidence: async (code, failure) => {
+            if (!options.targetModule || !/^FAIL: test_/m.test(failure)) { return undefined; }
+            checkCurrent();
+            const result = await runSpawn(python, ['-B', pythonToolPath('sourceExpectations')], {
+                input: JSON.stringify({ code, failure, source: fs.readFileSync(file, 'utf8'), target,
+                    module: options.targetModule }), env, timeout: 5000
+            });
+            checkCurrent();
+            if (result.code !== 0) {
+                hooks.event('source-expectation-repair', 'unavailable', { reason: localize("算術檢查未完成，保留模型修復流程") });
+                return undefined;
+            }
+            try {
+                const raw = JSON.parse(result.stdout);
+                const digest = digestReferenceHypotheses(raw);
+                const value = digest ? { ...digest, changed: true } : raw;
+                if (!digest && (value.changed !== true || typeof value.code !== 'string' || !Array.isArray(value.corrections)
+                    || value.corrections.length === 0 || value.basis !== 'source-derived-arithmetic-v1')) { return undefined; }
+                const [proofPath] = reserveArtifactFiles(artifacts, ['arithmetic'], 'json');
+                const evidence = { basis: value.basis, limitation: value.limitation, sourceHash: journal.sourceHash,
+                    previousTestHash: evidenceHash(code), corrections: value.corrections, assertionOracle: false };
+                // reserveArtifactFiles already created this exclusively owned file.
+                fs.writeFileSync(proofPath, JSON.stringify(evidence, null, 2), { encoding: 'utf8' });
+                journal.knowledge({ expectationRepair: { file: path.basename(proofPath), ...evidence } });
+                return 'SOURCE-DERIVED CALCULATION HYPOTHESES (not independently verified):\n'
+                    + JSON.stringify(evidence) + '\nThe AI must revise the test; execution must validate the revision. Preserve passing cases.';
+            } catch (error) {
+                if (error instanceof AnalysisStageError) { throw error; }
+                hooks.event('source-expectation-repair', 'unavailable', { reason: localize("算術檢查結果無效，保留模型修復流程") });
+                return undefined;
+            }
+        },
+        execute: async code => {
+            checkCurrent();
+            // Every executed candidate has its own immutable file and evidence.
+            const testFile = `exec${++attempt}_test.py`;
+            const testPath = path.join(artifacts, testFile);
+            fs.writeFileSync(testPath, code, { encoding: 'utf8', flag: 'wx' });
+            const [invocation, isolation, resultFile] = reserveArtifactFiles(artifacts, ['invocation', 'isolation', 'runner'], 'jsonl');
+            const [progressFile] = reserveArtifactFiles(artifacts, ['progress'], 'jsonl');
+            const baseline: ExecutionBaseline = { schemaVersion: 'execution-baseline-v1', validationMode: 'execution',
+                ...expected, testFile, testHash: evidenceHash(code), testRunId: randomUUID(),
+                invocationFile: path.basename(invocation), isolationFile: path.basename(isolation), dependencyVersions: dependencies };
+            const executionArguments = [
+                ...generatedUnittestArguments(path.basename(testFile, '.py'), path.dirname(file), false, true),
+                '--target-file', file, '--target-name', target, '--target-test-file', testPath,
+                '--target-evidence', invocation, '--target-run-id', baseline.testRunId, '--violation-report', isolation,
+                '--result-json', resultFile, '--test-progress', progressFile
+            ];
+            let run: Awaited<ReturnType<typeof runSpawn>>;
+            try {
+                run = await runSpawn(python, executionArguments, { cwd: artifacts, env, timeout: 30000 });
+            } catch (error) {
+                if (!(error instanceof ProcessTimeoutError)) { throw error; }
+                checkCurrent(); currentTargetBudget()?.assertRemaining();
+                const out = readNativeTimeoutFeedback({ progressFile, sourceFile: file, testFile: testPath,
+                    target, testRunId: baseline.testRunId, sourceHash: baseline.sourceHash,
+                    testHash: baseline.testHash, timeoutMs: error.timeoutMs });
+                if (!out || !canRepairTestMethod(code, out)) { throw error; }
+                hooks.event('validation', 'native-timeout-repairable', { reasonCode: 'native-test-body-timeout',
+                    testRunId: baseline.testRunId, testHash: baseline.testHash, progressFile: path.basename(progressFile),
+                    timeoutMs: error.timeoutMs, completedExecutionEvidence: false, repairScope: 'single-test-method' });
+                return { ok: false, out, qualityGaps: [], testModule: path.basename(testFile, '.py') };
+            }
+            checkCurrent();
+            const resourceFailure = readResourceSetupFailure({ isolationFile: isolation, sourceFile: file, testFile: testPath,
+                targetRunId: baseline.testRunId, sourceHash: journal.sourceHash, testHash: baseline.testHash,
+                importFixturePlanId: currentImportFixtures()?.id, exitCode: run.code });
+            if (resourceFailure) {
+                throw new AnalysisStageError('environment', 'resource-setup',
+                    localize('隔離測試資料庫缺少資料表或欄位；請在「隔離測試資源」補齊 schema 後重新執行。'), resourceFailure);
+            }
+            const diagnostic = readGeneratedRunnerDiagnostics({ resultFile, invocationFile: invocation,
+                sourceFile: file, testFile: testPath, target, testRunId: baseline.testRunId,
+                sourceHash: baseline.sourceHash, testHash: baseline.testHash });
+            if (diagnostic) {
+                if (run.code === 0) {
+                    throw new AnalysisStageError('tool', 'generated-test-runner',
+                        'Generated test runner exit status contradicts its load failure diagnostic.',
+                        { reasonCode: 'generated-test-diagnostics-exit-mismatch' });
+                }
+                hooks.event('generated-test-runner', diagnostic.repairRole === 'writer' ? 'load-failed' : 'unavailable',
+                    { ...diagnostic, resultFile: path.basename(resultFile), invocationFile: path.basename(invocation) });
+                if (diagnostic.repairRole === 'none') {
+                    throw new AnalysisStageError('tool', 'generated-test-runner',
+                        'Generated test runner could not establish a repairable candidate load failure.', diagnostic);
+                }
+                return { ok: false, out: generatedLoadRepairFeedback((run.stdout + run.stderr).trim() || diagnostic.reasonCode),
+                    qualityGaps: [], testModule: path.basename(testFile, '.py'), repairRole: 'writer' as const };
+            }
+            const ok = run.code === 0 && verifyExecutionEvidence(directory, file, baseline, expected);
+            const out = (run.stdout + run.stderr).trim()
+                + (!ok && run.code === 0 ? localize("\n執行證據不足：需有真正通過的案例、目標函式呼叫與完整隔離紀錄。") : '');
+            if (ok) { accepted = baseline; }
+            return { ok, out: out || 'No executable unittest cases', qualityGaps: [], testModule: path.basename(testFile, '.py') };
+        }
+    }, 2);
+    checkCurrent();
+    if (!accepted || accepted.testHash !== evidenceHash(candidate.code)
+        || !verifyExecutionEvidence(directory, file, accepted, expected)) {
+        throw new AnalysisStageError('validation', 'execution-evidence', localize("執行證據不完整，未計入通過。"));
+    }
+    fs.writeFileSync(path.join(directory, 'execution_baseline.json'), JSON.stringify(accepted, null, 2), { encoding: 'utf8', flag: 'wx' });
+    journal.knowledge({ terminalStatus: 'execution-passed', evidenceValid: true, executionVerified: true,
+        executionBaseline: 'execution_baseline.json', acceptedTest: accepted.testFile, acceptedCodeHash: accepted.testHash,
+        execution: candidate.execution.out, generationMode: 'llm-execution',
+        traceStatus: 'deferred', coverage: null, mutationScore: null, mutationStatus: 'deferred',
+        qualityAssessment: null, reviewStatus: 'deferred' });
+    hooks.event('execution-verification', 'passed', { testFile: accepted.testFile, testHash: accepted.testHash });
+    return accepted;
+}

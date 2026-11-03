@@ -1,0 +1,1127 @@
+"""A dependency-free mutation-test fallback for Python environments without an engine.
+
+It creates mutated copies in a temporary directory and runs the generated
+unittest file against each copy.  Source files are never modified in place.
+This is intentionally a small safety net; mutatest/mutmut remain preferred
+when available.
+"""
+
+import ast
+import copy
+import difflib
+import hashlib
+import json
+import math
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from pathlib import Path
+from import_fixtures import mutation_environment, read_plan as import_fixture_plan
+from isolated_resources import validate_resources
+from mutation_operators_v2 import VERSION as OPERATOR_SET_VERSION_V2, iter_mutations
+from mutation_operators_v3 import VERSION as OPERATOR_SET_VERSION_V3, iter_mutations as iter_mutations_v3
+from mutation_activation import BACKEND as FUNCTION_BACKEND, POLICY as ACTIVATION_POLICY, eligible as activation_eligible, write_manifest, validate_evidence as valid_activation
+
+
+COMPARISON_REPLACEMENTS = {
+    ast.Lt: ast.LtE,
+    ast.LtE: ast.Lt,
+    ast.Gt: ast.GtE,
+    ast.GtE: ast.Gt,
+    ast.Eq: ast.NotEq,
+    ast.NotEq: ast.Eq,
+}
+
+BINARY_REPLACEMENTS = {
+    ast.Add: ast.Sub,
+    ast.Sub: ast.Add,
+    ast.Mult: ast.FloorDiv,
+    ast.FloorDiv: ast.Mult,
+    # Division is common in calculations but was previously invisible to the
+    # builtin fallback, which could overstate a suite's mutation score when no
+    # native engine is available. Floor division is a portable syntax-level
+    # replacement that callers can distinguish with a non-integral example.
+    ast.Div: ast.FloorDiv,
+}
+
+BOOLEAN_OPERATOR_REPLACEMENTS = {
+    ast.And: ast.Or,
+    ast.Or: ast.And,
+}
+
+
+CALLABLE_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+NO_PATTERN_MUTATION = object()
+OPERATOR_SET_VERSION = 'builtin-ast-v1'
+FUNCTION_SCOPE_VERSION = 'selected-function-body-v1'
+MODULE_SCOPE_VERSION = 'module-ast-v1'
+CODE_CHANGE_MAX_CHARS = 6000
+MUTANT_TIMEOUT_POLICY = 'baseline-calibrated-v1'
+
+
+def mutation_code_change(before_source, after_source):
+    """Capture one complete changed block from the normalized trial sources.
+
+    This optional display evidence is independent of mutation identity and
+    scoring. Do not splice disconnected edits or truncate a code block into an
+    apparently complete snapshot. Trim unchanged surroundings before the diff
+    so its work is bounded by the display limit even for a large module.
+    """
+    before_lines = before_source.splitlines()
+    after_lines = after_source.splitlines()
+    start = 0
+    common_length = min(len(before_lines), len(after_lines))
+    while start < common_length and before_lines[start] == after_lines[start]:
+        start += 1
+    before_end, after_end = len(before_lines), len(after_lines)
+    while (before_end > start and after_end > start
+           and before_lines[before_end - 1] == after_lines[after_end - 1]):
+        before_end -= 1
+        after_end -= 1
+    before_block, after_block = before_lines[start:before_end], after_lines[start:after_end]
+    if not before_block or not after_block:
+        return None
+    if any(sum(map(len, block)) + len(block) - 1 > CODE_CHANGE_MAX_CHARS
+           for block in (before_block, after_block)):
+        return None
+    opcodes = difflib.SequenceMatcher(None, before_block, after_block, autojunk=False).get_opcodes()
+    if len(opcodes) != 1 or opcodes[0][0] != 'replace':
+        return None
+    return {
+        'schemaVersion': 'mutation-code-v1',
+        'before': '\n'.join(before_block),
+        'after': '\n'.join(after_block),
+    }
+
+
+def mutation_scope_walk(scope):
+    """Walk only the selected function body, excluding nested callable scopes.
+
+    Decorators, defaults and annotations execute outside this body scope.
+    Nested helpers and classes remain separate callable responsibilities.
+    Module-wide analysis intentionally keeps its existing full-tree behaviour.
+    """
+    exclude_nested_callables = isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef))
+
+    def visit(node):
+        if exclude_nested_callables and isinstance(node, CALLABLE_SCOPE_NODES):
+            return
+        yield node
+        for child in ast.iter_child_nodes(node):
+            yield from visit(child)
+
+    if exclude_nested_callables:
+        for statement in scope.body:
+            yield from visit(statement)
+    else:
+        yield from visit(scope)
+
+
+def pattern_literal_replacement(node):
+    """Return a safe replacement for scalar match patterns, if applicable."""
+    match_value_type = getattr(ast, 'MatchValue', ())
+    match_singleton_type = getattr(ast, 'MatchSingleton', ())
+    if match_value_type and isinstance(node, match_value_type):
+        value = getattr(node.value, 'value', NO_PATTERN_MUTATION)
+        if isinstance(value, str):
+            return value + '__mutated_case__'
+    if match_singleton_type and isinstance(node, match_singleton_type):
+        if node.value is None:
+            return True
+        if isinstance(node.value, bool):
+            return not node.value
+    return NO_PATTERN_MUTATION
+
+
+def pattern_literal_value(node):
+    """Return the source literal used for a match mutation report."""
+    match_value_type = getattr(ast, 'MatchValue', ())
+    if match_value_type and isinstance(node, match_value_type):
+        return getattr(node.value, 'value', None)
+    return getattr(node, 'value', None)
+
+
+def find_target_scope(tree, function_name=None, class_name=None):
+    """Return the exact function or method selected by the caller when known."""
+    if not function_name:
+        return tree
+
+    if '.' in function_name:
+        selected_class, function_name = function_name.rsplit('.', 1)
+        if class_name and class_name != selected_class:
+            return None
+        class_name = selected_class
+
+    if class_name:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                for member in node.body:
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name == function_name:
+                        return member
+        return None
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name:
+            return node
+    return None
+
+
+def mutation_candidates(tree, scope=None):
+    """Return deterministic, generic AST mutation descriptions in the selected scope."""
+    candidates = []
+    target_scope = scope or tree
+    for node in mutation_scope_walk(target_scope):
+        if isinstance(node, ast.Return) and node.value is not None:
+            candidates.append({
+                'kind': 'return_value',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'return_value',
+                'to': 'None',
+            })
+        elif isinstance(node, ast.If):
+            candidates.append({
+                'kind': 'conditional_negation',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'if_condition',
+                'to': 'not_if_condition',
+            })
+        elif isinstance(node, ast.While):
+            candidates.append({
+                'kind': 'loop_condition_negation',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'while_condition',
+                'to': 'not_while_condition',
+            })
+        elif isinstance(node, ast.IfExp):
+            candidates.append({
+                'kind': 'conditional_expression_negation',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': 'if_expression_condition',
+                'to': 'not_if_expression_condition',
+            })
+        elif pattern_literal_replacement(node) is not NO_PATTERN_MUTATION:
+            replacement = pattern_literal_replacement(node)
+            candidates.append({
+                'kind': 'match_literal',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': repr(pattern_literal_value(node)),
+                'to': repr(replacement),
+            })
+        elif isinstance(node, ast.Compare):
+            for position, operator in enumerate(node.ops):
+                replacement = COMPARISON_REPLACEMENTS.get(type(operator))
+                if replacement:
+                    candidates.append({
+                        'kind': 'compare',
+                        'line': getattr(node, 'lineno', 0),
+                        'column': getattr(node, 'col_offset', 0),
+                        'position': position,
+                        'from': type(operator).__name__,
+                        'to': replacement.__name__,
+                    })
+        elif isinstance(node, ast.BinOp):
+            replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                candidates.append({
+                    'kind': 'binary',
+                    'line': getattr(node, 'lineno', 0),
+                    'column': getattr(node, 'col_offset', 0),
+                    'position': 0,
+                    'from': type(node.op).__name__,
+                    'to': replacement.__name__,
+                    })
+        elif isinstance(node, ast.AugAssign):
+            replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                candidates.append({
+                    'kind': 'augmented_assignment',
+                    'line': getattr(node, 'lineno', 0),
+                    'column': getattr(node, 'col_offset', 0),
+                    'position': 0,
+                    'from': type(node.op).__name__,
+                    'to': replacement.__name__,
+                })
+        elif isinstance(node, ast.BoolOp):
+            replacement = BOOLEAN_OPERATOR_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                candidates.append({
+                    'kind': 'boolean_operator',
+                    'line': getattr(node, 'lineno', 0),
+                    'column': getattr(node, 'col_offset', 0),
+                    'position': 0,
+                    'from': type(node.op).__name__,
+                    'to': replacement.__name__,
+                })
+        elif isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            candidates.append({
+                'kind': 'boolean',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': str(node.value),
+                'to': str(not node.value),
+            })
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float, complex)):
+            replacement = 1 if node.value == 0 else 0
+            candidates.append({
+                'kind': 'numeric_constant',
+                'line': getattr(node, 'lineno', 0),
+                'column': getattr(node, 'col_offset', 0),
+                'position': 0,
+                'from': repr(node.value),
+                'to': repr(replacement),
+            })
+    return candidates
+
+
+def apply_mutation(tree, candidate_index, target_function=None, target_class=None):
+    """Mutate one candidate selected by the same traversal used for discovery."""
+    copied = copy.deepcopy(tree)
+    copied_scope = find_target_scope(copied, target_function, target_class)
+    if copied_scope is None:
+        raise IndexError('Mutation target scope was not found')
+    current = 0
+    for node in mutation_scope_walk(copied_scope):
+        if isinstance(node, ast.Return) and node.value is not None:
+            if current == candidate_index:
+                node.value = ast.Constant(value=None)
+                return copied
+            current += 1
+        elif isinstance(node, ast.If):
+            if current == candidate_index:
+                node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
+        elif isinstance(node, ast.While):
+            if current == candidate_index:
+                node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
+        elif isinstance(node, ast.IfExp):
+            if current == candidate_index:
+                node.test = ast.UnaryOp(op=ast.Not(), operand=node.test)
+                return copied
+            current += 1
+        elif pattern_literal_replacement(node) is not NO_PATTERN_MUTATION:
+            replacement = pattern_literal_replacement(node)
+            if current == candidate_index:
+                match_value_type = getattr(ast, 'MatchValue', ())
+                if match_value_type and isinstance(node, match_value_type):
+                    node.value = ast.Constant(value=replacement)
+                else:
+                    node.value = replacement
+                return copied
+            current += 1
+        elif isinstance(node, ast.Compare):
+            for position, operator in enumerate(node.ops):
+                replacement = COMPARISON_REPLACEMENTS.get(type(operator))
+                if replacement:
+                    if current == candidate_index:
+                        node.ops[position] = replacement()
+                        return copied
+                    current += 1
+        elif isinstance(node, ast.BinOp):
+            replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                if current == candidate_index:
+                    node.op = replacement()
+                    return copied
+                current += 1
+        elif isinstance(node, ast.AugAssign):
+            replacement = BINARY_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                if current == candidate_index:
+                    node.op = replacement()
+                    return copied
+                current += 1
+        elif isinstance(node, ast.BoolOp):
+            replacement = BOOLEAN_OPERATOR_REPLACEMENTS.get(type(node.op))
+            if replacement:
+                if current == candidate_index:
+                    node.op = replacement()
+                    return copied
+                current += 1
+        elif isinstance(node, ast.Constant) and isinstance(node.value, bool):
+            if current == candidate_index:
+                node.value = not node.value
+                return copied
+            current += 1
+        elif isinstance(node, ast.Constant) and isinstance(node.value, (int, float, complex)):
+            if current == candidate_index:
+                node.value = 1 if node.value == 0 else 0
+                return copied
+            current += 1
+    raise IndexError('Mutation candidate index was not found')
+
+
+def package_copy_ignore():
+    """Omit declared resources before copytree opens or follows them."""
+    ignored_names = shutil.ignore_patterns('__pycache__', '*.pyc')
+    def ordinary_ignore(directory, names):
+        excluded = set(ignored_names(directory, names))
+        for name in names:
+            candidate = os.path.join(directory, name)
+            if os.path.islink(candidate) or getattr(os.path, 'isjunction', lambda _path: False)(candidate):
+                excluded.add(name)
+        return excluded
+    plan = import_fixture_plan()
+    if not plan:
+        return ordinary_ignore, lambda _path: False
+    from isolated_resources import logical_resource_path, is_unc_or_device, _source_path_spellings, _known_source_identity
+    # Prove only existing source anchors. Compare copy candidates lexically in
+    # that identity before resolving or opening any declared resource.
+    spellings = _source_path_spellings((plan['root'],))
+    normalize = lambda value: _known_source_identity(value, spellings)
+    root = normalize(plan['root'])
+    resources = [(logical_resource_path(root, spec), spec['kind'])
+                 for rule in plan['rules'] for spec in validate_resources(rule)]
+    if not resources:
+        return ordinary_ignore, lambda _path: False
+    # Match the runtime's no-link contract before copying anything. Only lstat
+    # metadata is inspected; a resource link's target is never traversed/read.
+    # This also prevents a second package alias exposing that outside target.
+    for resource, _kind in resources:
+        if is_unc_or_device(resource):
+            # Virtual UNC identifiers have no source directory to inspect/copy.
+            continue
+        current = Path(resource)
+        for component in reversed((current, *current.parents)):
+            try:
+                metadata = os.lstat(component)
+            except FileNotFoundError:
+                break
+            if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 1024:
+                raise ValueError('Mutation isolated resource path uses a symlink or junction')
+
+    def linked(candidate):
+        current = Path(candidate)
+        for component in reversed((current, *current.parents)):
+            try:
+                metadata = os.lstat(component)
+            except FileNotFoundError:
+                return False
+            if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 1024:
+                return True
+        return False
+
+    def declared(candidate):
+        candidate = normalize(candidate)
+        for resource, kind in resources:
+            try:
+                if candidate == resource or kind == 'directory' and os.path.commonpath((candidate, resource)) == resource:
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    def ignore(directory, names):
+        excluded = set(ordinary_ignore(directory, names))
+        for name in names:
+            candidate = os.path.join(directory, name)
+            # Lexical exclusion comes first: never resolve a declared resource
+            # or enumerate its directory just to decide not to copy it.
+            if declared(candidate):
+                excluded.add(name)
+            elif linked(candidate):
+                # Do not resolve/follow package links: their target may be an
+                # unapproved UNC location before the runtime guard even starts.
+                excluded.add(name)
+            elif declared(os.path.realpath(candidate)):
+                # A different package alias may point into declared data.
+                excluded.add(name)
+        return excluded
+
+    return ignore, declared
+
+
+def flat_dependency_closure(source_file, roots=None, seeds=None):
+    """Copy local Python imports transitively, without reopening production data.
+
+    Site packages remain installed interpreter dependencies. Symlinks and declared
+    resource paths use the same exclusion policy as package copies.
+    """
+    ignore, is_resource = package_copy_ignore()
+    roots = roots or [source_file.parent]
+    # Native/preflight may explicitly supply a separate local dependency root.
+    # Copy its needed source, never retain that original path in a mutant child.
+    from python_import_paths import configured_import_paths
+    from isolated_resources import is_unc_or_device
+    explicit = [*configured_import_paths(), *filter(None, os.environ.get('PYTHONPATH', '').split(os.pathsep))]
+    for raw in explicit:
+        if is_unc_or_device(raw):
+            continue
+        root = Path(raw).absolute()
+        if (root == Path(__file__).parent or root.is_relative_to(Path(sys.base_prefix))
+                or root.is_relative_to(Path(sys.prefix)) or root in roots):
+            continue
+        if root.is_symlink():
+            raise ValueError('Mutation dependency root is a link')
+        roots.append(root)
+    pending, seen, files, packages = list(seeds or [source_file]), set(), [], []
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if len(seen) > 512:
+            raise ValueError('Mutation dependency closure exceeds limit')
+        if current.is_symlink() or is_resource(current):
+            raise ValueError('Mutation dependency overlaps isolated resource or link')
+        tree = ast.parse(current.read_bytes())
+        for node in ast.walk(tree):
+            names = ([item.name for item in node.names] if isinstance(node, ast.Import)
+                     else [node.module] if isinstance(node, ast.ImportFrom) and not node.level and node.module else [])
+            for name in names:
+                head = name.split('.')[0]
+                matches = [(root / (head + '.py'), root / head, root) for root in roots
+                           if (root / (head + '.py')).is_file() or (root / head / '__init__.py').is_file()]
+                if not matches:
+                    continue
+                module, package, root = matches[0]
+                if module.is_file():
+                    if head + '.py' in ignore(str(root), [head + '.py']):
+                        raise ValueError('Mutation dependency source is excluded')
+                    if module != source_file and module not in files:
+                        files.append(module)
+                        pending.append(module)
+                elif package.is_dir() and (package / '__init__.py').is_file():
+                    if package.is_symlink():
+                        raise ValueError('Mutation dependency package is a link')
+                    if head in ignore(str(root), [head]):
+                        raise ValueError('Mutation dependency package is excluded')
+                    if package not in packages:
+                        packages.append(package)
+                        for directory, dirs, entries in os.walk(package, followlinks=False):
+                            excluded = ignore(directory, dirs + entries)
+                            dirs[:] = [item for item in dirs if item not in excluded]
+                            pending.extend(Path(directory, item) for item in entries
+                                           if item.endswith('.py') and item not in excluded)
+    return files, packages
+
+
+def mutation_import_layout(source_file, test_file, temp_root):
+    """Describe only copies required by statically bound target imports.
+
+    Keep bare and package bindings separately: an unused flat copy can invent
+    resource aliases that collide with a real ancestor-package copy. Mixed
+    imports still require both copies and remain subject to ambiguity checks.
+    """
+    source_stem = source_file.stem
+    source_chain = list(source_file.parents)
+    modules = set()
+    test_text = test_file.read_text(encoding='utf-8')
+    try:
+        tree = ast.parse(test_text)
+    except SyntaxError:
+        raise ValueError('Mutation target import layout is unsupported') from None
+    dynamic_names = {'__import__'}
+    dynamic_modules = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module in ('importlib', 'builtins'):
+                dynamic_names.update(alias.asname or alias.name for alias in node.names
+                                     if alias.name in ('import_module', '__import__'))
+            if node.level:
+                continue
+            module_name = node.module or ''
+            if module_name.split('.')[-1] == source_stem:
+                modules.add(module_name)
+            for alias in node.names:
+                if alias.name == source_stem:
+                    modules.add(f'{module_name}.{source_stem}' if module_name else source_stem)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ('importlib', 'builtins'):
+                    dynamic_modules[alias.asname or alias.name] = (
+                        'import_module' if alias.name == 'importlib' else '__import__')
+                if alias.name.split('.')[-1] == source_stem:
+                    modules.add(alias.name)
+    # Generated tests already disallow dynamic execution. Refuse recognized
+    # dynamic import calls here as well, rather than omitting a needed copy and
+    # letting PYTHONPATH silently resolve that target from the original source.
+    if any(isinstance(node, ast.Call) and (
+            isinstance(node.func, ast.Name) and node.func.id in dynamic_names
+            or isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+            and dynamic_modules.get(node.func.value.id) == node.func.attr)
+           for node in ast.walk(tree)):
+        raise ValueError('Mutation target import layout is unsupported')
+
+    targets = []
+    packages = []
+    bindings = []
+    dependencies = []
+    if source_stem in modules:
+        target = temp_root / source_file.name
+        targets.append(target)
+        bindings.append((source_file, target, False))
+    for module_name in sorted(modules):
+        package_parts = module_name.split('.')[:-1]
+        if not package_parts or len(package_parts) > len(source_chain):
+            continue
+        if any(source_chain[index].name != package_parts[-1 - index] for index in range(len(package_parts))):
+            continue
+        package_root = source_chain[len(package_parts) - 1]
+        destination_root = temp_root / package_root.name
+        packages.append((package_root, destination_root))
+        bindings.append((package_root, destination_root, True))
+        targets.append(destination_root / source_file.relative_to(package_root))
+    if not targets:
+        raise ValueError('Mutation target import layout is unsupported')
+    # A package's root imports (config.*, db.*, etc.) are siblings of that
+    # package, not children. Derive roots from the actual target import layout.
+    roots = list(dict.fromkeys([package.parent for package, _ in packages]
+                              + ([source_file.parent] if source_stem in modules else [])))
+    ignore, _ = package_copy_ignore()
+    seeds = [source_file]
+    for package, _ in packages:
+        for directory, dirs, entries in os.walk(package, followlinks=False):
+            excluded = ignore(directory, dirs + entries)
+            dirs[:] = [item for item in dirs if item not in excluded]
+            seeds.extend(Path(directory, item) for item in entries if item.endswith('.py') and item not in excluded)
+    files, local_packages = flat_dependency_closure(source_file, roots, seeds)
+    for file in files:
+        if any(file.is_relative_to(package) for package, _ in packages):
+            continue
+        copied = temp_root / file.name
+        dependencies.append((file, copied))
+        bindings.append((file, copied, False))
+    for package in local_packages:
+        if any(package.is_relative_to(existing) for existing, _ in packages):
+            continue
+        copied = temp_root / package.name
+        packages.append((package, copied))
+        bindings.append((package, copied, True))
+    return {'targets': targets, 'packages': packages, 'bindings': bindings, 'dependencies': dependencies}
+
+
+def package_mutant_targets(source_file, test_file, temp_root, layout=None):
+    """Mirror the package roots selected by the test's static target imports."""
+    layout = layout or mutation_import_layout(source_file, test_file, temp_root)
+    ignore, is_resource = package_copy_ignore()
+    for source, destination in layout.get('dependencies', []):
+        destination.write_bytes(source.read_bytes())
+    for package_root, destination_root in layout['packages']:
+        if is_resource(package_root):
+            raise ValueError('Mutation package overlaps a declared isolated resource')
+        shutil.copytree(package_root, destination_root, dirs_exist_ok=True, ignore=ignore)
+    return [target for target in layout['targets'] if target.parent != temp_root]
+
+
+def prepare_trial_directory(source_file, test_file, trial_root, source_text):
+    """Create one import-isolated filesystem for a baseline or mutant trial.
+
+    Each trial receives a fresh package tree. Reusing one directory lets
+    Python reuse timestamp-based ``.pyc`` files when two AST variants have the
+    same size and are written within one filesystem timestamp tick, producing
+    nondeterministic mutation scores.
+    """
+    trial_root.mkdir(parents=True, exist_ok=False)
+    test_copy = trial_root / test_file.name
+    # Keep baseline/test identities byte-for-byte. On Windows write_text would
+    # expand an already-CRLF source into CRCRLF and invalidate approvals.
+    test_copy.write_bytes(test_file.read_bytes())
+    layout = mutation_import_layout(source_file, test_file, trial_root)
+    package_mutant_targets(source_file, test_file, trial_root, layout)
+    for target_copy in layout['targets']:
+        target_copy.write_bytes(source_text.encode('utf-8'))
+    return test_copy
+
+
+def trial_environment(temp_root, source_file, test_file):
+    temp_root = Path(temp_root).resolve()
+    layout = mutation_import_layout(source_file, test_file, temp_root)
+    # Package initializers/helpers may use a bare import of this same target.
+    # Include all copied ancestors so shorter package suffixes also resolve to
+    # the same physical mutant, never the original source. Stop at trial_root;
+    # no extra flat file or resource alias is needed. An explicitly requested
+    # flat copy still wins through temp_root first.
+    copied_import_paths = []
+    for target in layout['targets']:
+        for parent in target.parents:
+            if not parent.is_relative_to(temp_root):
+                break
+            copied_import_paths.append(str(parent))
+    import_paths = list(dict.fromkeys([
+        str(temp_root),
+        *copied_import_paths,
+    ]))
+    from python_import_paths import tool_environment
+    child_environment = {
+        **os.environ,
+        'PYTHONIOENCODING': 'utf-8',
+        # A mutation trial must execute its .py source, never bytecode left by
+        # the baseline or another mutant.
+        'PYTHONDONTWRITEBYTECODE': '1',
+    }
+    # Never retain a parent path which can resolve the original target. A
+    # mutation trial either uses its copied module tree or fails visibly.
+    child_environment.pop('PYTHONPATH', None)
+    child_environment.pop('LLM_UNIT_TEST_IMPORT_PATHS', None)
+    return mutation_environment(tool_environment(child_environment, paths=import_paths),
+                                temp_root, source_file, layout['bindings'])
+
+
+def read_trial_result(path, expected_fixture_id=None, expected_activation=None):
+    """Read the guarded runner's bounded report; never infer failures from text."""
+    try:
+        if path.stat().st_size > 512000:
+            return None
+        result = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    blocked = isinstance(result, dict) and result.get('status') == 'isolation-blocked'
+    if (not isinstance(result, dict) or result.get('schemaVersion') != 'generated-test-result-v1'
+            or type(result.get('testsRun')) is not int or result['testsRun'] < 0
+            or result['testsRun'] == 0 and not blocked
+            or not isinstance(result.get('testFailures'), list) or len(result['testFailures']) > 1000):
+        return None
+    if expected_fixture_id and (not isinstance(result.get('importFixtures'), dict)
+            or result['importFixtures'].get('id') != expected_fixture_id):
+        return None
+    # A blocked import can precede both unittest execution and activation.
+    # Keep its environment failure; it cannot prove a pass or a killed mutant.
+    if expected_activation and not blocked and not valid_activation(result.get('functionActivation'), expected_activation):
+        return None
+    if blocked and result['testFailures']:
+        return None
+    for failure in result['testFailures']:
+        if not isinstance(failure, dict) or failure.get('kind') not in ('failure', 'error', 'unexpected-success'):
+            return None
+        if failure.get('phase') == 'test':
+            identifier = failure.get('testId')
+            if not isinstance(identifier, str) or len(identifier) > 1024 or not all(part.isidentifier() for part in identifier.split('.')):
+                return None
+        elif failure.get('phase') != 'fixture-or-load':
+            return None
+    return result
+
+
+def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_seconds=10,
+                        target_function=None, target_class=None, stage_timeout_seconds=None,
+                        operator_version=OPERATOR_SET_VERSION_V2, workers=2, candidate_provider=None,
+                        activate_functions=False):
+    """Measure selected mutants without treating incomplete execution as a kill.
+
+    ``total``/``errors`` remain legacy display fields. Consumers must use the
+    versioned counts and status: the candidate limit is not the full universe.
+    """
+    if type(max_mutations) is not int or max_mutations < 0:
+        raise ValueError('max_mutations must be a non-negative integer (zero selects all candidates)')
+    if type(workers) is not int or not 1 <= workers <= 4:
+        raise ValueError('workers must be an integer from 1 to 4')
+    if candidate_provider is None and operator_version not in (OPERATOR_SET_VERSION, OPERATOR_SET_VERSION_V2, OPERATOR_SET_VERSION_V3):
+        raise ValueError('Unsupported builtin operator version')
+    for label, value in [('timeout_seconds', timeout_seconds), ('stage_timeout_seconds', stage_timeout_seconds)]:
+        if value is None and label == 'timeout_seconds':
+            raise ValueError('timeout_seconds must be a finite positive number')
+        if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
+            raise ValueError(f'{label} must be a finite positive number')
+    started = time.monotonic()
+    deadline = started + stage_timeout_seconds if stage_timeout_seconds is not None else None
+    # Every isolated trial starts a fresh interpreter. First measure the real
+    # baseline cost; it must not be larger than every mutant's execution cap.
+    # Neither baseline nor calibrated trial limits extend the stage deadline.
+    baseline_timeout_seconds = max(20, timeout_seconds)
+    source_file = Path(source_path).resolve()
+    test_file = Path(test_path).resolve()
+    original_source = source_file.read_bytes().decode('utf-8')
+    original_test_bytes = test_file.read_bytes()
+    source_hash = hashlib.sha256(original_source.encode('utf-8')).hexdigest()
+    tree = ast.parse(original_source, filename=str(source_file))
+    activate_function = bool(activate_functions and target_function and not target_class and '.' not in target_function
+                             and activation_eligible(tree, target_function))
+    scope = find_target_scope(tree, target_function, target_class)
+    scope_name = (target_function if target_function and '.' in target_function
+                  else f'{target_class + "." if target_class else ""}{target_function or "module"}')
+    result = {
+        'schemaVersion': 1,
+        'importFixtureId': (import_fixture_plan() or {}).get('id'),
+        'engine': 'builtin',
+        'operatorSetVersion': operator_version,
+        'executionBackend': FUNCTION_BACKEND if activate_function else 'isolated-unittest-v1',
+        **({'activationPolicy': ACTIVATION_POLICY} if activate_function else {}),
+        'workers': workers,
+        'scopeVersion': FUNCTION_SCOPE_VERSION if target_function else MODULE_SCOPE_VERSION,
+        'candidateSetId': None,
+        'candidateIds': [],
+        'status': 'failed',
+        'sourceHash': source_hash,
+        'testHash': hashlib.sha256(original_test_bytes).hexdigest(),
+        'targetScope': {'kind': 'function' if target_function else 'module', 'qualifiedName': scope_name},
+        'sourcePath': str(source_file),
+        'timeoutSeconds': timeout_seconds,
+        'baselineTimeoutSeconds': baseline_timeout_seconds,
+        'baselineAllocatedSeconds': 0,
+        'baselineElapsedMs': 0,
+        'stageTimeoutSeconds': stage_timeout_seconds,
+        'counts': dict(available=0, selected=0, executed=0, notRun=0, killed=0, survived=0, timeout=0, error=0),
+        'excluded': dict(noop=0, duplicate=0, invalid=0),
+        'scoreAvailable': False,
+        'total': 0,
+        'killed': 0,
+        'survived': 0,
+        'errors': 0,
+        'mutants': [],
+        'scope_found': scope is not None,
+        'scope': scope_name,
+        'baseline_passed': False,
+        'baselineStatus': 'not-run',
+    }
+    if scope is None:
+        result['diagnostic'] = 'Selected mutation scope was not found'
+        return result
+    body_start = scope.body[0].lineno if target_function and scope.body else getattr(scope, 'lineno', 1)
+    result['targetScope'].update(startLine=body_start, endLine=getattr(scope, 'end_lineno', len(original_source.splitlines())))
+    candidates = []
+    original_ast = ast.dump(tree, include_attributes=False)
+    normalized_source = ast.unparse(tree)
+    seen_variants, seen_ids = set(), set()
+    if candidate_provider is not None:
+        try:
+            provided = candidate_provider(tree, scope, source_hash, scope_name, result['scopeVersion'])
+            if not isinstance(provided, dict) or provided.get('engine') not in ('mutatest', 'mutmut', 'builtin'):
+                raise ValueError('Invalid candidate provider engine')
+            version = provided.get('operatorSetVersion')
+            if not isinstance(version, str) or not re.fullmatch(r'[a-zA-Z0-9_.-]{1,100}', version):
+                raise ValueError('Invalid candidate provider version')
+            result.update(engine=provided['engine'], operatorSetVersion=version)
+            excluded = provided.get('excluded', {})
+            if isinstance(excluded, dict):
+                for key in result['excluded']:
+                    if type(excluded.get(key)) is int and excluded[key] >= 0:
+                        result['excluded'][key] += excluded[key]
+            if isinstance(provided.get('engineVersion'), str) and re.fullmatch(r'[a-zA-Z0-9_.+-]{1,100}', provided['engineVersion']):
+                result['engineVersion'] = provided['engineVersion']
+            candidate_stream = ((record, ast.parse(source), source) for record, source in provided['candidates'])
+        except Exception as error:
+            result['counts']['available'] = None
+            result['diagnostic'] = 'Candidate provider failed: ' + type(error).__name__
+            reason_code = getattr(error, 'reason_code', None)
+            if isinstance(reason_code, str) and re.fullmatch(r'[a-z0-9-]{1,100}', reason_code):
+                result['diagnosticCode'] = reason_code
+            return result
+    elif operator_version == OPERATOR_SET_VERSION:
+        candidate_stream = ((candidate, apply_mutation(tree, index, target_function, target_class), None)
+                            for index, candidate in enumerate(mutation_candidates(tree, scope)))
+    elif operator_version == OPERATOR_SET_VERSION_V3:
+        candidate_stream = ((candidate, variant, None) for candidate, variant in iter_mutations_v3(tree, scope))
+    else:
+        candidate_stream = ((candidate, variant, None) for candidate, variant in iter_mutations(tree, scope))
+    try:
+        for candidate, variant, provided_source in candidate_stream:
+            if deadline is not None and time.monotonic() >= deadline:
+                result['counts']['available'] = None
+                result['diagnostic'] = 'Stage budget exhausted while enumerating mutation candidates; universe is unknown'
+                return result
+            ast.fix_missing_locations(variant)
+            variant_ast = ast.dump(variant, include_attributes=False)
+            if variant_ast == original_ast:
+                result['excluded']['noop'] += 1
+                continue
+            if variant_ast in seen_variants:
+                result['excluded']['duplicate'] += 1
+                continue
+            try:
+                compile(variant, str(source_file), 'exec')
+            except (SyntaxError, TypeError, ValueError):
+                result['excluded']['invalid'] += 1
+                continue
+            seen_variants.add(variant_ast)
+            variant_hash = hashlib.sha256(variant_ast.encode('utf-8')).hexdigest()
+            identity = json.dumps([operator_version, result['scopeVersion'], source_hash, scope_name, candidate, variant_hash],
+                                  sort_keys=True, separators=(',', ':'))
+            record = {**candidate, 'id': candidate['id'] if candidate_provider is not None else hashlib.sha256(identity.encode('utf-8')).hexdigest()}
+            for runtime_field in ('status', 'output', 'killedBy', 'testFailures', 'elapsedMs', 'allocatedSeconds'):
+                record.pop(runtime_field, None)
+            if not isinstance(record['id'], str) or not re.fullmatch(r'[a-f0-9]{64}', record['id']) or record['id'] in seen_ids:
+                raise ValueError('Candidate provider IDs must be distinct SHA-256 values')
+            seen_ids.add(record['id'])
+            mutant_source = provided_source if provided_source is not None else ast.unparse(variant) + '\n'
+            # Always derive display evidence from the actual executed variant.
+            code_change = mutation_code_change(normalized_source, ast.unparse(variant))
+            record.pop('codeChange', None)
+            if code_change is not None:
+                record['codeChange'] = code_change
+            if activate_function:
+                record['variantSourceHash'] = hashlib.sha256(mutant_source.encode('utf-8')).hexdigest()
+            candidates.append((record, mutant_source))
+    except Exception as error:
+        result['counts']['available'] = None
+        result['diagnostic'] = 'Candidate enumeration failed: ' + type(error).__name__
+        return result
+    result['counts']['available'] = len(candidates)
+    result['candidateIds'] = [candidate['id'] for candidate, _ in candidates]
+    result['candidateSetId'] = hashlib.sha256('\n'.join(sorted(result['candidateIds'])).encode('ascii')).hexdigest()
+    candidates = candidates[:max_mutations] if max_mutations else candidates
+    result['total'] = result['counts']['selected'] = result['counts']['notRun'] = len(candidates)
+
+    def trial_timeout(limit):
+        if deadline is None:
+            return limit
+        return max(0, min(limit, deadline - time.monotonic()))
+
+    def budget_exhausted():
+        return deadline is not None and time.monotonic() >= deadline
+
+    with tempfile.TemporaryDirectory(prefix='llm_unit_mutation_') as temp_dir:
+        temp_root = Path(temp_dir)
+        snapshot_dir = temp_root / 'test_snapshot'
+        snapshot_dir.mkdir()
+        snapshot_test = snapshot_dir / test_file.name
+        snapshot_test.write_bytes(original_test_bytes)
+        # Run the unmodified target in exactly the same isolated import layout
+        # used for every mutant. A failing baseline is infrastructure/test
+        # failure, never evidence that every mutant was killed.
+        baseline_root = temp_root / 'baseline'
+        try:
+            baseline_test = prepare_trial_directory(source_file, snapshot_test, baseline_root, original_source)
+            baseline_environment = trial_environment(baseline_root, source_file, baseline_test)
+            baseline_activation = write_manifest(baseline_root, original_source.encode('utf-8'), target_function,
+                mutation_import_layout(source_file, baseline_test, baseline_root)['targets'], baseline_test) if activate_function else None
+        except (OSError, ValueError):
+            result.update(baselineStatus='error', diagnosticCode='mutation-trial-setup-failed',
+                          baseline_output='Mutation trial import layout or fixture setup failed',
+                          baselineFailure={'schemaVersion': 'mutation-baseline-failure-v1',
+                                           'category': 'environment', 'reasonCode': 'baseline-environment-setup-failed'})
+            return result
+
+        baseline_started = None
+        try:
+            result['baselineAllocatedSeconds'] = trial_timeout(baseline_timeout_seconds)
+            if result['baselineAllocatedSeconds'] <= 0:
+                result['baseline_output'] = 'Stage budget exhausted before baseline'
+                result['baselineFailure'] = {'schemaVersion': 'mutation-baseline-failure-v1',
+                                             'category': 'budget', 'reasonCode': 'baseline-stage-budget-exhausted'}
+                return result
+            baseline_result_path = baseline_root / 'runner-result.json'
+            baseline_started = time.monotonic()
+            baseline = subprocess.run(
+                [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), baseline_test.stem,
+                 '--result-json', str(baseline_result_path),
+                 *(['--function-mutation-manifest', str(baseline_activation)] if baseline_activation else [])],
+                cwd=baseline_root,
+                env=baseline_environment,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=result['baselineAllocatedSeconds'],
+            )
+            baseline_result = read_trial_result(baseline_result_path, result['importFixtureId'],
+                {'sourceHash': source_hash, 'variantHash': source_hash, 'testHash': result['testHash'], 'target': target_function}
+                if activate_function else None)
+            if activate_function and baseline_result and baseline_result.get('functionActivation') is not None:
+                result['baselineFunctionActivation'] = baseline_result['functionActivation']
+            result['baselineImportFixtures'] = baseline_result.get('importFixtures') if baseline_result else None
+            if (baseline.returncode or baseline_result is None or baseline_result.get('status') != 'passed'
+                    or baseline_result['testFailures']):
+                test_failure = (baseline.returncode == 1 and baseline_result is not None
+                                and baseline_result.get('status') == 'failed' and baseline_result['testFailures']
+                                and all(item['phase'] == 'test' for item in baseline_result['testFailures']))
+                load_failure = (baseline_result is not None
+                                and (baseline_result.get('status') == 'isolation-blocked'
+                                     or any(item['phase'] == 'fixture-or-load' for item in baseline_result['testFailures'])))
+                result.update({
+                    'total': 0,
+                    'baseline_passed': False,
+                    'baselineStatus': 'failed' if test_failure else 'error',
+                    'baselineFailure': {'schemaVersion': 'mutation-baseline-failure-v1',
+                                        'category': 'environment' if load_failure else 'validation' if test_failure else 'tool',
+                                        'reasonCode': 'baseline-module-or-fixture-load-failed' if load_failure
+                                        else 'baseline-tests-failed' if test_failure else 'baseline-runner-report-unavailable'},
+                    'baseline_output': (baseline.stdout + baseline.stderr).strip()[-500:],
+                    'mutants': [],
+                })
+                return result
+        except subprocess.TimeoutExpired:
+            result.update({
+                'total': 0,
+                'baseline_passed': False,
+                'baselineStatus': 'timeout',
+                'baselineFailure': {'schemaVersion': 'mutation-baseline-failure-v1',
+                                    'category': 'timeout', 'reasonCode': 'baseline-timeout'},
+                'baseline_output': ('Baseline timed out after '
+                                    f'{result["baselineAllocatedSeconds"]:.3f}s '
+                                    f'(cold-start limit {baseline_timeout_seconds}s; shared stage budget applies)'),
+                'mutants': [],
+            })
+            return result
+        except OSError as error:
+            result.update({
+                'total': 0,
+                'baseline_passed': False,
+                'baselineStatus': 'error',
+                'baselineFailure': {'schemaVersion': 'mutation-baseline-failure-v1',
+                                    'category': 'tool', 'reasonCode': 'baseline-process-start-failed'},
+                'baseline_output': str(error),
+                'mutants': [],
+            })
+            return result
+        finally:
+            if baseline_started is not None:
+                result['baselineElapsedMs'] = max(0, round((time.monotonic() - baseline_started) * 1000))
+            result['elapsedMs'] = max(0, round((time.monotonic() - started) * 1000))
+
+        result['baseline_passed'] = True
+        result['baselineStatus'] = 'passed'
+        # Use only a passed baseline, not slow or timed-out mutants, to set the
+        # same execution cap for sequential and concurrent workers. Two times
+        # the observed interpreter/import/test duration plus one second allows
+        # scheduling jitter without an arbitrary global timeout increase.
+        effective_timeout_seconds = max(timeout_seconds, (2 * result['baselineElapsedMs'] + 1000) / 1000)
+        result.update(mutantTimeoutPolicy=MUTANT_TIMEOUT_POLICY,
+                      configuredMutantTimeoutSeconds=timeout_seconds,
+                      effectiveMutantTimeoutSeconds=effective_timeout_seconds)
+        result['mutants'] = [{**candidate, 'status': 'NOT_RUN', 'output': ''} for candidate, _ in candidates]
+
+        def mutation_budget_exhausted():
+            # Do not launch a fresh interpreter with less time than the same
+            # successful baseline actually needed. Keep that candidate NOT_RUN
+            # rather than producing a predictable stage-limited TIMEOUT.
+            return budget_exhausted() or trial_timeout(effective_timeout_seconds) < result['baselineElapsedMs'] / 1000
+
+        def execute_candidate(index):
+            if mutation_budget_exhausted():
+                return None
+            candidate, mutant_source = candidates[index]
+            trial_started = time.monotonic()
+            mutant_root = temp_root / f'mutant_{index:04d}'
+            try:
+                mutant_test = prepare_trial_directory(source_file, snapshot_test, mutant_root, mutant_source)
+                mutant_environment = trial_environment(mutant_root, source_file, mutant_test)
+                activation = write_manifest(mutant_root, original_source.encode('utf-8'), target_function,
+                    mutation_import_layout(source_file, mutant_test, mutant_root)['targets'], mutant_test) if activate_function else None
+            except (OSError, ValueError) as error:
+                return {**candidate, 'status': 'ERROR', 'output': 'Trial setup failed: ' + type(error).__name__,
+                        'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
+            allocated_seconds = trial_timeout(effective_timeout_seconds)
+            if allocated_seconds <= 0 or allocated_seconds < result['baselineElapsedMs'] / 1000:
+                return None
+            trial_result_path = mutant_root / 'runner-result.json'
+            detail = None
+
+            try:
+                completed = subprocess.run(
+                    [sys.executable, '-B', str(Path(__file__).with_name('generated_test_runner.py')), mutant_test.stem,
+                     '--result-json', str(trial_result_path),
+                     *(['--function-mutation-manifest', str(activation)] if activation else [])],
+                    cwd=mutant_root,
+                    env=mutant_environment,
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    timeout=allocated_seconds,
+                )
+                # A forbidden external operation is missing test isolation,
+                # never proof that an assertion killed the mutant.
+                detail = read_trial_result(trial_result_path, result['importFixtureId'],
+                    {'sourceHash': source_hash, 'variantHash': candidate['variantSourceHash'],
+                     'testHash': result['testHash'], 'target': target_function} if activate_function else None)
+                status = 'ERROR'
+                if detail is not None:
+                    if completed.returncode == 0 and detail.get('status') == 'passed' and not detail['testFailures']:
+                        status = 'SURVIVED'
+                    elif (completed.returncode == 1 and detail.get('status') == 'failed' and detail['testFailures']
+                          and all(item['phase'] == 'test' for item in detail['testFailures'])):
+                        status = 'KILLED'
+                output = (completed.stdout + completed.stderr).strip()[-500:]
+            except subprocess.TimeoutExpired as error:
+                status = 'TIMEOUT'
+                output = (f'Mutant timed out after {allocated_seconds:.3f}s '
+                          f'(baseline-calibrated limit {effective_timeout_seconds:.3f}s; '
+                          f'configured minimum {timeout_seconds}s; shared stage budget applies): {error}')
+            except OSError as error:
+                status = 'ERROR'
+                output = str(error)
+
+            record = {**candidate, 'status': status, 'output': output,
+                      'allocatedSeconds': allocated_seconds,
+                      'importFixtures': detail.get('importFixtures') if detail else None,
+                      'elapsedMs': max(0, round((time.monotonic() - trial_started) * 1000))}
+            if activate_function and detail and detail.get('functionActivation') is not None:
+                record['functionActivation'] = detail['functionActivation']
+            if status == 'KILLED':
+                record['killedBy'] = sorted({item['testId'] for item in detail['testFailures']})
+                record['testFailures'] = detail['testFailures']
+            return record
+
+        def save_record(index, record):
+            if record is None:
+                return
+            result['mutants'][index] = record
+            result['counts']['executed'] += 1
+            result['counts']['notRun'] -= 1
+            result['counts'][{'KILLED': 'killed', 'SURVIVED': 'survived', 'TIMEOUT': 'timeout', 'ERROR': 'error'}[record['status']]] += 1
+
+        # Only workers concurrent ordinary child processes; do not detach or
+        # create a new process group. runSpawn owns cancellation of this whole
+        # process tree (taskkill /T on Windows, group kill on POSIX).
+        if workers == 1:
+            for index in range(len(candidates)):
+                if mutation_budget_exhausted():
+                    break
+                save_record(index, execute_candidate(index))
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                pending = {}
+                next_index = 0
+                while pending or next_index < len(candidates):
+                    while len(pending) < workers and next_index < len(candidates) and not mutation_budget_exhausted():
+                        pending[pool.submit(execute_candidate, next_index)] = next_index
+                        next_index += 1
+                    if not pending:
+                        break
+                    completed_futures, _ = wait(pending, return_when=FIRST_COMPLETED)
+                    for future in completed_futures:
+                        index = pending.pop(future)
+                        save_record(index, future.result())
+    counts = result['counts']
+    result.update(killed=counts['killed'], survived=counts['survived'], errors=counts['error'])
+    result['scoreAvailable'] = bool(counts['selected'] and counts['notRun'] == 0 and counts['error'] == 0 and counts['timeout'] == 0)
+    result['status'] = ('failed' if counts['error'] else 'no-candidates' if counts['available'] == 0
+                        else 'complete' if result['scoreAvailable'] and counts['selected'] == counts['available'] else 'partial')
+    if counts['notRun']:
+        result['diagnosticCode'] = 'mutation-stage-budget-insufficient'
+        result['diagnostic'] = 'Unstarted candidates retain NOT_RUN; the remaining stage budget cannot fund another baseline-sized trial.'
+    result['elapsedMs'] = max(0, round((time.monotonic() - started) * 1000))
+    return result
+
+
+if __name__ == '__main__':
+    activate_functions = '--activate-functions' in sys.argv
+    if sys.argv.count('--activate-functions') > 1:
+        print(json.dumps({'error': 'invalid-arguments'}))
+        sys.exit(2)
+    sys.argv = [argument for argument in sys.argv if argument != '--activate-functions']
+    if len(sys.argv) < 3:
+        print(json.dumps({'error': 'Usage: basic_mutation_runner.py <source.py> <test.py> [max_mutations] [timeout_seconds] [target_function] [target_class] [stage_timeout_seconds] [workers] [operator_version]'}))
+        sys.exit(2)
+    maximum = int(sys.argv[3]) if len(sys.argv) >= 4 else 30
+    timeout = float(sys.argv[4]) if len(sys.argv) >= 5 else 10
+    function_name = sys.argv[5] if len(sys.argv) >= 6 and sys.argv[5] else None
+    class_name = sys.argv[6] if len(sys.argv) >= 7 and sys.argv[6] else None
+    stage_timeout = float(sys.argv[7]) if len(sys.argv) >= 8 else None
+    workers = int(sys.argv[8]) if len(sys.argv) >= 9 else 2
+    operator_version = sys.argv[9] if len(sys.argv) >= 10 else OPERATOR_SET_VERSION_V2
+    print(json.dumps(
+        run_mutation_trials(sys.argv[1], sys.argv[2], maximum, timeout, function_name, class_name, stage_timeout,
+                            operator_version=operator_version, workers=workers, activate_functions=activate_functions),
+        ensure_ascii=True
+    ))

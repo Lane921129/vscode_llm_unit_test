@@ -1,0 +1,205 @@
+import ast
+import json
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from basic_mutation_runner import mutation_candidates, find_target_scope
+from mutation_probe_plan import plan
+from deduplicate_trace_tests import deduplicate
+from fixture_scorecard import report_fields
+import tempfile
+
+SOURCE = '''def categorize(amount, scale):
+    factor = scale / 10
+    value = round(amount / factor ** 2, 2)
+    if value < 7.5:
+        label = 'low'
+    elif 7.5 <= value < 13:
+        label = 'middle'
+    elif 13 <= value < 21:
+        label = 'high'
+    else:
+        label = 'end'
+    return value, label
+'''
+
+
+def payload(source=SOURCE, target='categorize'):
+    tree = ast.parse(source)
+    mutants = mutation_candidates(tree, find_target_scope(tree, target))
+    return {'source': source, 'target': target,
+            'mutants': [{**m, 'status': 'SURVIVED', 'id': str(i)} for i, m in enumerate(mutants)],
+            'observations': [{'args': ['2', '10'], 'call_assertable': True}]}
+
+
+class MutationInputsTests(unittest.TestCase):
+    def test_starting_tier_is_not_used_as_retained_scorecard_tier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / 'final_report.md'
+            report.write_text('- **起始策略**: 請求 tier2，起始 Tier 2（中途切換見策略執行摘要）\n', encoding='utf-8')
+            fields = report_fields(report)
+            self.assertEqual(fields['requested_tier'], 'tier2')
+            self.assertIsNone(fields['resolved_tier'])
+
+    def test_boundaries_are_inputs_only_and_redundant_bounds_remain_in_score(self):
+        result = plan(payload())
+        self.assertFalse(result['assertionOracle'])
+        self.assertTrue(result['inputs'])
+        reached = {round(i['args'][0] / (i['args'][1] / 10) ** 2, 2) for i in result['inputs']}
+        self.assertTrue({7.5, 13, 21}.issubset(reached))
+        self.assertLessEqual(len(result['inputs']), 12)
+        self.assertTrue(all(set(i) == {'args', 'kwargs', 'mutantId'} for i in result['inputs']))
+        equivalents = [d for d in result['diagnostics'] if d['status'] == 'conditional-equivalence']
+        self.assertEqual(len(equivalents), 2)
+        self.assertTrue(all(d['excludedFromScore'] is False for d in equivalents))
+
+    def test_boundary_family_is_opt_in_and_never_changes_default_input_planning(self):
+        data = payload()
+        default = plan(data)
+        data['boundaryFamily'] = False
+        self.assertEqual(plan(data), default)
+        data['boundaryFamily'] = 'true'
+        self.assertEqual(plan(data), default, 'only an explicit boolean enables the input family')
+        data['boundaryFamily'] = True
+        family = plan(data)
+        self.assertFalse(family['assertionOracle'])
+        self.assertLessEqual(len(family['inputs']), 12)
+        self.assertTrue(all(set(item) == {'args', 'kwargs', 'mutantId'} for item in family['inputs']))
+        self.assertEqual(family['diagnostics'], default['diagnostics'], 'input experiments never alter equivalent scoring')
+
+    def test_each_rounded_boundary_focus_gets_below_at_and_above_input_experiments(self):
+        for threshold, line, position in [(7.5, 4, 0), (13, 6, 1), (21, 8, 1)]:
+            with self.subTest(threshold=threshold):
+                data = payload()
+                selected = next(item for item in data['mutants'] if item['kind'] == 'compare'
+                                and item['line'] == line and item['position'] == position)
+                data['mutants'] = [selected]
+                data['boundaryFamily'] = True
+                result = plan(data)
+                reached = {round(item['args'][0] / (item['args'][1] / 10) ** 2, 2) for item in result['inputs']}
+                self.assertEqual(len(result['inputs']), 3, result)
+                self.assertTrue(any(value < threshold for value in reached), result)
+                self.assertIn(threshold, reached)
+                self.assertTrue(any(value > threshold for value in reached), result)
+                self.assertFalse(result['assertionOracle'])
+
+    def test_boundary_family_reobserves_existing_focus_inputs_without_claiming_quality_progress(self):
+        data = payload('def categorize(amount, scale):\n    if amount < 7.5: return 0\n    return scale\n')
+        data['observations'] = [{'args': ['7.5', '10']}]
+        self.assertEqual(plan(data)['inputs'], [])
+        data['boundaryFamily'] = True
+        family = plan(data)
+        self.assertIn([7.5, 10], [item['args'] for item in family['inputs']])
+        self.assertFalse(family['assertionOracle'])
+        self.assertTrue(all('expected' not in item and 'result' not in item for item in family['inputs']))
+
+    def test_boundary_family_does_not_guess_unknown_expressions_or_unsafe_inputs(self):
+        for expression in ['helper(amount)', "__import__('os').system('echo unsafe')", 'amount * amount']:
+            data = payload(SOURCE.replace('round(amount / factor ** 2, 2)', expression))
+            data['boundaryFamily'] = True
+            self.assertEqual(plan(data)['inputs'], [])
+        data = payload(); data['boundaryFamily'] = True
+        data['observations'][0]['call_assertable'] = False
+        self.assertEqual(plan(data)['inputs'], [])
+        data['observations'] = [{'args': ["__import__('os').system('echo unsafe')", '10']}]
+        self.assertEqual(plan(data)['inputs'], [])
+
+    def test_many_boundary_families_stop_at_the_twelve_input_transport_limit(self):
+        source = 'def categorize(amount, scale):\n' + ''.join(
+            f'    {"if" if boundary == 1 else "elif"} amount < {boundary}: return {boundary}\n'
+            for boundary in range(1, 7)) + '    return scale\n'
+        data = payload(source); data['boundaryFamily'] = True
+        result = plan(data)
+        self.assertEqual(len(result['inputs']), 12)
+        self.assertFalse(result['assertionOracle'])
+        self.assertTrue(all(set(item) == {'args', 'kwargs', 'mutantId'} for item in result['inputs']))
+
+    def test_unknown_calls_side_effects_and_blocked_observations_do_not_supply_inputs(self):
+        for expression in ["helper(amount)", "__import__('os').system('echo unsafe')", 'amount * amount']:
+            data = payload(SOURCE.replace('round(amount / factor ** 2, 2)', expression))
+            self.assertEqual(plan(data)['inputs'], [])
+        data = payload()
+        data['observations'][0]['call_assertable'] = False
+        self.assertEqual(plan(data)['inputs'], [])
+        data['observations'] = [{'args': ["__import__('os').system('echo unsafe')", '10']}]
+        self.assertEqual(plan(data)['inputs'], [])
+
+    def test_source_mapping_and_custom_setup_are_not_guessed(self):
+        data = payload()
+        for item in data['mutants']: item['line'] += 100
+        self.assertEqual(plan(data)['inputs'], [])
+        data = payload()
+        data['source'] = 'round = custom_round\n' + SOURCE
+        self.assertEqual(plan(data)['inputs'], [])
+        data = payload()
+        data['observations'][0]['constructor_args'] = ['1']
+        self.assertEqual(plan(data)['inputs'], [])
+
+    def test_existing_boundaries_and_unmatched_thresholds_are_not_relabelled_as_progress(self):
+        data = payload('def categorize(amount, scale):\n    if amount < 7.5: return 0\n    return scale\n')
+        data['observations'] = [{'args': ['7.5', '10']}]
+        self.assertEqual(plan(data)['inputs'], [])
+        data = payload(SOURCE.replace('elif 7.5 <= value', 'elif 8 <= value'))
+        self.assertEqual(len([d for d in plan(data)['diagnostics'] if d.get('line') == 6]), 0)
+
+
+METHOD = '''    def test_copy(self):
+        result = target(2)
+        self.assertEqual(result, 4)
+'''
+BASE = 'import unittest\nfrom sample import target\nclass TestVerifiedTrace_target(unittest.TestCase):\n' + METHOD
+
+
+class TraceDeduplicationTests(unittest.TestCase):
+    def test_passed_seed_copy_is_protected_but_later_duplicate_is_removed(self):
+        seed = 'import unittest\nfrom sample import target\nclass Model(unittest.TestCase):\n' + METHOD
+        code = BASE + 'class Model(unittest.TestCase):\n' + METHOD + METHOD.replace('test_copy', 'test_modelcopy_1')
+        result = deduplicate(code, 'target', seed)
+        self.assertEqual(result['removed'], 1)
+        self.assertIn('class Model(unittest.TestCase):\n' + METHOD, result['code'])
+        self.assertNotIn('test_modelcopy_1', result['code'])
+        self.assertIn(BASE, result['code'])
+        self.assertEqual(deduplicate(result['code'], 'target', seed)['removed'], 0)
+
+    def test_protection_uses_class_method_identity_and_json_input(self):
+        seed = 'class Model(unittest.TestCase):\n' + METHOD
+        code = BASE + seed + 'class Other(unittest.TestCase):\n' + METHOD
+        process = subprocess.run([sys.executable, '-B', str(Path(__file__).parent / 'deduplicate_trace_tests.py')],
+                                 input=json.dumps({'code': code, 'target': 'target', 'protectedCode': seed}),
+                                 text=True, encoding='utf-8', capture_output=True, timeout=5)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result['removed'], 1)
+        self.assertIn(seed, result['code'])
+        self.assertIn('class Other(unittest.TestCase):\n    pass', result['code'])
+        self.assertEqual(deduplicate(code, 'target', 'broken syntax!')['code'], code)
+
+    def test_exact_copies_removed_but_baseline_and_distinct_cases_preserved(self):
+        code = BASE + 'class Model(unittest.TestCase):\n' + METHOD + METHOD.replace('test_copy', 'test_other').replace('target(2)', 'target(3)')
+        result = deduplicate(code, 'target')
+        self.assertEqual(result['removed'], 1)
+        tree = ast.parse(result['code'])
+        self.assertEqual(sum(isinstance(n, ast.FunctionDef) for n in ast.walk(tree)), 2)
+        self.assertEqual(deduplicate(result['code'], 'target')['removed'], 0)
+
+    def test_fixture_helpers_decorators_and_other_assertions_are_preserved(self):
+        for content in ["    def setUp(self):\n        self.flag = True\n" + METHOD,
+                        '    @patch("sample.target")\n' + METHOD,
+                        METHOD.replace('4)', '5)'),
+                        METHOD.replace('result = target(2)', 'result = self.helper(2)')]:
+            code = BASE + 'class Model(unittest.TestCase):\n' + content
+            self.assertEqual(deduplicate(code, 'target')['code'], code)
+
+    def test_empty_model_class_keeps_valid_python_and_runner_baseline(self):
+        result = deduplicate(BASE + 'class Model(unittest.TestCase):\n' + METHOD, 'target')
+        self.assertEqual(result['removed'], 1)
+        ast.parse(result['code'])
+        self.assertIn('class Model(unittest.TestCase):\n    pass', result['code'])
+        self.assertIn('class TestVerifiedTrace_target', result['code'])
+
+
+if __name__ == '__main__':
+    unittest.main()

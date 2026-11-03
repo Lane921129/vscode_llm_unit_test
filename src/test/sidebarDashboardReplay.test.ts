@@ -1,0 +1,287 @@
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+import * as vm from 'node:vm';
+import { getWebviewContent } from '../ui/webviewContent';
+import { setLanguage, t } from '../i18n/core';
+
+/** A small DOM for replaying the shipped script, including detached details and
+ * delayed toggle delivery. No dashboard function is replaced by a test double. */
+class ReplayElement {
+    readonly children: ReplayElement[] = [];
+    readonly style: Record<string, string> = {};
+    readonly dataset: Record<string, string> = {};
+    readonly listeners = new Map<string, ((event: any) => void)[]>();
+    parent?: ReplayElement;
+    root = false;
+    className = '';
+    value = '';
+    checked = false;
+    disabled = false;
+    open = false;
+    textContent = '';
+    innerText = '';
+    title = '';
+    type = '';
+    tabIndex = -1;
+    onclick?: (event?: any) => void;
+    onchange?: (event?: any) => void;
+    onkeydown?: (event?: any) => void;
+    private markup = '';
+    constructor(readonly tag: string) {}
+    get innerHTML(): string { return this.markup; }
+    set innerHTML(value: string) {
+        this.markup = value;
+        for (const child of this.children) { child.parent = undefined; }
+        this.children.length = 0;
+        if (this.tag === 'select') { this.value = value.match(/<option\b[^>]*value="([^"]*)"/)?.[1] || ''; }
+    }
+    get isConnected(): boolean { return this.root || !!this.parent?.isConnected; }
+    appendChild(child: ReplayElement): void { child.parent = this; this.children.push(child); }
+    addEventListener(event: string, handler: (event: any) => void): void {
+        this.listeners.set(event, [...(this.listeners.get(event) || []), handler]);
+    }
+    dispatch(event: string): void { for (const handler of this.listeners.get(event) || []) { handler({ target: this }); } }
+    descendants(): ReplayElement[] { return this.children.flatMap(child => [child, ...child.descendants()]); }
+}
+class ReplayInput extends ReplayElement {}
+
+function replay(language: string, initialState: Record<string, unknown> = {}) {
+    setLanguage(language);
+    const html = getWebviewContent(t);
+    const elements = new Map<string, ReplayElement>();
+    for (const match of html.matchAll(/<(input|select|button|textarea|p|span|div)[^>]*\bid="([^"]+)"[^>]*>/g)) {
+        const element = match[1] === 'input' ? new ReplayInput('input') : new ReplayElement(match[1]);
+        element.value = match[0].match(/\bvalue="([^"]*)"/)?.[1] || '';
+        element.root = true;
+        elements.set(match[2], element);
+    }
+    const element = (id: string) => { const item = elements.get(id); assert.ok(item, id); return item; };
+    element('validation-mode').value = 'full';
+    element('env-type').value = 'local';
+    element('model-select').value = 'fixture-model';
+    element('project-path').value = '/fixture';
+    const messages: any[] = [];
+    const persistedState: Record<string, unknown> = { ...initialState };
+    let receive!: (event: { data: unknown }) => void;
+    const groups = () => element('dashboard-container').descendants().filter(item => item.className === 'file-group');
+    const context = vm.createContext({
+        document: {
+            getElementById: element,
+            createElement: (tag: string) => tag === 'input' ? new ReplayInput(tag) : new ReplayElement(tag),
+            querySelectorAll: (selector: string) => {
+                assert.equal(selector, '#dashboard-container details.file-group');
+                return groups();
+            }
+        },
+        HTMLInputElement: ReplayInput,
+        window: { addEventListener: (event: string, handler: typeof receive) => { if (event === 'message') { receive = handler; } } },
+        acquireVsCodeApi: () => ({ postMessage: (message: unknown) => messages.push(message),
+            getState: () => ({ ...persistedState }),
+            setState: (state: Record<string, unknown>) => { Object.assign(persistedState, JSON.parse(JSON.stringify(state))); } })
+    });
+    vm.runInContext(html.match(/<script\b[^>]*>([\s\S]*?)<\/script>/)![1], context);
+    const send = (data: unknown) => receive({ data });
+    const run = (source: string) => vm.runInContext(source, context);
+    const coverage = (file: string, func = 'first') => send({ command: 'updateCoverage', fileName: file + ':' + func,
+        file, func, score: '測試中', coverage: 'N/A', reason: '' });
+    return { html, element, groups, messages, send, run, coverage, persistedState };
+}
+
+test('grouped dashboard preserves live collapsed folders through running updates, mode switches and delayed toggles', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.coverage('database.py');
+            ui.coverage('config.py');
+            ui.run("setViewMode('grouped')");
+            const oldDatabase = ui.groups()[0];
+            oldDatabase.open = false; // Real toggle notification can be queued after the next Host message.
+            ui.coverage('database.py', 'second');
+            assert.equal(ui.groups()[0].open, false);
+            assert.equal(ui.groups()[1].open, true, 'other file stays independently expanded');
+            ui.groups()[0].open = true;
+            ui.groups()[0].dispatch('toggle');
+            oldDatabase.dispatch('toggle'); // Detached old nodes must not overwrite the current choice.
+            ui.send({ command: 'updateOutcome', fileName: 'database.py:first', outcome: { label: 'Failed', kind: 'failed' } });
+            assert.equal(ui.groups()[0].open, true);
+            ui.groups()[0].open = false;
+            ui.groups()[0].dispatch('toggle');
+            ui.send({ command: 'attachResultReport', fileName: 'database.py:first', reportPath: '/fixture/final_report.md' });
+            assert.equal(ui.groups()[0].open, false);
+            ui.run("setViewMode('flat'); setViewMode('grouped')");
+            assert.equal(ui.groups()[0].open, false);
+            ui.run('setAllGroupsOpen(false)');
+            ui.coverage('new.py');
+            assert.ok(ui.groups().every(group => !group.open), 'collapse all also applies to new file groups');
+            ui.run('setAllGroupsOpen(true)');
+            ui.coverage('config.py', 'third');
+            assert.ok(ui.groups().every(group => group.open));
+            ui.element('btn-run').onclick!();
+            ui.send({ command: 'analysisFinished' });
+            ui.run('setAllGroupsOpen(false)');
+            ui.element('project-path').value = '/another-fixture';
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.groups().length, 0);
+            ui.coverage('database.py');
+            assert.equal(ui.groups()[0].open, true, 'a different project starts with independent group state');
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('dashboard redraw preserves checkbox selection and report actions with separated title and metric rows', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.coverage('很長的受測檔名.py', 'Service.a_very_long_qualified_method');
+            const card = ui.element('dashboard-container').children[0];
+            const header = card.children[0];
+            assert.equal(header.children[0].className, 'result-title');
+            assert.equal(header.children[1].className, 'result-metrics');
+            const title = header.children[0];
+            assert.equal(title.children[1].className, 'result-label');
+            assert.match(title.children[1].innerHTML, /很長的受測檔名\.py/);
+            assert.match(title.children[1].innerHTML, /Service\.a_very_long_qualified_method/);
+            const checkbox = title.children[0];
+            checkbox.checked = true;
+            checkbox.onchange!();
+            ui.send({ command: 'attachResultReport', fileName: '很長的受測檔名.py:Service.a_very_long_qualified_method', reportPath: '/fixture/report.md' });
+            ui.run("setViewMode('grouped')");
+            const updatedCard = ui.groups()[0].children[1].children[0];
+            assert.equal(updatedCard.children[0].children[0].children[0].checked, true);
+            updatedCard.onclick!({ target: updatedCard });
+            assert.equal(ui.messages.at(-1).command, 'openTestResult');
+            assert.equal(ui.messages.at(-1).reportPath, '/fixture/report.md');
+            const style = ui.html.match(/<style>([\s\S]*?)<\/style>/)![1];
+            assert.match(style, /\.result-header\s*\{[^}]*flex-direction:\s*column/);
+            assert.match(style, /\.result-label\s*\{[^}]*word-break:\s*normal/);
+            assert.doesNotMatch(style, /word-break:\s*break-all/);
+            assert.match(style, /\.dashboard-view-toolbar\s*\{[^}]*flex-wrap:\s*wrap/);
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('abort reaches the Host and keeps the sidebar locked until cleanup actually finishes', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
+            assert.equal(ui.element('prompt-strategy').disabled, true);
+            const runningCount = ui.messages.length;
+            ui.element('prompt-strategy').onchange!({ target: { value: 'tier2' } });
+            assert.equal(ui.messages.length, runningCount, 'running analysis cannot rebuild its Webview through a Tier change');
+            ui.element('btn-abort').onclick!();
+            assert.equal(ui.messages.at(-1).command, 'abortTest');
+            assert.equal(ui.element('btn-run').disabled, true, 'clicking stop alone never claims completion');
+            const stopping = language === 'en' ? 'Stopping and cleaning up…' : '正在中止並清理…';
+            ui.send({ command: 'analysisStopping', text: stopping });
+            assert.equal(ui.element('btn-abort').textContent, stopping);
+            assert.equal(ui.element('btn-abort').style.display, 'block');
+            assert.equal(ui.element('btn-abort').disabled, true);
+            ui.send({ command: 'environmentPreparationFinished' });
+            const count = ui.messages.length;
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.length, count, 'environment cleanup cannot unlock a stopping analysis');
+            assert.equal(ui.element('model-select').disabled, true);
+            assert.equal(ui.element('prompt-strategy').disabled, true);
+            ui.element('prompt-strategy').onchange!({ target: { value: 'tier3' } });
+            assert.equal(ui.messages.length, count, 'stopping analysis cannot rebuild its Webview through a Tier change');
+            ui.send({ command: 'analysisFinished' });
+            assert.equal(ui.element('btn-run').disabled, false);
+            assert.equal(ui.element('btn-abort').style.display, 'none');
+            assert.equal(ui.element('btn-abort').disabled, false);
+            assert.equal(ui.element('btn-abort').textContent, t('ui.abortBtn'));
+            assert.equal(ui.element('prompt-strategy').disabled, false);
+            ui.element('prompt-strategy').onchange!({ target: { value: 'tier2' } });
+            assert.equal(ui.messages.at(-1).command, 'setPromptStrategy');
+            assert.equal(ui.messages.at(-1).strategy, 'tier2');
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('timing controls distinguish long API waits from each function total and freeze with the run', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.send({ command: 'executionTimingSettings', timeoutSeconds: 1800, targetTimeoutSeconds: 3600 });
+            assert.equal(Number(ui.element('timeout-sec').value), 1800);
+            assert.equal(Number(ui.element('target-timeout-sec').value), 3600);
+            assert.match(ui.element('execution-timing-status').textContent, /1800/);
+            assert.match(ui.element('execution-timing-status').textContent, /3600/);
+            if (language === 'en') {
+                assert.match(ui.html, /Total time limit per function/);
+                assert.doesNotMatch(ui.element('execution-timing-status').textContent, /[\u3400-\u9fff]/);
+            }
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.at(-1).timeoutSeconds, 1800);
+            assert.equal(ui.messages.at(-1).targetTimeoutSeconds, 3600);
+            assert.equal(ui.element('timeout-sec').disabled, true);
+            assert.equal(ui.element('target-timeout-sec').disabled, true);
+            ui.send({ command: 'analysisFinished' });
+            assert.equal(ui.element('target-timeout-sec').disabled, false);
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('invalid timing blocks start and delayed initial settings cannot erase edited timing', () => {
+    const ui = replay('zh-tw');
+    ui.element('timeout-sec').value = '60000000';
+    ui.element('timeout-sec').dispatch('input');
+    ui.send({ command: 'executionTimingSettings', timeoutSeconds: 60, targetTimeoutSeconds: 600 });
+    assert.equal(ui.element('timeout-sec').value, '60000000');
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'appendLog');
+    assert.match(ui.messages.at(-1).text, /86400/);
+    assert.equal(ui.element('btn-run').disabled, false);
+    ui.element('timeout-sec').value = '1800';
+    ui.element('target-timeout-sec').value = '0';
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'appendLog');
+    ui.element('target-timeout-sec').value = '7200';
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
+    assert.equal(ui.messages.at(-1).targetTimeoutSeconds, 7200);
+    ui.send({ command: 'analysisFinished' });
+    ui.element('model-select').value = '';
+    ui.send({ command: 'setModels', models: ['first-local-model', 'second-local-model'] });
+    assert.equal(ui.element('model-select').value, 'first-local-model');
+    ui.element('btn-run').onclick!();
+    assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
+    assert.equal(ui.messages.at(-1).modelName, 'first-local-model');
+});
+
+test('Custom selection survives Webview rebuild and repeated menus preserve live fields', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const keys = {
+                first: { url: 'https://first.example.invalid/v1', model: 'first-model', key: 'fixture-first-secret' },
+                second: { url: 'https://second.example.invalid/v1', model: 'second-model', key: 'fixture-second-secret' }
+            };
+            const ui = replay(language, { envType: 'custom', customKeyName: 'second' });
+            assert.equal(ui.element('env-type').value, 'custom');
+            ui.send({ command: 'setCustomKeys', keys });
+            assert.equal(ui.element('custom-api-select').value, 'second');
+            assert.equal(ui.element('custom-url').value, keys.second.url);
+            assert.equal(ui.element('custom-model').value, 'second-model');
+            assert.equal(ui.element('custom-key').value, keys.second.key);
+            ui.element('custom-api-select').value = 'first';
+            ui.element('custom-api-select').onchange!({ target: ui.element('custom-api-select') });
+            assert.equal(ui.persistedState.customKeyName, 'first');
+            assert.equal(ui.element('custom-model').value, 'first-model');
+            ui.element('custom-model').value = 'unsaved-current-model';
+            ui.send({ command: 'setCustomKeys', keys });
+            assert.equal(ui.element('custom-api-select').value, 'first');
+            assert.equal(ui.element('custom-model').value, 'unsaved-current-model');
+            ui.element('btn-run').onclick!();
+            assert.equal(ui.messages.at(-1).modelName, 'unsaved-current-model');
+            assert.equal(ui.messages.at(-1).customUrl, keys.first.url);
+            const restored = replay(language, ui.persistedState);
+            restored.send({ command: 'setCustomKeys', keys });
+            assert.equal(restored.element('custom-api-select').value, 'first');
+            assert.equal(restored.element('custom-model').value, 'first-model');
+            assert.doesNotMatch(JSON.stringify(ui.persistedState), /fixture-.*-secret|example\.invalid/);
+        }
+    } finally { setLanguage('zh-tw'); }
+});

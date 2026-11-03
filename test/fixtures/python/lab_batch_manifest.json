@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "five-category-lab-batch",
+  "description": "實驗室第一輪小批次；每一項都必須用同一模型、同一環境與獨立報告評分。",
+  "categories": [
+    {
+      "id": "pure-function",
+      "fixture_id": "tier1-boundary",
+      "purpose": "純函式的邊界分支與 Trace 證據"
+    },
+    {
+      "id": "class-method",
+      "fixture_id": "tier1-class-method",
+      "purpose": "類別 instance method、constructor 與 class target 合約"
+    },
+    {
+      "id": "database-mock",
+      "fixture_id": "tier3-database-context",
+      "purpose": "資料庫 context manager 與隔離資源"
+    },
+    {
+      "id": "async-boundary",
+      "fixture_id": "tier4-async-context",
+      "purpose": "async coroutine、async context manager 與外部相依"
+    },
+    {
+      "id": "ui-dependent-boundary",
+      "fixture_id": "tier3-http-client",
+      "purpose": "外部邊界 mock；實驗室可替換為原始 UI 相依目標"
+    }
+  ]
+}

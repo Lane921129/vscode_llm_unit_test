@@ -1,0 +1,345 @@
+"""Run generated unittest code under a process-local external-operation guard.
+
+The guard supplements AST validation; it is not an OS sandbox for hostile native
+extensions. Coverage starts/saves outside the guarded application execution.
+"""
+import argparse
+from contextlib import contextmanager, nullcontext
+import dis
+import json
+import os
+import sys
+import unittest
+from uuid import uuid4
+from target_invocation import TargetInvocationTracker, canonical_path
+from import_fixtures import evidence as import_fixture_evidence
+from isolated_resources import set_generated_test_file
+from runtime_policy import ISOLATION_EXIT_CODE, ISOLATION_MARKER, POLICY_VERSION, RuntimePolicyError, BackgroundExecutionError, guarded_runtime
+from mutation_activation import FunctionMutationActivation
+
+
+_target_tracking = False
+
+
+def register_generated_test_files(module, explicit_path=None):
+    """Resolve unittest module names without importing a parent package unguarded."""
+    set_generated_test_file(explicit_path)
+    parts = module.split('.')
+    if not parts or not all(part.isidentifier() for part in parts):
+        return
+    for base in sys.path:
+        for length in range(len(parts), 0, -1):
+            candidate = os.path.join(base or os.getcwd(), *parts[:length])
+            if os.path.isfile(candidate + '.py'):
+                set_generated_test_file(candidate + '.py')
+                break
+            package = os.path.join(candidate, '__init__.py')
+            if os.path.isfile(package):
+                set_generated_test_file(package)
+                break
+
+
+def _safe_test_id(test):
+    if not isinstance(test, unittest.TestCase) or isinstance(test, unittest.loader._FailedTest):
+        return None
+    identifier = unittest.TestCase.id(test)
+    return identifier if len(identifier) <= 1024 and all(part.isidentifier() for part in identifier.split('.')) else None
+
+
+def suite_load_diagnostics(suite):
+    """Identify loader placeholders without saving exception text or user values."""
+    pending = [suite]
+    failed, visited, only_failed = 0, 0, True
+    while pending and visited < 256:
+        item = pending.pop()
+        visited += 1
+        if type(item) in (unittest.TestSuite, unittest.BaseTestSuite):
+            pending.extend(item._tests)
+        elif type(item) is unittest.loader._FailedTest:
+            failed += 1
+        else:
+            only_failed = False
+    truncated = bool(pending) or failed > 32
+    diagnostic = ({'version': 'generated-test-load-diagnostics-v1',
+                   'reasonCode': 'generated-test-load-failed',
+                   'failedTests': min(failed, 32), 'truncated': truncated}
+                  if failed else None)
+    return diagnostic, bool(failed and only_failed and not pending)
+
+
+def candidate_load_failure(error, module_name, test_file):
+    """Recognize this candidate's setup call, never an imported source failure."""
+    trace = error.__traceback__
+    candidate = None
+    for _ in range(256):
+        if trace is None:
+            break
+        frame = trace.tb_frame
+        filename = frame.f_code.co_filename
+        if (frame.f_globals.get('__name__') == module_name
+                and os.path.isabs(filename)
+                and not filename.startswith(('\\\\', '//', '\\??\\'))
+                and canonical_path(filename) == test_file):
+            candidate = trace
+        trace = trace.tb_next
+    if trace is not None or candidate is None:
+        return False
+    # An API invoked by candidate setup may raise inside a library or guard
+    # wrapper. A plain import whose dependency failed belongs to that source.
+    # Skip inline bytecode caches by retaining the last logical instruction.
+    operation = None
+    for instruction in dis.get_instructions(candidate.tb_frame.f_code):
+        if instruction.offset > candidate.tb_lasti:
+            break
+        operation = instruction.opname
+    return operation is not None and operation not in ('IMPORT_NAME', 'IMPORT_FROM', 'IMPORT_STAR')
+
+
+class StructuredTestResult(unittest.TextTestResult):
+    """Record identifiers only; exception text and subTest values stay private."""
+    def __init__(self, *args, tracker=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.test_failures = []
+        self.tracker = tracker
+
+    def startTest(self, test):
+        super().startTest(test)
+        if self.tracker:
+            self.tracker.start_test(test)
+
+    def stopTest(self, test):
+        if self.tracker:
+            self.tracker.stop_test()
+        super().stopTest(test)
+
+    def _record(self, test, kind, err=None):
+        identifier = _safe_test_id(test)
+        fixture = False
+        traceback = err[2] if err else None
+        frames = []
+        while traceback is not None:
+            frames.append(traceback.tb_frame)
+            traceback = traceback.tb_next
+        # subTest catches the error inside setUp/tearDown, so those frames may
+        # still be on the active stack instead of the exception traceback.
+        frame = sys._getframe()
+        while frame is not None:
+            frames.append(frame)
+            frame = frame.f_back
+        for frame in frames:
+            if (frame.f_globals.get('__name__') in ('unittest.case', 'unittest.async_case')
+                    and frame.f_code.co_name in ('_callSetUp', '_callTearDown', '_callCleanup')):
+                fixture = True
+        # Avoid retaining test frames (and their argument values) in cycles.
+        frames.clear()
+        del frame
+        self.test_failures.append({'testId': identifier, 'kind': kind,
+                                   'phase': 'test' if identifier and not fixture else 'fixture-or-load'})
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._record(test, 'failure', err)
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._record(test, 'error', err)
+
+    def addUnexpectedSuccess(self, test):
+        super().addUnexpectedSuccess(test)
+        self._record(test, 'unexpected-success')
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            self._record(test, 'failure' if issubclass(err[0], test.failureException) else 'error', err)
+
+
+class TestIsolationError(RuntimePolicyError):
+    pass
+
+
+@contextmanager
+def guarded_test_runtime(test_directory=None):
+    from python_import_paths import configured_import_paths
+    paths = configured_import_paths()
+    if test_directory:
+        # The bound generated file wins over an application module with the
+        # same name (for example data/loop1_test.py). This must happen inside
+        # the guard, which installs the declared roots in their given order.
+        paths = [test_directory, *paths]
+    with guarded_runtime(error_type=TestIsolationError, protect_profile=_target_tracking, import_paths=paths) as violations:
+        yield violations
+
+
+def main(argv=None):
+    global _target_tracking
+    parser = argparse.ArgumentParser()
+    parser.add_argument('test_module')
+    parser.add_argument('--coverage-source')
+    parser.add_argument('--violation-report')
+    parser.add_argument('--result-json')
+    parser.add_argument('--target-file')
+    parser.add_argument('--target-name')
+    parser.add_argument('--target-evidence')
+    parser.add_argument('--target-run-id')
+    parser.add_argument('--target-test-file')
+    parser.add_argument('--test-progress')
+    parser.add_argument('--function-mutation-manifest')
+    parser.add_argument('-v', '--verbose', action='store_true')
+    args = parser.parse_args(argv)
+    run_id = uuid4().hex
+    target_options = [args.target_file, args.target_name, args.target_evidence, args.target_run_id, args.target_test_file]
+    if any(target_options) and not all(target_options):
+        parser.error('Target invocation evidence requires all five --target-* options.')
+    if args.test_progress and not all(target_options):
+        parser.error('--test-progress requires target invocation identity.')
+    tracker = TargetInvocationTracker(args.target_file, args.target_name, args.target_test_file,
+                                      args.target_run_id) if all(target_options) else None
+    if tracker:
+        tracker.save(args.target_evidence, 'running')
+    # Open outside the runtime guard. Only the runner profile writes identities
+    # and body phases; candidate stdout is never used to infer a repair scope.
+    progress_stream = open(args.test_progress, 'w', encoding='utf-8') if args.test_progress else None
+    if tracker:
+        tracker.progress_stream = progress_stream
+
+    def record(event, **detail):
+        if args.violation_report:
+            with open(args.violation_report, 'a', encoding='utf-8') as report:
+                report.write(json.dumps({'runId': run_id, 'event': event, 'policyVersion': POLICY_VERSION,
+                                         'importFixtures': import_fixture_evidence(),
+                                         'targetRunId': args.target_run_id,
+                                         'sourceHash': tracker.source_hash if tracker else None,
+                                         'testHash': tracker.test_hash if tracker else None, **detail}) + '\n')
+
+    # An engine that fails to invoke/finish its guarded runner cannot certify
+    # isolation merely because no violation file appeared.
+    record('started')
+    sys.dont_write_bytecode = True
+    # Script execution otherwise places the extension's tool folder first.
+    sys.path.insert(0, os.getcwd())
+    register_generated_test_files(args.test_module, args.target_test_file)
+    coverage = None
+    if args.coverage_source:
+        from coverage import Coverage
+        coverage = Coverage(branch=True, source=[args.coverage_source], config_file=False)
+        coverage.start()
+    exit_code = 1
+    violation = None
+    test_result = None
+    structured_result = None
+    load_diagnostics = None
+    observation = tracker.observe() if tracker else nullcontext()
+    activation = None
+    try:
+        if args.function_mutation_manifest:
+            activation = FunctionMutationActivation(args.function_mutation_manifest)
+        with activation if activation else nullcontext(), observation:
+            _target_tracking = bool(tracker)
+            with guarded_test_runtime(os.path.dirname(tracker.test_file) if tracker else None) as violations:
+                # A fresh loader prevents errors from an earlier main() call
+                # from becoming evidence about this candidate.
+                try:
+                    suite = unittest.TestLoader().loadTestsFromName(args.test_module)
+                except RuntimePolicyError:
+                    raise
+                except Exception as error:
+                    if tracker and candidate_load_failure(error, args.test_module, tracker.test_file):
+                        # unittest wraps ImportError in _FailedTest, but other
+                        # candidate import/decorator errors can escape its loader.
+                        # Preserve the real error in the same failing-suite path.
+                        suite = unittest.TestSuite([unittest.loader._FailedTest(args.test_module, error)])
+                    else:
+                        load_diagnostics = {'version': 'generated-test-load-diagnostics-v1',
+                                            'reasonCode': 'generated-test-loader-error',
+                                            'failedTests': 0, 'truncated': False}
+                        raise
+                load_diagnostics, only_load_failures = suite_load_diagnostics(suite)
+                if tracker:
+                    if not tracker.matches_test_module(args.test_module):
+                        # unittest returns _FailedTest when an import fails and
+                        # removes the partially imported module from sys.modules.
+                        # Run that failure to retain its real import/syntax cause.
+                        # A successfully imported wrong module must still stop.
+                        if sys.modules.get(args.test_module) is not None or not only_load_failures:
+                            load_diagnostics = {'version': 'generated-test-load-diagnostics-v1',
+                                                'reasonCode': 'generated-test-identity-mismatch',
+                                                'failedTests': 0, 'truncated': False}
+                            raise RuntimeError('Target invocation test identity mismatch')
+                    elif not load_diagnostics:
+                        tracker.testing = True
+                result = unittest.TextTestRunner(verbosity=2 if args.verbose else 1,
+                    resultclass=lambda *a, **kw: StructuredTestResult(*a, tracker=tracker, **kw)).run(suite)
+                structured_result = result
+                test_result = {'testsRun': result.testsRun, 'failures': len(result.failures),
+                               'errors': len(result.errors), 'skipped': len(result.skipped),
+                               'expectedFailures': len(result.expectedFailures),
+                               'unexpectedSuccesses': len(result.unexpectedSuccesses)}
+                exit_code = 0 if result.wasSuccessful() and result.testsRun > 0 else 1
+    except TestIsolationError:
+        violation = violations[0] if violations else 'external operation'
+    except BackgroundExecutionError as error:
+        structured_result = None
+        print(str(error), file=sys.stderr)
+        exit_code = 1
+    except SystemExit:
+        structured_result = None
+        # A test calling sys.exit(0) is not a successful unittest result.
+        exit_code = 1
+    except Exception:
+        if not args.result_json:
+            raise
+        structured_result = None
+        # Load/setup/tool exceptions without a completed unittest result are
+        # infrastructure errors, never evidence of a killing test method.
+        exit_code = 1
+    finally:
+        _target_tracking = False
+        if progress_stream:
+            progress_stream.close()
+        if coverage:
+            coverage.stop()
+            coverage.save()
+        if tracker:
+            tracker.save(args.target_evidence, 'passed' if exit_code == 0 and not violation else 'failed',
+                         coverage.get_data().data_filename() if coverage else None, test_result)
+    activation_evidence = activation.evidence() if activation else None
+    if activation_evidence and activation_evidence['status'] != 'activated':
+        exit_code = 1
+        structured_result = None
+    if violation:
+        if args.result_json:
+            with open(args.result_json, 'w', encoding='utf-8') as report:
+                json.dump({'schemaVersion': 'generated-test-result-v1', 'status': 'isolation-blocked',
+                           'importFixtures': import_fixture_evidence(),
+                           'testsRun': test_result['testsRun'] if test_result else 0, 'testFailures': [],
+                           **({'functionActivation': activation_evidence} if activation else {}),
+                           **({'identity': result_identity(tracker)} if tracker else {})}, report)
+        print(f'{ISOLATION_MARKER}: {violation}; mock the dependency at its target use point.', file=sys.stderr)
+        record('completed', status='isolation-blocked', operation=violation)
+        return ISOLATION_EXIT_CODE
+    if args.result_json:
+        failures = structured_result.test_failures if structured_result else []
+        status = ('passed' if exit_code == 0 else 'failed' if failures and
+                  all(item['phase'] == 'test' for item in failures) else 'runner-error')
+        with open(args.result_json, 'w', encoding='utf-8') as report:
+            json.dump({'schemaVersion': 'generated-test-result-v1', 'status': status,
+                       'importFixtures': import_fixture_evidence(),
+                       'testsRun': test_result['testsRun'] if test_result else 0,
+                       'testFailures': failures,
+                       **({'functionActivation': activation_evidence} if activation else {}),
+                       **({'identity': result_identity(tracker)} if tracker else {}),
+                       **({'loadDiagnostics': load_diagnostics} if load_diagnostics else {})}, report)
+    record('completed', status='passed' if exit_code == 0 else 'failed',
+           **({'loadDiagnostics': load_diagnostics} if load_diagnostics else {}))
+    return exit_code
+
+
+def result_identity(tracker):
+    return {'version': 'generated-test-result-identity-v1', 'testRunId': tracker.test_run_id,
+            'canonicalFile': tracker.source_file, 'canonicalTestFile': tracker.test_file,
+            'target': tracker.target, 'sourceHash': tracker.source_hash, 'testHash': tracker.test_hash}
+
+
+if __name__ == '__main__':
+    sys.exit(main())

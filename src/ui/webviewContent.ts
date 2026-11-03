@@ -1,0 +1,1249 @@
+import { localize } from '../i18n/core';
+import { resolveTestFocus } from '../pipeline/testFocus';
+import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettings';
+import { planAnalysisTargetBudget } from '../pipeline/targetBudget';
+
+export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false) {
+    const selectedFocus = resolveTestFocus(currentStrategy);
+    const selectedEngine = ['builtin', 'mutatest', 'mutmut', 'auto'].includes(mutationEngine) ? mutationEngine : 'builtin';
+    const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
+    return `
+<!DOCTYPE html>
+<html lang="${t('ui.documentLanguage')}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${t('ui.title')}</title>
+    <style>
+        body { font-family: var(--vscode-font-family); padding: 10px; color: var(--vscode-foreground); }
+        h3 { border-bottom: 1px solid var(--vscode-editorGroup-border); padding-bottom: 5px; }
+        
+        details {
+            margin-bottom: 10px;
+            border: 1px solid var(--vscode-editorGroup-border);
+            border-radius: 4px;
+            background-color: var(--vscode-editor-background);
+        }
+        summary {
+            padding: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            background-color: var(--vscode-sideBarSectionHeader-background);
+            user-select: none;
+            outline: none;
+        }
+        summary:hover {
+            background-color: var(--vscode-list-hoverBackground);
+        }
+        .content {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        label { margin-top: 5px; font-weight: 500; font-size: 13px; }
+        input, select, textarea {
+            width: 100%;
+            padding: 5px;
+            margin-top: 3px;
+            background: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-input-border);
+            box-sizing: border-box;
+            border-radius: 2px;
+        }
+        button {
+            margin-top: 10px;
+            padding: 6px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            cursor: pointer;
+            border-radius: 2px;
+        }
+        button:hover { background: var(--vscode-button-hoverBackground); }
+        
+        .flex-row {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            width: 100%;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 5px;
+            font-size: 13px;
+        }
+        th, td {
+            border: 1px solid var(--vscode-editorGroup-border);
+            padding: 5px;
+            text-align: left;
+        }
+        th {
+            background-color: var(--vscode-sideBarSectionHeader-background);
+        }
+        .score-badge {
+            background: #238636;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .result-card {
+            background: var(--vscode-editor-background);
+            border: 1px solid var(--vscode-editorGroup-border);
+            border-radius: 4px;
+            padding: 7px 9px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            box-sizing: border-box;
+            transition: background 0.15s ease;
+        }
+        .result-card:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .result-header {
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+        .result-title {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            min-width: 0;
+            width: 100%;
+        }
+        .result-title .row-sel {
+            flex: 0 0 auto;
+        }
+        .result-label {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: normal;
+            line-height: 1.45;
+        }
+        .result-label > span {
+            display: block;
+        }
+        .result-metrics {
+            min-width: 0;
+            margin-left: 22px;
+        }
+        .result-badges {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+            max-width: 100%;
+        }
+        .result-status {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin-left: 22px;
+            line-height: 1.35;
+            word-break: break-word;
+        }
+        details.file-group summary {
+            background: var(--vscode-sideBarSectionHeader-background);
+            border-radius: 4px;
+            padding: 7px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+        }
+        details.file-group summary:hover {
+            background: var(--vscode-list-hoverBackground);
+        }
+        .file-group-title {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            word-break: normal;
+        }
+        .file-group-title small {
+            display: inline-block;
+        }
+        .dashboard-view-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .dashboard-view-toolbar button {
+            white-space: nowrap;
+        }
+        details.file-group .group-content {
+            padding: 6px 4px 4px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        #log-area {
+            height: 300px;
+            resize: vertical;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--vscode-editorGroup-border); padding-bottom: 5px; margin-bottom: 10px;">
+        <h3 style="border: none; margin: 0; padding: 0;">${t('ui.title')}</h3>
+        <select id="lang-select" style="width: auto; padding: 2px 5px; margin: 0; font-size: 11px;">
+            <option value="auto" ${currentLang === 'auto' ? 'selected' : ''}>Auto (VS Code)</option>
+            <option value="zh-tw" ${currentLang === 'zh-tw' ? 'selected' : ''}>繁體中文</option>
+            <option value="en" ${currentLang === 'en' ? 'selected' : ''}>English</option>
+        </select>
+    </div>
+    
+    <details open>
+        <summary>${t('ui.modelSettings')}</summary>
+        <div class="content">
+            <label>${t('ui.env')}</label>
+            <select id="env-type">
+                <option value="cloud">${t('ui.envCloud')}</option>
+                <option value="local">${t('ui.envLocal')}</option>
+                <option value="custom">${t('ui.envCustom')}</option>
+            </select>
+            
+            <div id="cloud-ui">
+                <label>${t('ui.savedCloud')}</label>
+                <div class="flex-row">
+                    <select id="api-key-select"><option value="">${t('ui.selectSetting')}</option></select>
+                </div>
+
+                <label style="margin-top:5px;">${t('ui.keyName')}</label>
+                <input type="text" id="new-key-name" placeholder="${t('ui.keyNameHint')}">
+                <label>API Model</label>
+                <input type="text" id="new-key-model" placeholder="${t('ui.modelHint')}">
+                <label>${t('ui.apiKey')}</label>
+                <div class="flex-row">
+                    <input type="password" id="new-key-value" placeholder="Google AI Studio API Key">
+                    <button id="btn-save-key" style="margin-top:0; width:60px; flex-shrink:0;">Save</button>
+                    <button id="btn-del-key" style="margin-top:0; width:40px; flex-shrink:0; background:#a82a2a;">Del</button>
+                    <button id="btn-test-cloud" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
+                </div>
+            </div>
+
+            <div id="local-ui" style="display:none;">
+                <label>${t('ui.ollamaUrl')}</label>
+                <div class="flex-row">
+                    <input type="text" id="ollama-url" value="${ollamaBaseUrl}" placeholder="http://127.0.0.1:11434">
+                    <button id="btn-save-ollama-url" style="width:50px; flex-shrink:0;">${t('ui.saveConfig')}</button>
+                </div>
+                
+                <label style="margin-top:5px;">${t('ui.modelName')}</label>
+                <div class="flex-row">
+                    <select id="model-select" style="flex:1;"><option value="">-- Loading --</option></select>
+                    <button id="btn-test-local" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
+                </div>
+                <button id="btn-refresh-models" style="width:100%;">🔄 Refresh Models</button>
+                <label for="runtime-context-tokens">${t('ui.runtimeContextLabel')}</label>
+                <div class="flex-row">
+                    <input id="runtime-context-tokens" type="number" value="0" min="0" step="1" disabled>
+                    <button id="btn-save-runtime-context" style="margin-top:0; flex-shrink:0;" disabled>${t('ui.runtimeContextSave')}</button>
+                </div>
+                <p>${t('ui.runtimeContextHint')}</p>
+                <p id="runtime-context-status" role="status" aria-live="polite" style="white-space:pre-line;"></p>
+            </div>
+
+            <div id="custom-ui" style="display:none;">
+                <label>${t('ui.customApi')}</label>
+                <select id="custom-api-select"><option value="">-- Select --</option></select>
+                
+                <label style="margin-top:5px;">${t('ui.label')}</label>
+                <input type="text" id="custom-name" placeholder="Label">
+                
+                <label>API Base URL</label>
+                <input type="text" id="custom-url" placeholder="https://api.openai.com/v1/chat/completions">
+                
+                <label>${t('ui.modelName')}</label>
+                <input type="text" id="custom-model" placeholder="gpt-4o">
+                
+                <label>${t('ui.apiKey')}</label>
+                <input type="password" id="custom-key" placeholder="Bearer Token">
+                
+                <div class="flex-row">
+                    <button id="btn-save-custom" style="flex:1;">💾 Save</button>
+                    <button id="btn-test-custom" style="flex:0.8; background:#007acc;">🔗 ${t('ui.testConnection')}</button>
+                    <button id="btn-del-custom" style="flex:0.8; background:#a82a2a;">🗑️ Del</button>
+                </div>
+            </div>
+        </div>
+    </details>
+
+    <details open>
+        <summary>${t('ui.testConfig')}</summary>
+        <div class="content">
+            <label for="validation-mode">${t('ui.validationScope')}</label>
+            <select id="validation-mode">
+                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>${t('ui.fullValidation')}</option>
+                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>${t('ui.executionValidation')}</option>
+            </select>
+            <p id="validation-scope" role="status" aria-live="polite"></p>
+            <label for="prompt-strategy">🧠 ${t('ui.testFocus')}</label>
+            <select id="prompt-strategy" style="margin-bottom: 8px;">
+                <option value="full" ${selectedFocus === 'full' ? 'selected' : ''}>${t('ui.focusFull')}</option>
+                <option value="boundary" ${selectedFocus === 'boundary' ? 'selected' : ''}>${t('ui.focusBoundary')}</option>
+                <option value="coverage" ${selectedFocus === 'coverage' ? 'selected' : ''}>${t('ui.focusCoverage')}</option>
+                <option value="mutation" ${selectedFocus === 'mutation' ? 'selected' : ''}>${t('ui.focusMutation')}</option>
+            </select>
+            <p>${t('ui.focusGuide')}</p>
+            <label style="display:flex; align-items:center; gap:6px;">
+                <input type="checkbox" id="require-role-qualification" ${requireRoleQualification ? 'checked' : ''} style="width:auto; margin:0;" />${t('ui.requireRoleQualification')}
+            </label>
+            <p>${t('ui.roleQualificationHint')}</p>
+
+            <label>📂 ${t('ui.projectPath')}</label>
+            <div class="flex-row">
+                <input type="text" id="project-path" readonly placeholder="${t('ui.projectPath')}">
+                <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+            <button id="btn-batch-scope">${t('ui.chooseBatchSources')}</button>
+            <p id="batch-scope-status" role="status">${t('ui.batchScopeGuide')}</p>
+            <div class="flex-row">
+                <button id="btn-prepare-env" style="flex:1;">${t('ui.prepareProjectEnvironment')}</button>
+                <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
+            </div>
+            <button id="btn-import-setup">${t('ui.importSetup')}</button>
+            <button id="btn-resource-setup">${t('ui.resourceSetup')}</button>
+            <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
+            <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
+            
+            <label>📂 ${t('ui.outputDir')}</label>
+            <div class="flex-row">
+                <input type="text" id="output-path" readonly placeholder="Default">
+                <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+            
+            <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
+                <label style="margin-top:0;">${t('ui.maxLoops')}${t('ui.fullModeSuffix')}</label>
+                <input type="number" id="max-loop" value="5" min="1">
+                <label>${localize('單一目標最多失敗次數（第一次失敗算 1 次）')}</label>
+                <input type="number" id="failure-limit" value="5" min="1" step="1">
+                <label>${localize('品質無改善上限（0 關閉）')}</label>
+                <input type="number" id="quality-no-improvement-limit" value="3" min="0" step="1">
+                <label>${localize('批次失敗目標上限（0 不中止整批）')}</label>
+                <input type="number" id="batch-failure-limit" value="0" min="0" step="1">
+                <p id="target-request-budget" role="status"></p>
+                
+                <label>${t('ui.mutpyTimeout')}${t('ui.fullModeSuffix')}</label>
+                <input type="number" id="mutpy-timeout" value="60" min="1" style="width:100%;">
+
+                <label for="mutation-engine">${t('ui.mutationEngine')}${t('ui.fullModeSuffix')}</label>
+                <select id="mutation-engine">
+                    <option value="auto" ${selectedEngine === 'auto' ? 'selected' : ''}>${t('ui.mutationAuto')}</option>
+                    <option value="builtin" ${selectedEngine === 'builtin' ? 'selected' : ''}>${t('ui.mutationBuiltin')}</option>
+                    <option value="mutatest" ${selectedEngine === 'mutatest' ? 'selected' : ''}>${t('ui.mutationMutatest')}</option>
+                    <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''}>${t('ui.mutationMutmut')}</option>
+                </select>
+                <p>${t('ui.mutationEngineHint')}</p>
+                <label for="mutation-workers">${t('ui.mutationWorkers')}${t('ui.fullModeSuffix')}</label>
+                <input type="number" id="mutation-workers" value="${selectedWorkers}" min="1" max="4" step="1">
+
+                <label for="timeout-sec">${localize('單次 API 等待上限（秒）')}</label>
+                <input type="number" id="timeout-sec" value="60" min="1" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="1" style="width:100%;">
+                <label for="target-timeout-sec">${localize('每個函式總時間上限（秒）')}</label>
+                <input type="number" id="target-timeout-sec" value="600" min="0.001" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="0.001" style="width:100%;">
+                <p id="execution-timing-status" role="status" aria-live="polite"></p>
+                <p>${localize('總時間包含預檢、模型等待、重試、測試與突變；每個函式開始後固定期限，重試不會重新計時。開始測試時保存設定；最多 86400 秒（24 小時）。')}</p>
+            </div>
+        </div>
+    </details>
+
+    <details open>
+        <summary>${t('ui.testTarget')}</summary>
+        <div class="content">
+            <label>${t('ui.file')}</label>
+            <select id="file-select"><option value="">${t('ui.allFiles')}</option></select>
+            
+            <label style="margin-top:8px;">${t('ui.function')}</label>
+            <select id="func-select" disabled><option value="">all</option></select>
+
+            
+            <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
+                <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
+                <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">${t('ui.abortBtn')}</button>
+            </div>
+
+        </div>
+    </details>
+
+    <details open>
+        <summary>${t('ui.coverageDashboard')}</summary>
+        <div class="content">
+            <!-- 顯示模式切換工具列 -->
+            <div class="dashboard-view-toolbar">
+                <div style="display:inline-flex; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; overflow:hidden;">
+                    <button type="button" id="btn-mode-flat" style="margin:0; padding:4px 10px; font-size:11px; background:var(--vscode-button-background); color:var(--vscode-button-foreground); border:none; cursor:pointer;" onclick="setViewMode('flat')">${t('ui.flatView')}</button>
+                    <button type="button" id="btn-mode-grouped" style="margin:0; padding:4px 10px; font-size:11px; background:transparent; color:var(--vscode-foreground); border:none; cursor:pointer;" onclick="setViewMode('grouped')">${t('ui.groupedView')}</button>
+                </div>
+                <div id="grouped-tools" style="display:none; flex-wrap:wrap; gap:4px;">
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(true)">${t('ui.expandAll')}</button>
+                    <button type="button" style="margin:0; padding:3px 7px; font-size:10px;" onclick="setAllGroupsOpen(false)">${t('ui.collapseAll')}</button>
+                </div>
+            </div>
+
+            <!-- 指標與符號說明列 (Legend) -->
+            <div style="font-size:11px; opacity:0.85; display:flex; flex-wrap:wrap; gap:8px; align-items:center; background:var(--vscode-editor-inactiveSelectionBackground); padding:4px 8px; border-radius:3px; margin-bottom:6px;" title="${t('ui.metricHint')}">
+                <span title="${t('ui.mutationHint')}">🧬 <strong>${t('ui.mutationScore')}</strong>: ${t('ui.killRate')}</span>
+                <span style="opacity:0.3;">|</span>
+                <span title="${t('ui.coverageHint')}">📊 <strong>${t('ui.lineCoverage')}</strong>: ${t('ui.linesExecuted')}</span>
+            </div>
+
+            <!-- ${t('ui.selectAll')}與控制列 -->
+            <div style="display:flex; flex-wrap:wrap; gap:4px; justify-content:space-between; align-items:center; padding:4px 2px; margin-bottom:4px; font-size:12px; border-bottom:1px solid var(--vscode-editorGroup-border);">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <label style="display:inline-flex; align-items:center; gap:6px; margin:0; cursor:pointer; font-weight:normal;">
+                        <input type="checkbox" id="select-all" style="margin:0; width:auto;"> ${t('ui.selectAll')}
+                    </label>
+                    <button type="button" id="btn-delete-selected-top" style="margin:0; width:auto; padding:3px 7px; font-size:11px; background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
+                </div>
+                <span id="results-count" style="font-size:11px; opacity:0.75;">${t('ui.resultCount', 0)}</span>
+            </div>
+
+            <!-- 響應式卡片容器 (平鋪 / 分組共用) -->
+            <div id="dashboard-container" style="display:flex; flex-direction:column; gap:6px; min-height:40px;">
+                <div id="empty-state" style="padding:15px; text-align:center; opacity:0.5; font-size:12px;">${t('ui.noCoverageData')}</div>
+            </div>
+            
+            <button id="btn-delete-selected" style="margin-top:8px; background:#a82a2a; color:white;">${t('ui.batchDeleteSelected')}</button>
+        </div>
+    </details>
+
+    <details>
+        <summary>${t('ui.systemLogs')}</summary>
+        <div class="content">
+            <textarea id="log-area" readonly placeholder="Logs..."></textarea>
+            <button id="btn-clear-log" style="margin-top:5px;">Clear Logs</button>
+        </div>
+    </details>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        window.addEventListener('error', (event) => {
+            console.error('Webview runtime error:', event.error || event.message);
+            vscode.postMessage({ command: 'appendLog', text: '[Webview Error] ' + (event.message || event.error) });
+        });
+        window.addEventListener('unhandledrejection', (event) => {
+            console.error('Webview unhandled rejection:', event.reason);
+            vscode.postMessage({ command: 'appendLog', text: '[Webview Unhandled Rejection] ' + event.reason });
+        });
+
+        let currentKeys = {};
+        let currentCustomKeys = {};
+        let customSettingsLoaded = false;
+        let customFormEdited = false;
+        let lastTestedProjectPath = '';
+        const savedUiState = (typeof vscode.getState === 'function' ? vscode.getState() : null) || {};
+        function saveUiState(patch = {}) {
+            Object.assign(savedUiState, {
+                envType: document.getElementById('env-type').value,
+                modelName: document.getElementById('model-select').value || savedUiState.modelName || '',
+                cloudKeyName: document.getElementById('api-key-select').value || savedUiState.cloudKeyName || '',
+                customKeyName: document.getElementById('custom-api-select').value || savedUiState.customKeyName || ''
+            }, patch);
+            if (typeof vscode.setState === 'function') vscode.setState(savedUiState);
+        }
+        function applyEnvTypeUi(val) {
+            document.getElementById('local-ui').style.display = val === 'local' ? 'block' : 'none';
+            document.getElementById('cloud-ui').style.display = val === 'cloud' ? 'block' : 'none';
+            document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
+            saveUiState({ envType: val });
+        }
+        if (savedUiState.envType && ['cloud', 'local', 'custom'].includes(savedUiState.envType)) {
+            document.getElementById('env-type').value = savedUiState.envType;
+            applyEnvTypeUi(savedUiState.envType);
+        }
+        const resultsMap = new Map();
+        const groupOpenState = new Map();
+        let defaultGroupsOpen = true;
+        let currentViewMode = 'flat';
+        let environmentBusy = false;
+        let analysisRunning = false;
+        let runtimeContextRevision = 0;
+        let runtimeContextEndpointKey;
+        let timingSettingsTouched = false;
+        const timingMessages = ${JSON.stringify({ effective: localize('當前單次最多 {0} 秒（API {1} 秒、整目標 {2} 秒）；前序工作與排隊會減少實際剩餘時間。'), invalid: localize('API 上限須為 1 至 86400 的整數秒；整目標上限須為 0.001 至 86400 秒，精確至毫秒。請檢查時間單位。') }).replace(/</g, '\\u003c')};
+
+        let stopPolicyTouched = false;
+        let requestBudgetOverrides = {};
+        const plannedRequestBudgets = ${JSON.stringify(Array.from({ length: 10 }, (_, index) => planAnalysisTargetBudget(index + 1)))};
+        function updateTargetRequestBudget() {
+            const loops = Math.min(10, Math.max(1, Number(document.getElementById('max-loop').value) || 5));
+            const budget = { ...plannedRequestBudgets[Math.floor(loops) - 1], ...requestBudgetOverrides };
+            document.getElementById('target-request-budget').textContent =
+                ${JSON.stringify(localize('目標請求預算：模型 {0} 次；HTTP {1} 次；候選 {2} 次；估計輸入 {3} tokens。'))}
+                    .replace('{0}', budget.logicalRequests).replace('{1}', budget.transportAttempts)
+                    .replace('{2}', budget.candidateAttempts).replace('{3}', budget.estimatedInputTokens);
+        }
+        document.getElementById('max-loop').addEventListener('input', updateTargetRequestBudget);
+        updateTargetRequestBudget();
+        const stopFields = ['failure-limit', 'quality-no-improvement-limit', 'batch-failure-limit'];
+        for (const id of stopFields) document.getElementById(id).addEventListener('input', () => { stopPolicyTouched = true; });
+        function stopPolicySettings() {
+            const values = stopFields.map(id => Number(document.getElementById(id).value));
+            if (!values.every((value, index) => Number.isSafeInteger(value) && value >= (index === 0 ? 1 : 0))) return undefined;
+            return { failureLimit: values[0], qualityNoImprovementLimit: values[1], batchFailureLimit: values[2] };
+        }
+        function executionTimingSettings() {
+            const timeoutSeconds = Number(document.getElementById('timeout-sec').value);
+            const targetTimeoutSeconds = Number(document.getElementById('target-timeout-sec').value);
+            const milliseconds = targetTimeoutSeconds * 1000;
+            if (!Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > ${MAX_EXECUTION_TIMEOUT_SECONDS}
+                || !Number.isFinite(targetTimeoutSeconds) || targetTimeoutSeconds <= 0 || targetTimeoutSeconds > ${MAX_EXECUTION_TIMEOUT_SECONDS}
+                || Math.round(milliseconds) < 1 || Math.abs(milliseconds - Math.round(milliseconds)) > 0.000001) return undefined;
+            return { timeoutSeconds, targetTimeoutSeconds };
+        }
+        function updateExecutionTimingStatus() {
+            const settings = executionTimingSettings();
+            document.getElementById('execution-timing-status').textContent = settings
+                ? timingMessages.effective.replace('{0}', String(Math.min(settings.timeoutSeconds, settings.targetTimeoutSeconds)))
+                    .replace('{1}', String(settings.timeoutSeconds)).replace('{2}', String(settings.targetTimeoutSeconds))
+                : timingMessages.invalid;
+        }
+        for (const id of ['timeout-sec', 'target-timeout-sec']) {
+            document.getElementById(id).addEventListener('input', () => { timingSettingsTouched = true; updateExecutionTimingStatus(); });
+        }
+        updateExecutionTimingStatus();
+
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const message = (key, value) => i18n[key].replace('{0}', String(value));
+
+        vscode.postMessage({ command: 'getInitialData' });
+
+        function setViewMode(mode) {
+            currentViewMode = mode;
+            const btnFlat = document.getElementById('btn-mode-flat');
+            const btnGrouped = document.getElementById('btn-mode-grouped');
+            const groupedTools = document.getElementById('grouped-tools');
+
+            if (mode === 'flat') {
+                btnFlat.style.background = 'var(--vscode-button-background)';
+                btnFlat.style.color = 'var(--vscode-button-foreground)';
+                btnGrouped.style.background = 'transparent';
+                btnGrouped.style.color = 'var(--vscode-foreground)';
+                if (groupedTools) groupedTools.style.display = 'none';
+            } else {
+                btnGrouped.style.background = 'var(--vscode-button-background)';
+                btnGrouped.style.color = 'var(--vscode-button-foreground)';
+                btnFlat.style.background = 'transparent';
+                btnFlat.style.color = 'var(--vscode-foreground)';
+                if (groupedTools) groupedTools.style.display = 'flex';
+            }
+            renderDashboard();
+        }
+
+        function setAllGroupsOpen(open) {
+            defaultGroupsOpen = open;
+            groupOpenState.forEach((_value, fileName) => groupOpenState.set(fileName, open));
+            document.querySelectorAll('#dashboard-container details.file-group').forEach(details => {
+                details.open = open;
+                groupOpenState.set(details.dataset.fileKey, open);
+            });
+        }
+
+        function escapeHtml(text) {
+            return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function getScoreBadge(score, coverage, outcome) {
+            const colors = { passed: '#2ea043', executed: '#1677a6', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
+            const state = outcome || { label: i18n.pendingOutcome, kind: 'pending' };
+            const outcomeBadge = '<span style="background:' + (colors[state.kind] || colors.pending) + '; color:#fff; padding:2px 7px; border-radius:4px;">' + escapeHtml(state.label) + '</span>';
+            const scoreColor = '#555';
+            const scoreLabel = score === '測試中' ? i18n.testing : score === '失敗' ? i18n.failed : score;
+
+            const scoreTitle = score === '測試中' ? i18n.runningStatus
+                : score === '失敗' ? i18n.failedStatus
+                : i18n.measurementPrefix + score + i18n.measurementSuffix;
+            const scoreBadge = '<span class="score-badge" style="background:' + scoreColor + '; color:#fff; padding:2px 7px; border-radius:4px; font-size:11px; font-weight:600; white-space:nowrap;" title="' + escapeHtml(scoreTitle) + '">🧬 ' + escapeHtml(scoreLabel) + '</span>';
+
+            const covTitle = i18n.coveragePrefix + (coverage || 'N/A') + i18n.coverageSuffix;
+            const covBadge = coverage
+                ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
+                : '';
+            return '<div class="result-badges">' + outcomeBadge + scoreBadge + covBadge + '</div>';
+        }
+
+        function toggleItemCheck(id, checked) {
+            const item = resultsMap.get(id);
+            if (item) item.checked = checked;
+        }
+
+        function createResultCard(item, showFileName = true) {
+            const card = document.createElement('div');
+            card.className = 'result-card';
+            const canOpenReport = !!item.reportPath;
+            if (canOpenReport) {
+                card.tabIndex = 0;
+                card.title = i18n.openReport;
+                card.style.cursor = 'pointer';
+                const openReport = () => vscode.postMessage({ command: 'openTestResult', reportPath: item.reportPath });
+                card.onclick = event => {
+                    if (event.target instanceof HTMLInputElement) return;
+                    openReport();
+                };
+                card.onkeydown = event => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        openReport();
+                    }
+                };
+            }
+
+            const header = document.createElement('div');
+            header.className = 'result-header';
+
+            const titleBox = document.createElement('div');
+            titleBox.className = 'result-title';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.style.width = 'auto';
+            cb.style.margin = '0';
+            cb.className = 'row-sel';
+            cb.checked = !!item.checked;
+            cb.onclick = event => event.stopPropagation();
+            cb.onchange = () => toggleItemCheck(item.id, cb.checked);
+            titleBox.appendChild(cb);
+
+            const label = document.createElement('span');
+            label.className = 'result-label';
+            if (showFileName) {
+                label.innerHTML = '<span title="' + escapeHtml(i18n.targetFile) + escapeHtml(item.file) + '" style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📄 ' + escapeHtml(item.file) + '</span>' +
+                                  (item.func ? '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func) + '()</span>' : '');
+            } else {
+                label.innerHTML = '<span title="' + escapeHtml(i18n.targetFunction) + escapeHtml(item.func || item.fileName) + '()" style="color:var(--vscode-symbolIcon-functionForeground, #dcdcaa); font-weight:bold;">🔹 ' + escapeHtml(item.func || item.fileName) + '()</span>';
+            }
+            titleBox.appendChild(label);
+            header.appendChild(titleBox);
+
+            const badgesDiv = document.createElement('div');
+            badgesDiv.className = 'result-metrics';
+            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome);
+            header.appendChild(badgesDiv);
+            card.appendChild(header);
+
+            if (item.reason) {
+                const statusDiv = document.createElement('div');
+                statusDiv.className = 'result-status';
+                statusDiv.textContent = item.reason;
+                card.appendChild(statusDiv);
+            }
+
+            return card;
+        }
+
+        function renderDashboard() {
+            const countSpan = document.getElementById('results-count');
+            if (countSpan) countSpan.textContent = message('resultCount', resultsMap.size);
+
+            const container = document.getElementById('dashboard-container');
+            if (!container) return;
+
+            if (resultsMap.size === 0) {
+                container.innerHTML = '<div style="padding:15px; text-align:center; opacity:0.5; font-size:12px;">' + i18n.noCoverageData + '</div>';
+                return;
+            }
+
+            // Read live details before rebuilding: toggle events may still be queued.
+            document.querySelectorAll('#dashboard-container details.file-group').forEach(details => {
+                groupOpenState.set(details.dataset.fileKey, details.open);
+            });
+            container.innerHTML = '';
+
+            if (currentViewMode === 'flat') {
+                resultsMap.forEach(item => {
+                    container.appendChild(createResultCard(item, true));
+                });
+            } else {
+                // 檔案分組模式
+                const groups = new Map();
+                resultsMap.forEach(item => {
+                    const f = item.file || i18n.other;
+                    if (!groups.has(f)) groups.set(f, []);
+                    groups.get(f).push(item);
+                });
+
+                groups.forEach((items, fileName) => {
+                    const details = document.createElement('details');
+                    details.className = 'file-group';
+                    details.dataset.fileKey = fileName;
+                    details.open = groupOpenState.has(fileName) ? groupOpenState.get(fileName) : defaultGroupsOpen;
+                    details.addEventListener('toggle', () => {
+                        if (details.isConnected) groupOpenState.set(fileName, details.open);
+                    });
+                    details.style.marginBottom = '6px';
+                    details.style.border = '1px solid var(--vscode-editorGroup-border)';
+                    details.style.borderRadius = '4px';
+
+                    const summary = document.createElement('summary');
+                    summary.innerHTML = '<span class="file-group-title" style="font-weight:600;"><span style="color:var(--vscode-symbolIcon-fileForeground, #519aba);">📁</span> ' + escapeHtml(fileName) + ' <small style="opacity:0.75; font-weight:normal;">(' + escapeHtml(message('functionCount', items.length)) + ')</small></span>';
+                    details.appendChild(summary);
+
+                    const groupContent = document.createElement('div');
+                    groupContent.className = 'group-content';
+
+                    items.forEach(item => {
+                        groupContent.appendChild(createResultCard(item, false));
+                    });
+
+                    details.appendChild(groupContent);
+                    container.appendChild(details);
+                });
+            }
+        }
+
+        document.getElementById('select-all').addEventListener('change', (e) => {
+            const isChecked = e.target.checked;
+            resultsMap.forEach(item => item.checked = isChecked);
+            renderDashboard();
+        });
+
+        function deleteSelectedResults() {
+            const toDelete = [];
+            resultsMap.forEach((item, id) => {
+                if (item.checked) toDelete.push(id);
+            });
+            toDelete.forEach(id => resultsMap.delete(id));
+            document.getElementById('select-all').checked = false;
+            renderDashboard();
+        }
+        document.getElementById('btn-delete-selected').addEventListener('click', deleteSelectedResults);
+        document.getElementById('btn-delete-selected-top').addEventListener('click', deleteSelectedResults);
+
+
+        window.addEventListener('message', event => {
+            const msg = event.data;
+            switch (msg.command) {
+                case 'stopPolicySettings':
+                    if (!analysisRunning && !stopPolicyTouched) {
+                        document.getElementById('failure-limit').value = msg.settings.failureLimit;
+                        document.getElementById('quality-no-improvement-limit').value = msg.settings.qualityNoImprovementLimit;
+                        document.getElementById('batch-failure-limit').value = msg.settings.batchFailureLimit;
+                        requestBudgetOverrides = msg.budget;
+                        updateTargetRequestBudget();
+                    }
+                    break;
+                case 'executionTimingSettings':
+                    if (analysisRunning || timingSettingsTouched) break;
+                    document.getElementById('timeout-sec').value = msg.timeoutSeconds;
+                    document.getElementById('target-timeout-sec').value = msg.targetTimeoutSeconds;
+                    updateExecutionTimingStatus();
+                    break;
+                case 'setModels': {
+                    const select = document.getElementById('model-select');
+                    const previous = select.value || savedUiState.modelName || '';
+                    select.innerHTML = '<option value="">-- Select Model --</option>' + msg.models.map(m => \`<option value="\${m}">\${m}</option>\`).join('');
+                    if (msg.models.includes(previous)) select.value = previous;
+                    else if (msg.models.length > 0) select.value = msg.models[0];
+                    saveUiState({ modelName: select.value });
+                    requestLocalRuntimeContext();
+                    break;
+                }
+                case 'ollamaUrlSaved': requestLocalRuntimeContext(); break;
+                case 'modelRuntimeContext': {
+                    if (msg.modelName !== document.getElementById('model-select').value
+                        || (msg.revision !== undefined ? msg.revision !== runtimeContextRevision
+                            : msg.endpointKey !== runtimeContextEndpointKey)) break;
+                    runtimeContextEndpointKey = msg.endpointKey;
+                    document.getElementById('runtime-context-tokens').value = msg.configuredTokens > 0
+                        ? msg.configuredTokens : msg.savedSource === 'user-choice' ? msg.savedTokens : 0;
+                    const tokens = value => Number.isSafeInteger(value) && value > 0 ? value.toLocaleString() : i18n.runtimeContextUnknown;
+                    document.getElementById('runtime-context-status').textContent = [
+                        i18n.runtimeContextSavedValue + tokens(msg.savedTokens),
+                        (msg.allocationCurrent ? i18n.runtimeContextAllocated : i18n.runtimeContextRecent) + tokens(msg.allocatedTokens),
+                        ...(msg.defaultTokens ? [i18n.runtimeContextDefault + tokens(msg.defaultTokens)] : []),
+                        i18n.runtimeContextLimit + tokens(msg.modelLimit),
+                        i18n.runtimeContextRequest + tokens(msg.requestTokens),
+                        ...(msg.configuredTokens > 0 ? [i18n.runtimeContextGlobal] : []),
+                        ...(msg.reasonCode ? [i18n.runtimeContextUnavailable] : []),
+                        ...(msg.requestTokens > 0 && (!msg.modelLimit || msg.requestTokens > msg.modelLimit)
+                            ? [i18n.runtimeContextOverride] : [])
+                    ].join('\\n');
+                    updateLocalContextControls();
+                    break;
+                }
+                case 'setApiKeys': {
+                    currentKeys = msg.keys;
+                    const select = document.getElementById('api-key-select');
+                    const previous = select.value || savedUiState.cloudKeyName || '';
+                    const keys = Object.keys(msg.keys);
+                    select.innerHTML = '<option value="">-- Select Setting --</option>' + keys.map(k => \`<option value="\${k}">\${k} (\${currentKeys[k].model})</option>\`).join('');
+                    if (keys.includes(previous)) select.value = previous;
+                    else if (keys.length > 0) select.value = keys[0];
+                    saveUiState({ cloudKeyName: select.value });
+                    break;
+                }
+                case 'apiKeySaved':
+                    document.getElementById('new-key-name').value = '';
+                    document.getElementById('new-key-model').value = '';
+                    document.getElementById('new-key-value').value = '';
+                    document.getElementById('api-key-select').value = msg.keyName || '';
+                    saveUiState({ cloudKeyName: msg.keyName || '' });
+                    break;
+                case 'setFiles':
+                    if (msg.projectPath !== document.getElementById('project-path').value) break;
+                    document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>' + msg.files.map(f => \`<option value="\${escapeHtml(f.path)}">\${escapeHtml(f.name)}</option>\`).join('');
+                    document.getElementById('file-select').value = '';
+                    resetFunctionSelection();
+                    break;
+                case 'setFunctions':
+                    if (!msg.filePath || msg.filePath !== document.getElementById('file-select').value) break;
+                    document.getElementById('func-select').innerHTML = '<option value="">all</option>' + msg.funcs.map(f => \`<option value="\${escapeHtml(f)}">\${escapeHtml(f)}()</option>\`).join('');
+                    document.getElementById('func-select').disabled = false;
+                    break;
+                case 'setProjectPath':
+                    document.getElementById('project-path').value = msg.path;
+                    document.getElementById('batch-scope-status').textContent = i18n.batchScopeGuide;
+                    document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>';
+                    document.getElementById('file-select').value = '';
+                    resetFunctionSelection();
+                    break;
+                case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
+                case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
+                case 'updateCoverage': {
+                    const fileName = msg.fileName || '';
+                    let file = msg.file || '';
+                    let func = msg.func || '';
+                    if (!file) {
+                        const match = fileName.match(/^([a-zA-Z]:[\\/][^:]+|[^:]+):(.*)$/);
+                        if (match) {
+                            file = match[1];
+                            func = match[2];
+                        } else {
+                            file = fileName;
+                        }
+                    }
+                    resultsMap.set(fileName, {
+                        id: fileName,
+                        file: file,
+                        func: func,
+                        fileName: fileName,
+                        score: msg.score,
+                        coverage: msg.coverage,
+                        reason: msg.reason,
+                        outcome: msg.score === '測試中' ? undefined : resultsMap.get(fileName)?.outcome,
+                        reportPath: msg.reportPath !== undefined ? msg.reportPath : resultsMap.get(fileName)?.reportPath || '',
+                        checked: resultsMap.get(fileName)?.checked || false
+                    });
+                    renderDashboard();
+                    break;
+                }
+                case 'updateOutcome': {
+                    const old = resultsMap.get(msg.fileName) || { id: msg.fileName, fileName: msg.fileName,
+                        file: msg.file, func: msg.func, score: 'N/A', coverage: null, checked: false };
+                    resultsMap.set(msg.fileName, { ...old, outcome: msg.outcome, reportPath: msg.reportPath });
+                    renderDashboard();
+                    break;
+                }
+                case 'attachResultReport': {
+                    const item = resultsMap.get(msg.fileName);
+                    if (item) {
+                        item.reportPath = msg.reportPath || '';
+                        renderDashboard();
+                    }
+                    break;
+                }
+                case 'setCustomKeys': {
+                    const select = document.getElementById('custom-api-select');
+                    const previous = select.value || savedUiState.customKeyName || '';
+                    currentCustomKeys = msg.keys;
+                    const ckeys = Object.keys(msg.keys);
+                    const selected = ckeys.includes(previous) ? previous : customFormEdited ? '' : ckeys[0] || '';
+                    select.innerHTML = '<option value="">-- Select --</option>' + ckeys.map(k => '<option value="' + escapeHtml(k) + '">' + escapeHtml(k) + '</option>').join('');
+                    select.value = selected;
+                    if (!customFormEdited && (!customSettingsLoaded || selected !== previous)) applyCustomSetting(selected);
+                    customSettingsLoaded = true;
+                    saveUiState({ customKeyName: selected });
+                    break;
+                }
+                case 'pythonEnvironmentSelection':
+                    document.getElementById('python-environment-status').value = i18n.currentPython + msg.python;
+                    break;
+                case 'batchScopeSelected':
+                    if (msg.projectRoot === document.getElementById('project-path').value) {
+                        document.getElementById('batch-scope-status').textContent = msg.text;
+                    }
+                    break;
+                case 'environmentPreparation':
+                    environmentBusy = !!msg.busy;
+                    document.getElementById('python-environment-status').value = msg.text;
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                        document.getElementById(id).disabled = environmentBusy || analysisRunning;
+                    }
+                    updateLocalContextControls();
+                    break;
+                case 'environmentPreparationFinished':
+                    environmentBusy = false;
+                    for (const id of ['btn-run', 'btn-prepare-env', 'btn-prepare-env-scope', 'btn-import-setup', 'btn-resource-setup', 'btn-batch-scope', 'btn-test-cloud', 'btn-test-local', 'btn-test-custom']) {
+                        document.getElementById(id).disabled = analysisRunning;
+                    }
+                    updateLocalContextControls();
+                    break;
+                case 'analysisStopping': {
+                    analysisRunning = true;
+                    document.getElementById('btn-run').disabled = true;
+                    const stoppingButton = document.getElementById('btn-abort');
+                    stoppingButton.disabled = true;
+                    stoppingButton.style.display = 'block';
+                    if (msg.text) stoppingButton.textContent = msg.text;
+                    updateLocalContextControls();
+                    updateValidationScope();
+                    break;
+                }
+                case 'analysisFinished':
+                    analysisRunning = false;
+                    document.getElementById('lang-select').disabled = false;
+                    document.getElementById('validation-mode').disabled = false;
+                    updateValidationScope();
+                    const runBtn = document.getElementById('btn-run');
+                    if (runBtn) {
+                        runBtn.disabled = environmentBusy;
+                        runBtn.innerText = i18n.runBtn;
+                    }
+                    const abortBtn = document.getElementById('btn-abort');
+                    if (abortBtn) {
+                        abortBtn.style.display = 'none';
+                        abortBtn.disabled = false;
+                        abortBtn.textContent = i18n.abortBtn;
+                    }
+                    document.getElementById('btn-prepare-env').disabled = environmentBusy;
+                    document.getElementById('btn-prepare-env-scope').disabled = environmentBusy;
+                    document.getElementById('btn-import-setup').disabled = environmentBusy;
+                    document.getElementById('btn-resource-setup').disabled = environmentBusy;
+                    document.getElementById('btn-batch-scope').disabled = environmentBusy;
+                    updateLocalContextControls();
+                    break;
+            }
+        });
+
+        function updateLocalContextControls() {
+            const frozen = analysisRunning || environmentBusy;
+            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy', 'require-role-qualification', 'timeout-sec', 'target-timeout-sec']) {
+                document.getElementById(id).disabled = frozen;
+            }
+            const noSelection = !document.getElementById('model-select').value;
+            for (const id of ['runtime-context-tokens', 'btn-save-runtime-context']) {
+                document.getElementById(id).disabled = frozen || noSelection || !runtimeContextEndpointKey;
+            }
+        }
+        function clearLocalRuntimeContext() {
+            runtimeContextRevision++;
+            runtimeContextEndpointKey = undefined;
+            document.getElementById('runtime-context-tokens').value = 0;
+            document.getElementById('runtime-context-status').textContent = '';
+            updateLocalContextControls();
+        }
+        function requestLocalRuntimeContext() {
+            clearLocalRuntimeContext();
+            const modelName = document.getElementById('model-select').value;
+            if (!modelName || analysisRunning || environmentBusy) return;
+            vscode.postMessage({ command: 'getModelRuntimeContext', modelName,
+                ollamaUrl: document.getElementById('ollama-url').value, revision: runtimeContextRevision });
+        }
+        document.getElementById('model-select').onchange = () => {
+            saveUiState({ modelName: document.getElementById('model-select').value });
+            requestLocalRuntimeContext();
+        };
+        document.getElementById('ollama-url').oninput = clearLocalRuntimeContext;
+        document.getElementById('btn-save-runtime-context').onclick = () => {
+            if (analysisRunning || environmentBusy || !runtimeContextEndpointKey) return;
+            const input = document.getElementById('runtime-context-tokens');
+            const tokens = Number(input.value);
+            if (!input.value.trim() || !Number.isSafeInteger(tokens) || tokens < 0) {
+                document.getElementById('runtime-context-status').textContent = i18n.runtimeContextInvalid;
+                return;
+            }
+            runtimeContextRevision++;
+            input.disabled = true;
+            document.getElementById('btn-save-runtime-context').disabled = true;
+            vscode.postMessage({ command: 'setModelRuntimeContextTokens', modelName: document.getElementById('model-select').value,
+                ollamaUrl: document.getElementById('ollama-url').value, tokens, revision: runtimeContextRevision });
+        };
+
+        document.getElementById('lang-select').onchange = (e) => {
+            vscode.postMessage({ command: 'setLanguage', lang: e.target.value });
+        };
+        
+        document.getElementById('require-role-qualification').onchange = (event) => {
+            vscode.postMessage({ command: 'setRoleQualificationRequired', required: event.target.checked });
+        };
+        document.getElementById('prompt-strategy').onchange = (e) => {
+            if (analysisRunning || environmentBusy) return;
+            vscode.postMessage({ command: 'setPromptStrategy', strategy: e.target.value });
+        };
+        function updateValidationScope() {
+            const full = document.getElementById('validation-mode').value === 'full';
+            const hint = document.getElementById('validation-scope');
+            if (hint) hint.textContent = full
+                ? i18n.fullScopeHint
+                : i18n.executionScopeHint;
+            for (const id of ['max-loop', 'mutpy-timeout', 'mutation-engine', 'mutation-workers']) {
+                document.getElementById(id).disabled = !full || analysisRunning;
+            }
+        }
+        updateValidationScope();
+        document.getElementById('validation-mode').onchange = (e) => {
+            if (analysisRunning) return;
+            updateValidationScope();
+            vscode.postMessage({ command: 'setValidationMode', mode: e.target.value });
+        };
+        document.getElementById('mutation-engine').onchange = (e) => {
+            if (analysisRunning) return;
+            vscode.postMessage({ command: 'setMutationEngine', engine: e.target.value });
+        };
+        function mutationWorkerCount() {
+            const workers = Number(document.getElementById('mutation-workers').value);
+            return Number.isInteger(workers) && workers >= 1 && workers <= 4 ? workers : 2;
+        }
+        document.getElementById('mutation-workers').onchange = () => {
+            if (analysisRunning) return;
+            const workers = mutationWorkerCount();
+            document.getElementById('mutation-workers').value = String(workers);
+            vscode.postMessage({ command: 'setMutationWorkers', workers });
+        };
+
+        document.getElementById('btn-save-ollama-url').onclick = () => {
+            const url = document.getElementById('ollama-url').value;
+            vscode.postMessage({ command: 'saveOllamaUrl', url });
+        };
+
+        document.getElementById('env-type').onchange = (e) => {
+            const val = e.target.value;
+            document.getElementById('local-ui').style.display = val === 'local' ? 'block' : 'none';
+            document.getElementById('cloud-ui').style.display = val === 'cloud' ? 'block' : 'none';
+            document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
+            saveUiState({ envType: val });
+        };
+
+        document.getElementById('btn-browse-proj').onclick = () => vscode.postMessage({ command: 'browseProjectFolder' });
+        document.getElementById('btn-batch-scope').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            vscode.postMessage({ command: 'previewBatchScope', projectRoot: document.getElementById('project-path').value,
+                outputPath: document.getElementById('output-path').value });
+        };
+        document.getElementById('btn-browse-out').onclick = () => vscode.postMessage({ command: 'browseFolder' });
+        function resetFunctionSelection() {
+            const functions = document.getElementById('func-select');
+            functions.innerHTML = '<option value="">all</option>';
+            functions.value = '';
+            functions.disabled = true;
+        }
+        document.getElementById('file-select').onchange = (e) => { 
+            resetFunctionSelection();
+            if(e.target.value) vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
+        };
+
+        document.getElementById('btn-save-key').onclick = () => {
+            const newName = document.getElementById('new-key-name').value;
+            const newModel = document.getElementById('new-key-model').value;
+            const newValue = document.getElementById('new-key-value').value;
+            const oldName = document.getElementById('api-key-select').value;
+            if (newName && newModel && newValue) vscode.postMessage({ command: 'updateApiKey', oldName, newName, model: newModel, key: newValue });
+        };
+        document.getElementById('btn-del-key').onclick = () => {
+            const name = document.getElementById('api-key-select').value;
+            if (name) vscode.postMessage({ command: 'deleteApiKey', name });
+        };
+        document.getElementById('api-key-select').onchange = (e) => {
+            const name = e.target.value;
+            document.getElementById('new-key-name').value = name || '';
+            document.getElementById('new-key-model').value = currentKeys[name]?.model || '';
+            document.getElementById('new-key-value').value = '';
+            saveUiState({ cloudKeyName: name || '' });
+        };
+
+        document.getElementById('btn-refresh-models').onclick = () => vscode.postMessage({ command: 'getInitialData' });
+        document.getElementById('btn-clear-log').onclick = () => document.getElementById('log-area').value = '';
+
+        function applyCustomSetting(name) {
+            const data = currentCustomKeys[name] || {url: '', model: '', key: ''};
+            document.getElementById('custom-name').value = name || '';
+            document.getElementById('custom-url').value = data.url || '';
+            document.getElementById('custom-model').value = data.model || '';
+            document.getElementById('custom-key').value = data.key || '';
+            customFormEdited = false;
+        }
+        document.getElementById('custom-api-select').onchange = (e) => {
+            const name = e.target.value;
+            applyCustomSetting(name);
+            saveUiState({ customKeyName: name || '' });
+        };
+        for (const id of ['custom-name', 'custom-url', 'custom-model', 'custom-key']) {
+            document.getElementById(id).addEventListener('input', () => { customFormEdited = true; });
+        }
+
+        document.getElementById('btn-save-custom').onclick = () => {
+            const newName = document.getElementById('custom-name').value;
+            const url = document.getElementById('custom-url').value;
+            const model = document.getElementById('custom-model').value;
+            const key = document.getElementById('custom-key').value;
+            const oldName = document.getElementById('custom-api-select').value;
+            if (newName && url && model) vscode.postMessage({ command: 'updateCustomKey', oldName, newName, url, model, key });
+        };
+
+        document.getElementById('btn-del-custom').onclick = () => {
+            const name = document.getElementById('custom-api-select').value;
+            if (name) vscode.postMessage({ command: 'deleteCustomKey', name });
+        };
+
+        document.getElementById('btn-abort').onclick = () => vscode.postMessage({ command: 'abortTest' });
+        
+        const getStartParams = () => {
+            const envType = document.getElementById('env-type').value;
+            let modelName = '';
+            if (envType === 'local') modelName = document.getElementById('model-select').value;
+            else if (envType === 'cloud') modelName = currentKeys[document.getElementById('api-key-select').value]?.model || '';
+            else if (envType === 'custom') modelName = document.getElementById('custom-model').value;
+
+            return { envType, modelName, cloudKeyName: envType === 'cloud' ? document.getElementById('api-key-select').value : undefined };
+        };
+
+        document.getElementById('btn-import-setup').onclick = () => {
+            const projectRoot = document.getElementById('project-path').value;
+            if (!projectRoot) { alert(i18n.selectProject); return; }
+            vscode.postMessage({ command: 'prepareImportSetup', projectRoot, outputPath: document.getElementById('output-path').value });
+        };
+        document.getElementById('btn-resource-setup').onclick = () => {
+            const projectRoot = document.getElementById('project-path').value;
+            if (!projectRoot) { alert(i18n.selectProject); return; }
+            vscode.postMessage({ command: 'configureTestResources', projectRoot, outputPath: document.getElementById('output-path').value });
+        };
+        document.getElementById('btn-prepare-env').onclick = () => {
+            const projectRoot = document.getElementById('project-path').value;
+            vscode.postMessage(projectRoot ? { command: 'prepareProjectEnvironment', projectRoot }
+                : { command: 'browseProjectFolder' });
+        };
+        document.getElementById('btn-prepare-env-scope').onclick = () => {
+            vscode.postMessage({ command: 'preparePythonEnvironment',
+                filePath: document.getElementById('file-select').value,
+                projectRoot: document.getElementById('project-path').value });
+        };
+
+        const environmentSelection = () => ({ filePath: document.getElementById('file-select').value,
+            projectRoot: document.getElementById('project-path').value });
+        document.getElementById('btn-test-cloud').onclick = () => {
+            const cloudKeyName = document.getElementById('api-key-select').value;
+            if(!cloudKeyName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Cloud setting.' });
+            vscode.postMessage({ command: 'testConnection', envType: 'cloud', cloudKeyName, timeoutSeconds: Number(document.getElementById('timeout-sec').value), ...environmentSelection() });
+        };
+        document.getElementById('btn-test-local').onclick = () => {
+            const modelName = document.getElementById('model-select').value;
+            if(!modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please select a Local model.' });
+            vscode.postMessage({ command: 'testConnection', envType: 'local', modelName, contextRevision: runtimeContextRevision, timeoutSeconds: Number(document.getElementById('timeout-sec').value), ...environmentSelection() });
+        };
+        document.getElementById('btn-test-custom').onclick = () => {
+            const customUrl = document.getElementById('custom-url').value;
+            const modelName = document.getElementById('custom-model').value;
+            const customKey = document.getElementById('custom-key').value;
+            if(!customUrl || !modelName) return vscode.postMessage({ command: 'appendLog', text: 'Please provide Custom API URL and Model Name.' });
+            vscode.postMessage({ command: 'testConnection', envType: 'custom', customUrl, modelName, customKey, timeoutSeconds: Number(document.getElementById('timeout-sec').value), ...environmentSelection() });
+        };
+
+        function getCommonExecutionOptions() {
+            return {
+                ollamaUrl: document.getElementById('ollama-url').value,
+                promptStrategy: document.getElementById('prompt-strategy').value,
+                requireRoleQualification: document.getElementById('require-role-qualification').checked,
+                validationMode: document.getElementById('validation-mode').value,
+                mutationEngine: document.getElementById('mutation-engine').value,
+                mutationWorkers: mutationWorkerCount(),
+                maxLoops: parseInt(document.getElementById('max-loop').value, 10) || 5,
+                stopPolicy: stopPolicySettings(),
+                mutpyTimeout: parseInt(document.getElementById('mutpy-timeout').value, 10) || 60,
+                ...executionTimingSettings(),
+                outputPath: document.getElementById('output-path').value,
+                customUrl: document.getElementById('custom-url').value,
+                customKey: document.getElementById('custom-key').value
+            };
+        }
+
+        function setRunningState(isBatch) {
+            analysisRunning = true;
+            updateLocalContextControls();
+            updateValidationScope();
+            document.getElementById('lang-select').disabled = true;
+            document.getElementById('validation-mode').disabled = true;
+            document.getElementById('btn-prepare-env').disabled = true;
+            document.getElementById('btn-prepare-env-scope').disabled = true;
+            document.getElementById('btn-import-setup').disabled = true;
+            document.getElementById('btn-resource-setup').disabled = true;
+            document.getElementById('btn-batch-scope').disabled = true;
+            document.getElementById('btn-run').disabled = true;
+            document.getElementById('btn-run').innerText = isBatch ? '⏳ Testing all...' : '⏳ Testing...';
+            document.getElementById('btn-abort').style.display = 'block';
+            document.getElementById('btn-abort').disabled = false;
+            document.getElementById('btn-abort').textContent = i18n.abortBtn;
+        }
+
+        document.getElementById('btn-run').onclick = () => {
+            const { envType, modelName, cloudKeyName } = getStartParams();
+            const filePath = document.getElementById('file-select').value;
+            const batchPath = document.getElementById('project-path').value;
+            
+            if(environmentBusy || document.getElementById('btn-run').disabled) return;
+            if (!executionTimingSettings()) {
+                vscode.postMessage({ command: 'appendLog', text: timingMessages.invalid });
+                return;
+            }
+            if (!stopPolicySettings()) {
+                vscode.postMessage({ command: 'appendLog', text: ${JSON.stringify(localize('停止政策必須是有效整數；單目標失敗上限至少 1，其餘至少 0。'))} });
+                return;
+            }
+            if(!envType || !modelName || (!filePath && !batchPath) || (envType === 'cloud' && !cloudKeyName)) {
+                vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
+                return;
+            }
+
+            setRunningState(!filePath);
+
+            const currentProj = document.getElementById('project-path').value;
+            if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
+                resultsMap.clear();
+                groupOpenState.clear();
+                defaultGroupsOpen = true;
+                renderDashboard();
+            }
+            lastTestedProjectPath = currentProj;
+
+            if (!filePath) {
+                vscode.postMessage({
+                    command: 'startBatchAnalysis',
+                    envType, modelName, cloudKeyName, batchPath,
+                    ...getCommonExecutionOptions()
+                });
+                return;
+            }
+
+            vscode.postMessage({
+                command: 'startAnalysis',
+                envType, modelName, cloudKeyName, filePath,
+                funcName: document.getElementById('func-select').value,
+                ...getCommonExecutionOptions()
+            });
+        };
+
+    </script>
+</body>
+</html>`;
+}

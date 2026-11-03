@@ -1,0 +1,168 @@
+import { readOllamaRoleRequest, ollamaRuntimeMetadataFixture } from './ollamaRequestFixture';
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { evidenceHash } from '../pipeline/analysisJournal';
+
+test('real AI quality loop sends state evidence to Analyst and Writer then reviews the new tests before mutation', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-loop-'));
+    const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
+    const targetFile = path.join(root, 'ledger.py');
+    const source = `class Ledger:
+    def __init__(self):
+        self.entries = {}
+    def increase(self, name: str, units: int = 1):
+        if name in self.entries:
+            self.entries[name] += units
+        else:
+            self.entries[name] = units
+`;
+    const weak = `import unittest
+from ledger import Ledger
+class ModelCases(unittest.TestCase):
+    def setUp(self):
+        self.ledger = Ledger()
+    def test_real_calls(self):
+        self.assertIsNone(self.ledger.increase('entry', 3))
+`;
+    const strong = `import unittest
+from ledger import Ledger
+class ObservedStateCases(unittest.TestCase):
+    def setUp(self):
+        self.ledger = Ledger()
+    def test_observed_state(self):
+        self.assertIsNone(self.ledger.increase('entry', 3))
+        self.assertEqual(self.ledger.entries, {'entry': 3})
+        self.assertIsNone(self.ledger.increase('entry', 3))
+        self.assertEqual(self.ledger.entries, {'entry': 6})
+`;
+    fs.writeFileSync(targetFile, source);
+    const handlers = new Map<string, (...args: any[]) => any>();
+    const roles: string[] = [];
+    const prompts: Array<{ role: string; prompt: string }> = [];
+    const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
+    const vscode = {
+        ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
+        window: { registerWebviewViewProvider: (_: string, provider: any) => {
+            provider.webview = { postMessage: async () => true }; return { dispose() {} };
+        }, showInformationMessage: async () => {}, showTextDocument: async () => {} },
+        workspace: { workspaceFolders: [{ uri: { fsPath: root } }], openTextDocument: async () => ({}),
+            getConfiguration: () => ({ get: (key: string, fallback: unknown) => key === 'pythonPath' ? python
+                : key === 'runtimeContextTokens' ? 8572 : fallback }) },
+        commands: { registerCommand: (name: string, handler: (...args: any[]) => any) => {
+            handlers.set(name, handler); return { dispose() {} };
+        } }
+    };
+    Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
+    globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture', observedContextTokens: 8572 });
+        if (metadata) { return metadata; }
+        const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
+        assert.equal(request.options.num_ctx, 8572, 'the fixture uses its observed runtime, not the advertised maximum');
+        let response: string;
+        if (request.roleInstructions?.includes('You are the test Reviewer')) {
+            roles.push('reviewer'); response = '{"findings":[]}';
+        } else if (request.roleInstructions?.includes('Analyst after successful')) {
+            roles.push('quality-analyst');
+            const focus = JSON.parse(request.prompt.match(/FOCUS\n([^\n]+)/)[1]);
+            response = JSON.stringify({ tasks: [{ evidence_id: focus.id,
+                hypothesis: 'Return-only assertions do not distinguish the observed accumulated entries.',
+                scenario: "Construct Ledger(), then increase('entry', 3) twice and assert the observed entries after each call.",
+                verification: 'Run the preserved original test and new state test, obtain Reviewer approval, then rerun the same mutant set.' }] });
+        } else if (request.roleInstructions?.includes('dependency_behaviors')) {
+            roles.push('planning'); response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}';
+        } else {
+            roles.push('writer'); response = '```python\n' + (roles.filter(role => role === 'writer').length === 1 ? weak : strong) + '\n```';
+        }
+        prompts.push({ role: roles.at(-1)!, prompt: request.prompt });
+        return new Response(JSON.stringify({ response, done: true }), { status: 200 });
+    };
+    try {
+        require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
+            globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
+        await handlers.get('llm-unit-test.updateModelProfile')!({ envType: 'local', modelName: 'fixture',
+            paramSize: '13B', contextLength: 32768, contextLengthKnown: true,
+            effectiveRuntimeContextTokens: 8572, runtimeContextSource: 'ollama-ps' });
+        const output = path.join(root, 'results');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: targetFile,
+            funcName: 'Ledger.increase', outputPath: output, promptStrategy: 'tier2', maxLoops: 3,
+            timeoutSeconds: 30, mutpyTimeout: 30, mutationEngine: 'builtin', validationMode: 'full' });
+        const knowledgeFile = fs.readdirSync(output, { recursive: true }).map(String).find(name => path.basename(name) === 'function_knowledge.json');
+        assert.ok(knowledgeFile, 'journal must exist');
+        const runRoot = path.dirname(path.join(output, knowledgeFile));
+        const knowledge = JSON.parse(fs.readFileSync(path.join(runRoot, 'function_knowledge.json'), 'utf8'));
+        const events = fs.readFileSync(path.join(runRoot, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+        assert.ok(events.some(e => e.stage === 'model-runtime' && e.status === 'selected'
+            && e.detail.contextWindow === 8572 && e.detail.inputBudget === 6000));
+        assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify({ failure: knowledge.lastFailure, roles,
+            budgets: events.filter(e => e.stage === 'model-request' && ['budget-exceeded', 'requested'].includes(e.status)).map(e => e.detail) }));
+        const seedAccepted = events.findIndex(e => e.stage === 'writer-seed' && e.status === 'accepted');
+        const review = events.findIndex(e => e.stage === 'reviewer' && e.status === 'parsed');
+        assert.ok(seedAccepted >= 0 && review > seedAccepted);
+        const measurements = events.filter(e => e.stage === 'mutation' && e.status === 'measured');
+        assert.equal(measurements.length, 2, JSON.stringify(roles));
+        assert.ok(measurements[1].detail.score > measurements[0].detail.score);
+        assert.equal(measurements[1].detail.score, 100);
+        assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'observed'));
+        assert.ok(!events.some(e => e.stage === 'quality-experiment-baseline'));
+        assert.ok(events.some(e => e.stage === 'quality-experiment' && e.status === 'resolved'
+            && e.detail.globalProgress === 'improved'));
+        assert.equal(roles.filter(role => role === 'writer').length, 2, 'Writer must author the addition from isolated observations');
+        assert.equal(roles.filter(role => role === 'quality-analyst').length, 1);
+        assert.equal(roles.filter(role => role === 'reviewer').length, 2);
+        assert.deepEqual(roles.filter(role => role !== 'planning'), ['writer', 'reviewer', 'quality-analyst', 'writer', 'reviewer']);
+        assert.match(prompts.find(item => item.role === 'quality-analyst')!.prompt, /QUALITY_EXPERIMENT_OBSERVATIONS_V2/);
+        assert.match(prompts.filter(item => item.role === 'writer')[1].prompt, /QUALITY_EXPERIMENT_OBSERVATIONS_V2/);
+        for (const measurement of measurements) {
+            assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'parsed'
+                && event.loop === measurement.loop && event.sequence < measurement.sequence));
+        }
+        const final = fs.readFileSync(path.join(runRoot, knowledge.acceptedTest), 'utf8');
+        assert.ok(final.includes('class ModelCases'));
+        assert.ok(!final.includes('class TestVerifiedState_'));
+        assert.ok(!final.includes('class TestTrace'));
+        assert.ok(final.includes('self.ledger.entries'));
+        assert.ok(final.includes(weak.trimEnd()), 'all original passing cases remain unchanged');
+        assert.equal(knowledge.acceptedCodeHash, evidenceHash(final));
+        assert.equal(knowledge.mutation.testHash, knowledge.acceptedCodeHash);
+        assert.equal(knowledge.mutation.counts.error + knowledge.mutation.counts.timeout + knowledge.mutation.counts.notRun, 0);
+        assert.equal(fs.readFileSync(targetFile, 'utf8'), source);
+
+        // A synthetic credential-shaped response must stop before it becomes a
+        // candidate file, executable seed, mutation input, or report detail.
+        const syntheticCredential = 'sk-' + 'x'.repeat(32);
+        let rejectedRequests = 0;
+        globalThis.fetch = async (_url, options) => {
+            const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'fixture', observedContextTokens: 8572 });
+            if (metadata) { return metadata; }
+            assert.equal(JSON.parse(String(options?.body)).options.num_ctx, 8572);
+            rejectedRequests++;
+            return new Response(JSON.stringify({ response: syntheticCredential, done: true }), { status: 200 });
+        };
+        const rejectedOutput = path.join(root, 'rejected-results');
+        await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: targetFile,
+            funcName: 'Ledger.increase', outputPath: rejectedOutput, promptStrategy: 'tier2', maxLoops: 3,
+            timeoutSeconds: 30, mutpyTimeout: 30, mutationEngine: 'builtin', validationMode: 'full' });
+        const rejectedFiles = fs.readdirSync(rejectedOutput, { recursive: true }).map(String)
+            .map(name => path.join(rejectedOutput, name)).filter(file => fs.statSync(file).isFile());
+        const rejectedKnowledgeFile = rejectedFiles.find(file => path.basename(file) === 'function_knowledge.json');
+        assert.ok(rejectedKnowledgeFile);
+        const rejectedKnowledge = JSON.parse(fs.readFileSync(rejectedKnowledgeFile, 'utf8'));
+        assert.equal(rejectedKnowledge.failureStage, 'sensitive-output');
+        assert.equal(rejectedRequests, 1);
+        const rejectedEvents = rejectedFiles.filter(file => path.basename(file) === 'role_events.jsonl')
+            .flatMap(file => fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line)));
+        assert.ok(!rejectedEvents.some(e => e.stage === 'writer-seed' && e.status === 'accepted'));
+        assert.ok(!rejectedEvents.some(e => e.stage === 'mutation'));
+        for (const file of rejectedFiles) {
+            assert.ok(!fs.readFileSync(file).includes(Buffer.from(syntheticCredential)), path.relative(rejectedOutput, file));
+        }
+        assert.ok(!rejectedFiles.some(file => /(?:^|[\\/])loop\d+_(?:seed|test)\.py$/.test(file)));
+    } finally {
+        globalThis.fetch = originalFetch; Module._load = originalLoad;
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

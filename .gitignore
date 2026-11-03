@@ -4,6 +4,73 @@ node_modules
 .vscode-test/
 *.vsix
 *.zip
+*.tsbuildinfo
 .DS_Store
-package-lock.json
 .venv
+.venv-*/
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+coverage.xml
+output/
+mutants/
+.mutmut-cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+pip-wheel-metadata/
+
+# Local package-manager, linter and test logs.
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+.idea/
+.history/
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# Local databases and generated binary state.
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+
+# Local credentials and certificates must never enter the repository.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated local runs; source fixtures and tracked reports stay available.
+tmp/
+test/result/
+.vscode/settings.local.json
+.vscode/*.local.json
+
+# 本機 Agent／執行期日誌：保留說明檔，避免將工作階段、提示與診斷內容提交。
+log/*
+!log/README.md
+
+# AOCI agent host integration (machine-bound; do not commit)
+.codex/config.toml
+.codex/config.toml.backup.*

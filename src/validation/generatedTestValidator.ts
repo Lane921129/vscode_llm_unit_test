@@ -1,0 +1,731 @@
+import { localize } from '../i18n/core';
+export interface GeneratedTestValidation {
+    valid: boolean;
+    reason?: string;
+    reasonCode?: string;
+    unusedSetupName?: string;
+    requiresMockBehaviorEvidence?: boolean;
+    requiresTargetBehaviorEvidence?: boolean;
+}
+
+export type TargetUsage = 'call' | 'property';
+
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Preserve Python's executable layout while blanking comments and string
+ * contents. This validator runs before the Python AST process, so a small
+ * lexer keeps prose, docstrings, and commented-out examples from
+ * impersonating an assertion or target call in the regex behavior gate.
+ */
+function executablePythonText(code: string, stringContinuationLines?: Set<number>): string {
+    let result = '';
+    let quote: '\'' | '"' | undefined;
+    let triple = false;
+    let escaped = false;
+    let inComment = false;
+    let line = 0;
+
+    for (let index = 0; index < code.length; index++) {
+        const char = code[index];
+        const nextThree = code.slice(index, index + 3);
+        if (char === '\n') {
+            line++;
+            if (quote && (triple || escaped)) { stringContinuationLines?.add(line); }
+        }
+
+        if (inComment) {
+            if (char === '\n') {
+                inComment = false;
+                result += char;
+            } else {
+                result += ' ';
+            }
+            continue;
+        }
+        if (quote) {
+            if (char === '\n' && !triple) {
+                // Preserve an invalid unterminated string for Python's AST gate.
+                quote = undefined;
+                escaped = false;
+                result += char;
+                continue;
+            }
+            if (!escaped && triple && nextThree === quote.repeat(3)) {
+                result += '   ';
+                index += 2;
+                quote = undefined;
+                triple = false;
+                continue;
+            }
+            if (!escaped && !triple && char === quote) {
+                result += ' ';
+                quote = undefined;
+                continue;
+            }
+            result += char === '\n' ? '\n' : ' ';
+            escaped = !escaped && char === '\\';
+            if (char !== '\\') {
+                escaped = false;
+            }
+            continue;
+        }
+        if (char === '#') {
+            inComment = true;
+            result += ' ';
+            continue;
+        }
+        if (char === '\'' || char === '"') {
+            quote = char;
+            triple = nextThree === char.repeat(3);
+            result += triple ? '   ' : ' ';
+            if (triple) {
+                index += 2;
+            }
+            continue;
+        }
+        result += char;
+    }
+    return result;
+}
+
+function definesCallable(code: string, callableName: string): boolean {
+    const escapedName = escapeRegex(callableName);
+    return new RegExp(
+        '^\\s*(?:async\\s+)?def\\s+' + escapedName + '\\s*\\(',
+        'm'
+    ).test(code);
+}
+
+function invokesCallable(code: string, callableName: string): boolean {
+    const escapedName = escapeRegex(callableName);
+    const invocation = new RegExp('\\b' + escapedName + '\\s*\\(');
+    const definition = new RegExp(
+        '^\\s*(?:async\\s+)?def\\s+' + escapedName + '\\s*\\('
+    );
+    return code.split(/\r?\n/).some(line => !definition.test(line) && invocation.test(line));
+}
+
+interface TargetCallReference {
+    callableNames: string[];
+    moduleExpressions: string[];
+    importedAliases: string[];
+    classExpressions: string[];
+    instanceExpressions: string[];
+}
+
+function targetCallReference(code: string, callableName: string, targetModule?: string,
+                             targetClassName?: string | null): TargetCallReference {
+    const importedAliases = new Set<string>();
+    const callableNames = new Set<string>([callableName]);
+    const moduleExpressions = new Set<string>();
+    const classExpressions = new Set<string>();
+    const instanceExpressions = new Set<string>();
+    const escapedCallable = escapeRegex(callableName);
+
+    for (const line of code.split(/\r?\n/)) {
+        if (/^\s*from\s+/.test(line)) {
+            const aliasMatch = line.match(new RegExp('\\b' + escapedCallable + '\\s+as\\s+([A-Za-z_]\\w*)'));
+            if (aliasMatch) {
+                callableNames.add(aliasMatch[1]);
+                importedAliases.add(aliasMatch[1]);
+            }
+            if (targetClassName && targetModule) {
+                const classImport = line.match(new RegExp(
+                    '^\\s*from\\s+' + escapeRegex(targetModule) + '\\s+import\\s+[^#]*\\b'
+                    + escapeRegex(targetClassName) + '(?:\\s+as\\s+([A-Za-z_]\\w*))?'
+                ));
+                if (classImport) {
+                    classExpressions.add(classImport[1] || targetClassName);
+                }
+            }
+        }
+
+        if (!targetModule || !/^\s*import\s+/.test(line)) {
+            continue;
+        }
+        const imported = line.replace(/^\s*import\s+/, '').split('#', 1)[0];
+        for (const part of imported.split(',')) {
+            const match = part.trim().match(/^([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+            if (!match || match[1].split('.').pop() !== targetModule.split('.').pop()) {
+                continue;
+            }
+            moduleExpressions.add(match[2] || match[1]);
+            if (match[2]) {
+                importedAliases.add(match[2]);
+            }
+        }
+    }
+    if (targetClassName) {
+        for (const moduleExpression of moduleExpressions) {
+            classExpressions.add(`${moduleExpression}.${targetClassName}`);
+        }
+        const classPattern = [...classExpressions].map(escapeRegex).join('|');
+        if (classPattern) {
+            const assignment = new RegExp(
+                '^\\s*((?:self\\.)?[A-Za-z_]\\w*)\\s*=\\s*(?:' + classPattern + ')\\s*\\('
+            );
+            for (const line of code.split(/\r?\n/)) {
+                const match = line.match(assignment);
+                if (match) {
+                    instanceExpressions.add(match[1]);
+                }
+            }
+        }
+    }
+    return {
+        callableNames: [...callableNames],
+        moduleExpressions: [...moduleExpressions],
+        importedAliases: [...importedAliases],
+        classExpressions: [...classExpressions],
+        instanceExpressions: [...instanceExpressions],
+    };
+}
+
+function invokesTargetCall(code: string, reference: TargetCallReference): boolean {
+    if (reference.classExpressions.length > 0) {
+        const method = escapeRegex(reference.callableNames[0]);
+        const classCall = reference.classExpressions.some(classExpression => {
+            const escapedClass = escapeRegex(classExpression);
+            return new RegExp('\\b' + escapedClass + '\\s*\\.\\s*' + method + '\\s*\\(').test(code)
+                || new RegExp('\\b' + escapedClass + '\\s*\\([^\\n]*?\\)\\s*\\.\\s*'
+                    + method + '\\s*\\(').test(code);
+        });
+        if (classCall) {
+            return true;
+        }
+        return reference.instanceExpressions.some(instanceExpression =>
+            new RegExp('\\b' + escapeRegex(instanceExpression) + '\\s*\\.\\s*' + method + '\\s*\\(').test(code)
+        );
+    }
+    return code.split(/\r?\n/).some(line => {
+        for (const name of reference.callableNames) {
+            if (invokesCallable(line, name)) {
+                return true;
+            }
+        }
+        return reference.moduleExpressions.some(moduleExpression =>
+            new RegExp('\\b' + escapeRegex(moduleExpression) + '\\s*\\.\\s*'
+                + escapeRegex(reference.callableNames[0]) + '\\s*\\(').test(line)
+        );
+    });
+}
+
+function shadowsImportedAlias(code: string, aliases: string[]): string | undefined {
+    return aliases.find(alias => {
+        const escapedAlias = escapeRegex(alias);
+        return new RegExp('^\\s*(?:async\\s+)?def\\s+' + escapedAlias + '\\s*\\(', 'm').test(code)
+            || new RegExp('^\\s*' + escapedAlias + '\\s*=(?!=)', 'm').test(code);
+    });
+}
+
+function accessesProperty(code: string, propertyName: string): boolean {
+    const escapedName = escapeRegex(propertyName);
+    const access = new RegExp('\\.\\s*' + escapedName + '\\b');
+    return code.split(/\r?\n/).some(line => !/^\s*(?:from|import)\b/.test(line) && access.test(line));
+}
+
+function testMethodBlocks(code: string): string[] {
+    const headers = [...code.matchAll(/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\([^\n]*\)\s*:/gm)];
+    return headers.map((header, index) => {
+        const start = header.index || 0;
+        const end = headers[index + 1]?.index ?? code.length;
+        return code.slice(start, end);
+    });
+}
+
+function hasAssertion(code: string): boolean {
+    return /\bself\.assert[A-Za-z_]*\s*\(|(?<![\w.])assert\s+/m.test(code);
+}
+
+/**
+ * Resolve only standard-library unittest bases that are explicitly imported by
+ * the generated file. Models commonly prefer `from unittest import TestCase`
+ * or `import unittest as ut`; both forms are equivalent to the canonical
+ * spelling and should not be rejected merely for their style.
+ */
+function unittestTestCaseExpressions(code: string): string[] {
+    const expressions = new Set<string>();
+    for (const line of code.split(/\r?\n/)) {
+        const namespaceImport = line.match(/^\s*import\s+unittest(?:\s+as\s+([A-Za-z_]\w*))?\s*(?:#.*)?$/);
+        if (namespaceImport) {
+            const namespace = namespaceImport[1] || 'unittest';
+            expressions.add(`${namespace}.TestCase`);
+            expressions.add(`${namespace}.IsolatedAsyncioTestCase`);
+            continue;
+        }
+        const directImport = line.match(/^\s*from\s+unittest\s+import\s+(.+?)\s*(?:#.*)?$/);
+        if (!directImport) {
+            continue;
+        }
+        for (const part of directImport[1].split(',')) {
+            const imported = part.trim().match(/^(TestCase|IsolatedAsyncioTestCase)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+            if (imported) {
+                expressions.add(imported[2] || imported[1]);
+            }
+        }
+    }
+    return [...expressions];
+}
+
+function hasUnittestTestCaseClass(code: string): boolean {
+    const bases = unittestTestCaseExpressions(code);
+    if (bases.length === 0) {
+        return false;
+    }
+    const basePattern = bases.map(escapeRegex).join('|');
+    return new RegExp(
+        '^\\s*class\\s+\\w+\\s*\\(\\s*(?:' + basePattern + ')\\s*\\)\\s*:',
+        'm'
+    ).test(code);
+}
+
+function lineUsesTarget(line: string, callableName: string, targetUsage: TargetUsage,
+                        callReference?: TargetCallReference): boolean {
+    return targetUsage === 'property'
+        ? accessesProperty(line, callableName)
+        : invokesTargetCall(line, callReference || targetCallReference('', callableName));
+}
+
+function hasTargetResultAssertion(block: string, callableName: string, targetUsage: TargetUsage,
+                                  callReference: TargetCallReference): boolean {
+    const lines = block.split(/\r?\n/);
+    const assignedResults = new Set<string>();
+
+    for (const line of lines) {
+        if (hasAssertion(line) && lineUsesTarget(line, callableName, targetUsage, callReference)) {
+            return true;
+        }
+
+        const assignment = line.match(/^\s*([A-Za-z_]\w*)\s*=(?!=)/);
+        if (assignment && lineUsesTarget(line, callableName, targetUsage, callReference)) {
+            assignedResults.add(assignment[1]);
+            continue;
+        }
+
+        if (hasAssertion(line) && [...assignedResults].some(name =>
+            new RegExp('\\b' + escapeRegex(name) + '\\b').test(line)
+        )) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function hasTargetInAssertRaises(block: string, callableName: string, targetUsage: TargetUsage,
+                                 callReference: TargetCallReference): boolean {
+    const lines = block.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+        const context = lines[index].match(/^(\s*)with\s+.*\bself\.assertRaises(?:Regex)?\s*\(/);
+        if (!context) {
+            continue;
+        }
+        const contextIndent = context[1].length;
+        for (let nested = index + 1; nested < lines.length; nested++) {
+            const line = lines[nested];
+            if (!line.trim()) {
+                continue;
+            }
+            const indent = line.match(/^\s*/)?.[0].length ?? 0;
+            if (indent <= contextIndent) {
+                break;
+            }
+            if (lineUsesTarget(line, callableName, targetUsage, callReference)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function hasBehavioralTargetTest(code: string, callableName: string, targetUsage: TargetUsage,
+                                 callReference: TargetCallReference): boolean {
+    return testMethodBlocks(code).some(block =>
+        hasTargetResultAssertion(block, callableName, targetUsage, callReference)
+        || hasTargetInAssertRaises(block, callableName, targetUsage, callReference)
+    );
+}
+
+/**
+ * Detect a common LLM hallucination in dependency tests: it mutates a local
+ * object returned by some helper, then calls the target without ever passing
+ * that object to it or configuring it as a mock return value.  Such a change
+ * cannot affect the target invocation and therefore cannot validate the
+ * claimed dependency path.
+ */
+function hasIneffectiveLocalDependencyMutation(block: string, callableName: string,
+                                               callReference: TargetCallReference): boolean {
+    const lines = block.split(/\r?\n/);
+    const targetLines = lines.filter(line => invokesTargetCall(line, callReference));
+    if (targetLines.length === 0) {
+        return false;
+    }
+
+    for (let index = 0; index < lines.length; index++) {
+        const assignment = lines[index].match(/^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*\(/);
+        if (!assignment || callReference.callableNames.includes(assignment[2])) {
+            continue;
+        }
+        const localName = assignment[1];
+        const escapedLocal = escapeRegex(localName);
+        const localMutation = new RegExp(
+            '^\\s*' + escapedLocal + '(?:\\s*\\[[^\\]]+\\]|\\.[A-Za-z_]\\w*)\\s*='
+        );
+        const mutatesLocalValue = lines.slice(index + 1).some(line => localMutation.test(line));
+        if (!mutatesLocalValue) {
+            continue;
+        }
+        const reachesTarget = targetLines.some(line => new RegExp('\\b' + escapedLocal + '\\b').test(line));
+        const injectsIntoMock = lines.some(line =>
+            new RegExp('\\b' + escapedLocal + '\\b').test(line)
+            && /\b(?:patch|return_value|side_effect)\b/.test(line)
+        );
+        if (!reachesTarget && !injectsIntoMock) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * A dependency call whose assigned result is never read cannot influence the
+ * target call, an assertion, or a mock. Reject this dead setup while allowing
+ * values that are actually passed to the target or injected into a mock.
+ */
+function unusedNonTargetCallAssignment(block: string, callableName: string,
+                                       callReference: TargetCallReference): string | undefined {
+    const lines = block.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+        const assignment = lines[index].match(
+            /^\s*([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(/
+        );
+        if (!assignment || lineUsesTarget(lines[index], callableName, 'call', callReference)) {
+            continue;
+        }
+        const localName = assignment[1];
+        const remaining = lines.slice(index + 1).join('\n');
+        if (!new RegExp('\\b' + escapeRegex(localName) + '\\b').test(remaining)) {
+            return localName;
+        }
+    }
+    return undefined;
+}
+
+function shadowsTargetModule(code: string, moduleName: string): boolean {
+    const quotedModule = "['\"]" + escapeRegex(moduleName) + "['\"]";
+    const moduleRegistryWrite = new RegExp(
+        '\\bsys\\.modules\\s*\\[\\s*' + quotedModule + '\\s*\\]\\s*='
+    );
+    const dynamicTargetModule = new RegExp(
+        '\\b(?:types\\.)?ModuleType\\s*\\(\\s*' + quotedModule
+    );
+    return moduleRegistryWrite.test(code) || dynamicTargetModule.test(code);
+}
+
+const UNSAFE_TEST_OPERATIONS: Array<{ pattern: RegExp; label: string }> = [
+    { pattern: /\b(?:os\.)?(?:system|popen)\s*\(/, label: "啟動 shell 指令" },
+    { pattern: /\bsubprocess\s*\.\s*(?:run|call|check_call|check_output|Popen)\s*\(/, label: "啟動子程序" },
+    { pattern: /\b(?:socket\s*\.\s*(?:create_connection|socket)|requests\s*\.\s*\w+|urllib\s*\.\s*request\s*\.\s*urlopen|http\s*\.\s*client)\s*\(/, label: "直接網路存取" },
+    { pattern: /\b(?:eval|exec|compile|__import__)\s*\(/, label: "動態執行程式碼" },
+    { pattern: /\bopen\s*\(/, label: "直接檔案存取" },
+    { pattern: /\b(?:pathlib\s*\.\s*)?Path\s*\([^\n]*\)\s*\.\s*(?:open|read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|replace)\s*\(/, label: "直接檔案存取" },
+    { pattern: /\b[A-Za-z_]\w*(?:\s*\[[^\]]+\])?\s*\.\s*(?:read_text|read_bytes|write_text|write_bytes|touch|mkdir|rename|unlink|rmdir)\s*\(/, label: "直接檔案存取" },
+    { pattern: /\b(?:shutil\s*\.\s*rmtree|os\s*\.\s*(?:remove|unlink|rmdir|replace)|pathlib\s*\.\s*Path\s*\([^\n]*\)\s*\.\s*(?:unlink|rmdir))\s*\(/, label: "破壞性檔案操作" },
+    { pattern: /\bsqlite3\s*\.\s*connect\s*\(\s*(?!['\"]:memory:['\"]\s*\))/, label: "非隔離 SQLite 資料庫連線" },
+];
+
+function unsafeTestOperation(code: string): string | undefined {
+    const label = UNSAFE_TEST_OPERATIONS.find(operation => operation.pattern.test(code))?.label;
+    return label ? localize(label) : undefined;
+}
+
+function unimportedPrivateHelperCall(code: string): string | undefined {
+    const importedOrDefined = new Set<string>();
+    for (const line of code.split(/\r?\n/)) {
+        const definition = line.match(/^\s*(?:async\s+)?def\s+(_[A-Za-z_]\w*)\s*\(/);
+        if (definition) {
+            importedOrDefined.add(definition[1]);
+        }
+        const imported = line.match(/^\s*from\s+[^\s]+\s+import\s+(.+)$/);
+        if (imported) {
+            for (const item of imported[1].split(',')) {
+                const name = item.trim().match(/^(_[A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+                if (name) {
+                    importedOrDefined.add(name[2] || name[1]);
+                }
+            }
+        }
+    }
+    for (const line of code.split(/\r?\n/)) {
+        if (/^\s*(?:from|import|(?:async\s+)?def)\b/.test(line)) {
+            continue;
+        }
+        const call = line.match(/(?:^|[^\w.])(_[A-Za-z_]\w*)\s*\(/);
+        if (call && !importedOrDefined.has(call[1])) {
+            return call[1];
+        }
+    }
+    return undefined;
+}
+
+function invokesTargetPrivateHelper(code: string, callableName: string,
+                                    callReference: TargetCallReference): string | undefined {
+    for (const moduleExpression of callReference.moduleExpressions) {
+        const match = code.match(new RegExp('\\b' + escapeRegex(moduleExpression)
+            + '\\s*\\.\\s*(_[A-Za-z_]\\w*)\\s*\\('));
+        if (match && match[1] !== callableName) {
+            return match[1];
+        }
+    }
+    return undefined;
+}
+
+function unsupportedAssertRaisesException(
+    code: string,
+    allowedExceptionNames: string[] | undefined
+): string | undefined {
+    // Omitted evidence preserves the standalone validator's compatibility.
+    // An explicit empty list means the target has no verified exception facts.
+    if (allowedExceptionNames === undefined) {
+        return undefined;
+    }
+    const allowed = new Set([...allowedExceptionNames, 'TypeError']);
+    const matches = code.matchAll(/\bself\.assertRaises(?:Regex)?\s*\(\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)/g);
+    for (const match of matches) {
+        const fullName = match[1];
+        const name = fullName.split('.').pop() || fullName;
+        if (allowed.has(name)) {
+            continue;
+        }
+        const escaped = escapeRegex(fullName);
+        const mockProvidesException = new RegExp(
+            '\\bside_effect\\s*=\\s*' + escaped + '\\b'
+        ).test(code);
+        if (!mockProvidesException) {
+            return name;
+        }
+    }
+    return undefined;
+}
+
+/** Extract code from the optional structured-output envelope used by capable APIs. */
+export function unwrapGeneratedCodeEnvelope(response: string): string {
+    try {
+        const parsed = JSON.parse(response);
+        if (parsed && typeof parsed === 'object' && typeof parsed.code === 'string') {
+            return parsed.code;
+        }
+    } catch {
+        // Plain code is the compatibility format for local and custom models.
+    }
+    return response;
+}
+
+/** Remove only a uniform transport indent, before trimming its first line.
+ * Literal continuation lines keep their exact bytes; inconsistent indentation
+ * and escaped-line syntax remain for the real Python parser to diagnose.
+ */
+function normalizePythonTransportBlock(code: string): string {
+    const block = code.replace(/^(?:[ \t]*\r?\n)+/, '').replace(/(?:\r?\n[ \t]*)+$/, '');
+    if (/\\\r?\n/.test(block)) { return block; }
+    const protectedLines = new Set<number>();
+    const executable = executablePythonText(block, protectedLines).split('\n');
+    const lines = block.split('\n');
+    const prefixes = executable.flatMap((line, index) => !protectedLines.has(index) && line.trim()
+        ? [line.match(/^[ \t]*/)?.[0] || ''] : []);
+    if (!prefixes.length) { return block; }
+    let prefix = prefixes[0];
+    for (const item of prefixes) {
+        while (prefix && !item.startsWith(prefix)) { prefix = prefix.slice(0, -1); }
+    }
+    // Mixed tabs and spaces do not establish a portable indentation unit.
+    if (!prefix || prefix.includes(' ') && prefix.includes('\t')) { return block; }
+    return lines.map((line, index) => !protectedLines.has(index) && line.startsWith(prefix)
+        ? line.slice(prefix.length) : line).join('\n');
+}
+
+/**
+ * Extract an unambiguous Python test fence from model output.
+ * Models differ on whether they label a fence as python, Python, py, or leave
+ * it blank.  The extractor never accepts prose: it returns a fence only when
+ * it contains unittest/TestCase evidence (or a test method in addition mode),
+ * otherwise it leaves the response for the normal structural validator to reject.
+ * Additions and method edits require a single complete fence. Method edits
+ * unwrap transport only: the AST compositor must see fixture-only and other
+ * out-of-scope Python rather than mistake its rejected wrapper for syntax.
+ */
+export function extractPythonTestCode(response: string, shape: 'file' | 'addition' | 'method-edit' = 'file'): string {
+    const raw = unwrapGeneratedCodeEnvelope(response);
+    const unwrapped = raw.trim();
+    // Legacy model wrappers are transport markup, never Python expressions.
+    const wrapper = unwrapped.match(/^\[(python|pytest)\]\s*\r?\n([\s\S]*?)\r?\n\[\/\1\]$/i);
+    if (wrapper) { return extractPythonTestCode(wrapper[2], shape); }
+    const fencedBlocks: Array<{ language: string; code: string }> = [];
+    const literalLines = new Set<number>();
+    executablePythonText(unwrapped, literalLines);
+    const fence = /^[ \t]*```([^\r\n`]*)[ \t]*$/gm;
+    let opening: { language: string; bodyStart: number } | undefined;
+    let match: RegExpExecArray | null;
+    while ((match = fence.exec(unwrapped)) !== null) {
+        const openingLine = unwrapped.slice(0, match.index).split('\n').length - 1;
+        if (literalLines.has(openingLine)) { continue; }
+        if (!opening) {
+            const after = match.index + match[0].length;
+            const newline = unwrapped.slice(after).match(/^\r?\n/);
+            if (newline) { opening = { language: match[1].trim().toLowerCase(), bodyStart: after + newline[0].length }; }
+        } else if (!match[1].trim()) {
+            fencedBlocks.push({ language: opening.language, code: unwrapped.slice(opening.bodyStart, match.index) });
+            opening = undefined;
+        }
+    }
+    if (fencedBlocks.length === 0) {
+        const bracket = unwrapped.match(/^\[PYTHON\]([\s\S]*?)\[\/PYTHON\]$/i);
+        return normalizePythonTransportBlock(bracket ? bracket[1] : raw);
+    }
+
+    if (shape !== 'file' && (fencedBlocks.length !== 1 || opening)) { return unwrapped; }
+
+    const hasUnittestEvidence = (block: { language: string; code: string }) => {
+        if (shape === 'file') { return /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(block.code); }
+        if (!['', 'python', 'py', 'json'].includes(block.language)) { return false; }
+        if (shape === 'method-edit') { return true; }
+        const code = executablePythonText(unwrapGeneratedCodeEnvelope(block.code));
+        return /\b(?:unittest|TestCase|IsolatedAsyncioTestCase)\b/.test(code)
+            || /^[ \t]*(?:async[ \t]+)?def[ \t]+test[\p{ID_Continue}]*[ \t]*\(/mu.test(code);
+    };
+    const candidates = fencedBlocks.filter(hasUnittestEvidence);
+    // Multiple complete candidates are ambiguous: do not silently choose one.
+    if (candidates.length !== 1) { return unwrapped; }
+    const preferred = candidates.find(block =>
+        (block.language === 'python' || block.language === 'py') && hasUnittestEvidence(block)
+    ) || candidates[0];
+    // Some providers wrap the structured {"code": "..."} contract in a
+    // ```json fence. Select the evidence-bearing fence first, then unwrap its
+    // single code field as a second, format-only step. Unknown JSON shapes
+    // remain untouched and are rejected by the normal structural validator.
+    return normalizePythonTransportBlock(unwrapGeneratedCodeEnvelope(preferred.code));
+}
+
+/**
+ * Fast, deterministic guard before invoking Python's parser. This keeps prose,
+ * Markdown plans, and incomplete snippets out of the generated test path.
+ */
+export function validateUnittestStructure(
+    code: string,
+    targetCallable?: string,
+    targetModule?: string,
+    targetUsage: TargetUsage = 'call',
+    allowedExceptionNames?: string[],
+    targetClassName?: string | null,
+    deferMockBehaviorToAst = false
+): GeneratedTestValidation {
+    const trimmed = code.trim();
+    if (!trimmed) {
+        return { valid: false, reason: localize("輸出為空") };
+    }
+    if (/^\s*\[\/?(?:pytest|python)\]\s*$/im.test(executablePythonText(trimmed))) {
+        return { valid: false, reason: localize("輸出含有不完整或未擷取的 code wrapper；請輸出單一完整 Python code fence") };
+    }
+    if (/```|^\s*[-*]\s+/m.test(trimmed)) {
+        return { valid: false, reason: localize("輸出包含 Markdown，而不是純 Python 測試檔") };
+    }
+    if (!/^\s*(?:from\s+unittest\s+import|import\s+unittest\b)/m.test(trimmed)) {
+        return { valid: false, reason: localize("缺少 unittest import") };
+    }
+    if (!hasUnittestTestCaseClass(trimmed)) {
+        return { valid: false, reason: localize("缺少已明確匯入的 unittest.TestCase 或 unittest.IsolatedAsyncioTestCase 類別") };
+    }
+    if (!/^\s+(?:async\s+)?def\s+test_[A-Za-z_]\w*\s*\(/m.test(trimmed)) {
+        return { valid: false, reason: localize("缺少 test_ 測試方法") };
+    }
+    const mockCandidate = deferMockBehaviorToAst && /\.(?:assert_called(?:_once)?(?:_with)?|assert_any_call|assert_has_calls|assert_not_called|assert_awaited(?:_once)?(?:_with)?|assert_any_await|assert_has_awaits|assert_not_awaited)\s*\(/.test(executablePythonText(trimmed));
+    let requiresMockBehaviorEvidence = !hasAssertion(trimmed) && mockCandidate;
+    if (!hasAssertion(trimmed) && !mockCandidate) {
+        return { valid: false, reason: localize("缺少可驗證行為的 assertion 或 assertRaises") };
+    }
+    const unsafeOperation = unsafeTestOperation(trimmed);
+    if (unsafeOperation) {
+        return {
+            valid: false,
+            reason: localize("測試包含不允許的{0}；請以 unittest.mock.patch 模擬外部或危險操作。", unsafeOperation)
+        };
+    }
+    if (targetCallable) {
+        const executable = executablePythonText(trimmed);
+        const unsupportedException = unsupportedAssertRaisesException(executable, allowedExceptionNames);
+        if (unsupportedException) {
+            return {
+                valid: false,
+                reason: localize("assertRaises({0}) 沒有目標原始碼、已驗證行為觀測或 mock side_effect 的例外事實依據。", unsupportedException)
+            };
+        }
+        const callReference = targetCallReference(executable, targetCallable, targetModule, targetClassName);
+        const barePrivateHelper = unimportedPrivateHelperCall(executable);
+        if (barePrivateHelper) {
+            const targetParts = targetCallable.split('.');
+            const targetLeaf = targetParts.at(-1)!;
+            const targetOwner = targetClassName || (targetParts.length > 1 ? targetParts[0] : undefined);
+            const targetImport = targetModule ? `from ${targetModule} import ${targetOwner || targetLeaf}` : 'Target import';
+            return {
+                valid: false,
+                reason: barePrivateHelper === targetLeaf
+                    ? targetOwner
+                        ? localize("測試將被測方法 {0} 當作未匯入的頂層函式；請依 Target import 匯入其擁有類別（{1}），並依 Target binding 使用類別或已驗證實例；不可把方法當作同名頂層函式、patch 或替換被測目標。", targetCallable, targetImport)
+                        : localize("測試呼叫未匯入的被測目標 {0}；請依 Target import 明確匯入（{1}），並呼叫真實目標；不可 patch 或替換被測目標。", targetCallable, targetImport)
+                    : localize("測試呼叫未匯入的私有 helper {0}；請改用 module point-of-use patch 或明確匯入。", barePrivateHelper)
+            };
+        }
+        const targetPrivateHelper = invokesTargetPrivateHelper(executable, targetCallable, callReference);
+        if (targetPrivateHelper) {
+            return {
+                valid: false,
+                reason: localize("測試直接呼叫被測模組私有 helper {0}；請 patch 該使用點而非直接操作內部狀態。", targetPrivateHelper)
+            };
+        }
+        if (definesCallable(executable, targetCallable)) {
+            return { valid: false, reason: localize("測試檔重新定義了被測函式 ") + targetCallable + localize("，可能沒有測到原始模組") };
+        }
+        const shadowedAlias = shadowsImportedAlias(executable, callReference.importedAliases);
+        if (shadowedAlias) {
+            return { valid: false, reason: localize("測試檔重新定義了被測函式的匯入別名 ") + shadowedAlias + localize("，可能沒有測到原始模組") };
+        }
+        if (!deferMockBehaviorToAst && (targetUsage === 'property' ? !accessesProperty(executable, targetCallable) : !invokesTargetCall(executable, callReference))) {
+            return { valid: false, reason: targetUsage === 'property'
+                ? localize("測試沒有讀取被測 property ") + targetCallable
+                : localize("測試沒有呼叫被測函式 ") + targetCallable };
+        }
+        if (!hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && !mockCandidate && !deferMockBehaviorToAst) {
+            return { valid: false, reason: targetUsage === 'property'
+                ? localize("沒有同時讀取被測 property 並驗證行為的 test_ 方法")
+                : localize("沒有同時呼叫被測函式並驗證行為的 test_ 方法") };
+        }
+        requiresMockBehaviorEvidence ||= !hasBehavioralTargetTest(executable, targetCallable, targetUsage, callReference) && mockCandidate;
+        if (targetUsage === 'call' && testMethodBlocks(executable).some(block =>
+            hasIneffectiveLocalDependencyMutation(block, targetCallable, callReference)
+        )) {
+            return {
+                valid: false,
+                reason: localize("測試只修改未傳入被測函式、也未注入 mock 的本地相依物件，無法驗證相依路徑")
+            };
+        }
+        if (targetUsage === 'call') {
+            for (const block of testMethodBlocks(executable)) {
+                const unusedSetup = unusedNonTargetCallAssignment(block, targetCallable, callReference);
+                if (unusedSetup) {
+                    return {
+                        valid: false,
+                        reasonCode: 'writer-unused-dependency-setup', unusedSetupName: unusedSetup,
+                        reason: localize("測試直接呼叫相依函式後將 {0} 存入未使用變數；請移除無效 setup，或在被測模組使用點以 mock.patch 注入相依行為。", unusedSetup)
+                    };
+                }
+            }
+        }
+    }
+    if (targetModule && shadowsTargetModule(trimmed, targetModule)) {
+        return { valid: false, reason: localize("測試檔嘗試以動態模組替換被測模組 ") + targetModule };
+    }
+    return { valid: true, ...(requiresMockBehaviorEvidence ? { requiresMockBehaviorEvidence: true } : {}),
+        ...(deferMockBehaviorToAst && targetCallable ? { requiresTargetBehaviorEvidence: true } : {}) };
+}

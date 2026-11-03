@@ -1,0 +1,784 @@
+"""Source-bound, empty test resources; source files and module origins never move.
+
+The host owns the outer lease and removes it after the complete child tree exits.
+One worker owns one child directory, shared by its import and execution guards.
+This augments runtime_policy, not an OS sandbox for hostile native extensions.
+Resource handles returned to generated tests are outside the supported contract:
+native file objects are not proxied because that would change their type semantics.
+"""
+from contextlib import ExitStack, contextmanager
+import atexit
+import builtins
+import hashlib
+import io
+import json
+import math
+import ntpath
+import os
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+import stat
+import sys
+import tempfile
+import threading
+from unittest.mock import patch
+
+LEASE_ENV = 'LLM_UNIT_TEST_RESOURCE_LEASE'
+LEASE_MARKER = '.llm-unit-test-resource-lease.json'
+_ORIGINAL_OPEN = builtins.open
+_ORIGINAL_STAT = os.stat
+_ORIGINAL_LSTAT = os.lstat
+_ORIGINAL_CONNECT = sqlite3.connect
+_SESSIONS = {}
+_GENERATED_TEST_FILES = set()
+_GENERATED_TEST_SPELLINGS = []
+_REDIRECT_CODES = set()
+_IDENTIFIER = re.compile(r'[A-Za-z_]\w{0,63}', re.ASCII)
+_FORBIDDEN_SUFFIXES = {'.py', '.pyc', '.pyo', '.so', '.pyd', '.dll', '.exe', '.sh', '.bat', '.cmd', '.ps1'}
+
+
+def absolute(path):
+    if os.name == 'nt' and is_unc_or_device(path):
+        # UNC identity is lexical. Never ask Windows to resolve its location.
+        return ntpath.normpath(os.fsdecode(path)).lower()
+    return os.path.normcase(os.path.abspath(os.path.normpath(os.fsdecode(path))))
+
+
+def inside(path, root):
+    try:
+        if os.name == 'nt' and (is_unc_or_device(path) or is_unc_or_device(root)):
+            def comparable(value):
+                value = absolute(value).replace('\\', '/').rstrip('/')
+                return '//' + value[8:] if value.startswith('//?/unc/') else value
+            path, root = comparable(path), comparable(root)
+            return path == root or path.startswith(root + '/')
+        return os.path.commonpath((absolute(path), absolute(root))) == absolute(root)
+    except (ValueError, TypeError):
+        return False
+
+
+def is_unc_or_device(value):
+    if not isinstance(value, (str, bytes, os.PathLike)):
+        return False
+    spelling = os.fsdecode(value).replace('\\', '/')
+    return spelling.startswith('//') or os.name == 'nt' and spelling.startswith('/??/')
+
+
+def _logical_relative(path, root):
+    if os.name == 'nt' and is_unc_or_device(path):
+        path, root = unc_resource_identity(os.fsdecode(path)), unc_resource_identity(os.fsdecode(root))
+        if path != root and not path.startswith(root + '/'):
+            raise ValueError('Virtual UNC resource escapes declared root')
+        return path[len(root):].lstrip('/') or '.'
+    return os.path.relpath(path, root)
+
+
+def set_generated_test_file(path):
+    """Runner registers the actual generated module before importing any tests."""
+    if path:
+        _GENERATED_TEST_FILES.add(absolute(path))
+        # Filename aliases must be denied too, including short basenames under
+        # an otherwise long source root. Only the actual test file is queried.
+        try:
+            _GENERATED_TEST_SPELLINGS.extend(_source_path_spellings((path,), include_parent=False))
+        except FileNotFoundError:
+            pass
+
+
+def is_redirect_frame(frame):
+    return frame.f_code in _REDIRECT_CODES
+
+
+def _has_link(path):
+    """Reject links/junctions, including existing ancestors of a new resource."""
+    spelling = os.fsdecode(path).replace('\\', '/')
+    # This helper also protects leases/aliases. Refuse network/device spellings
+    # before normalization or metadata calls, even outside declaration parsing.
+    if spelling.startswith('//') or os.name == 'nt' and spelling.startswith('/??/'):
+        return True
+    current = Path(absolute(path))
+    if str(current).replace('\\', '/').startswith('//'):
+        return True
+    # Descendant lstat would already traverse an intermediate junction. Inspect
+    # from the filesystem anchor first and stop before crossing any such link.
+    for item in reversed((current, *current.parents)):
+        try:
+            info = _ORIGINAL_LSTAT(item)
+        except FileNotFoundError:
+            return False
+        if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 1024:
+            return True
+    return False
+
+
+def _source_path_spellings(roots, *, include_parent=True):
+    """Resolve aliases of approved existing source anchors, never resource paths.
+
+    Python code filenames may retain Windows 8.3 spelling even when the host
+    plan uses the native long name. Record only those proven root/parent aliases
+    before installing I/O guards; later comparisons are purely lexical.
+    """
+    if os.name != 'nt':
+        return []
+    import ctypes
+    short_path = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+    short_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    short_path.restype = ctypes.c_uint32
+    aliases = {}
+    for root in roots:
+        if not root or is_unc_or_device(root):
+            continue
+        if _has_link(root):
+            raise ValueError('Isolated resource source anchor uses a link')
+        canonical = absolute(os.path.realpath(root, strict=True))
+        anchors = [(absolute(root), canonical)]
+        if include_parent:
+            anchors.append((absolute(os.path.dirname(root)), os.path.dirname(canonical)))
+        for recorded, anchor in anchors:
+            buffer = ctypes.create_unicode_buffer(32768)
+            length = short_path(anchor, buffer, len(buffer))
+            if not length or length >= len(buffer):
+                raise ValueError('Isolated resource source identity unavailable')
+            for spelling in (recorded, absolute(buffer.value)):
+                previous = aliases.get(spelling)
+                if previous is not None and previous != anchor:
+                    raise ValueError('Conflicting isolated resource source identity')
+                aliases[spelling] = anchor
+    return sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True)
+
+
+def _known_source_identity(value, spellings):
+    canonical = absolute(value)
+    if os.name != 'nt' or is_unc_or_device(canonical):
+        return canonical
+    parts = canonical.split(os.sep)
+    for spelling, anchor in spellings:
+        short_parts, long_parts = spelling.split(os.sep), anchor.split(os.sep)
+        # Windows can preserve a mixture of long and short ancestor names.
+        # Every accepted component must be one of the two names proven by the
+        # native query for this exact source anchor, never a guessed prefix.
+        count = len(long_parts)
+        if len(short_parts) == count and len(parts) >= count and all(
+                part in (short_parts[index], long_parts[index]) for index, part in enumerate(parts[:count])):
+            return absolute(os.path.join(anchor, *parts[count:]))
+    return canonical
+
+
+def _relative_path(value):
+    if (type(value) is not str or not 1 <= len(value) <= 240 or '\\' in value or ':' in value
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+            or any(char in value for char in '<>"|?*')
+            or value.startswith('/') or any(part in ('', '.', '..') or part.endswith(('.', ' '))
+                or re.fullmatch(r'(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', part, re.I)
+                for part in value.split('/'))
+            or Path(value).suffix.lower() in _FORBIDDEN_SUFFIXES):
+        raise ValueError('Invalid isolated resource path')
+    return value
+
+
+def _external_path(value):
+    """Validate a native absolute declaration, in canonical slash spelling."""
+    if type(value) is not str or not 1 <= len(value) <= 240 or '\\' in value:
+        raise ValueError('Invalid isolated external resource path')
+    if os.name == 'nt':
+        if not re.match(r'^[A-Za-z]:/', value):
+            raise ValueError('External resource requires a local drive absolute path')
+        tail = value[3:]
+        # Match host policy: do not inspect a virtual external location to
+        # discover whether its spelling aliases the selected source tree.
+        if any(re.search(r'~[0-9]+(?:\.|$)', part) for part in tail.split('/')):
+            raise ValueError('External resource requires an unambiguous long path')
+    else:
+        if not value.startswith('/') or value.startswith('//'):
+            raise ValueError('External resource requires a local absolute path')
+        tail = value[1:]
+    _relative_path(tail)
+    return value
+
+
+def external_resource_identity(value):
+    """Same platform-aware canonical identity used by the host plan/hash."""
+    return absolute(value).replace('\\', '/')
+
+
+def unc_resource_identity(value):
+    """Validate an approved virtual UNC identifier without consulting Windows."""
+    if os.name != 'nt' or type(value) is not str or not 1 <= len(value) <= 240:
+        raise ValueError('Invalid virtual UNC resource path')
+    value = value.replace('\\', '/')
+    if not value.startswith('//'):
+        raise ValueError('Virtual UNC resource requires server and share')
+    parts = value[2:].split('/')
+    if len(parts) == 3 and parts[-1] == '':
+        parts.pop()  # The share root's customary trailing slash is lexical.
+    if len(parts) < 2 or parts[1].lower() == 'ipc$':
+        raise ValueError('Invalid virtual UNC share')
+    _relative_path('/'.join(parts))
+    return '//' + '/'.join(parts).lower()
+
+
+def _unsafe_raw_components(value):
+    # Windows abspath normalizes away trailing dots/spaces. Inspect the spelling
+    # before normalization, so an invalid requested name cannot become valid.
+    tail = os.path.splitdrive(os.fsdecode(value))[1]
+    return any(part not in ('', '.', '..') and (part.endswith(('.', ' '))
+        or any(char in part for char in ':<>"|?*')
+        or any(ord(char) < 32 or ord(char) == 127 for char in part)
+        or re.fullmatch(r'(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', part, re.I))
+        for part in tail.replace('\\', '/').split('/'))
+
+
+def logical_resource_path(root, spec):
+    """Resolve only an explicit project path or a disjoint sibling declaration.
+
+    This is a logical binding. Callers must never read/copy this path's contents.
+    In particular, a project-parent resource cannot include the selected source
+    root, even when it is a file resource rather than a directory mount.
+    """
+    root = absolute(root)
+    scope = spec.get('scope')
+    if scope is not None and scope not in ('project-parent', 'external-exact', 'unc-virtual') or 'scope' in spec and scope is None:
+        raise ValueError('Invalid isolated resource scope')
+    if scope == 'unc-virtual':
+        logical = absolute(unc_resource_identity(spec.get('path')))
+        if inside(logical, root) or inside(root, logical):
+            raise ValueError('Virtual UNC resource must be disjoint from source')
+        return logical  # No link/stat/realpath operation is valid on this name.
+    if scope == 'external-exact':
+        logical = absolute(_external_path(spec.get('path')))
+        if inside(logical, os.path.dirname(root)) or inside(root, logical):
+            raise ValueError('External resource must be outside project-parent scope and source')
+    else:
+        relative = _relative_path(spec.get('path'))
+        anchor = os.path.dirname(root) if scope == 'project-parent' else root
+        logical = absolute(os.path.join(anchor, relative))
+        if logical == anchor or not inside(logical, anchor) or logical == os.path.dirname(logical):
+            raise ValueError('Isolated resource path escapes declared scope')
+        if scope == 'project-parent' and (inside(logical, root) or inside(root, logical)):
+            raise ValueError('Project-parent resource must be disjoint from source root')
+    if _has_link(logical):
+        raise ValueError('Isolated resource path uses a symlink or junction')
+    return logical
+
+
+def validate_resources(rule):
+    """Validate Python-side too; the worker never trusts a host environment alone."""
+    specs = rule.get('resources', [])
+    if type(specs) is not list or len(specs) > 16:
+        raise ValueError('Invalid isolated resource list')
+    approved = rule.get('resourceSourceHash')
+    if specs and (type(approved) is not str or not re.fullmatch('[a-f0-9]{64}', approved)
+                  or approved != rule.get('sourceHash')):
+        raise ValueError('Isolated resource source approval expired')
+    if not specs and approved is not None:
+        raise ValueError('Isolated resource approval has no resources')
+    for spec in specs:
+        if type(spec) is not dict or spec.get('kind') not in ('directory', 'text', 'sqlite'):
+            raise ValueError('Invalid isolated resource kind')
+        if 'scope' in spec and spec['scope'] not in ('project-parent', 'external-exact', 'unc-virtual'):
+            raise ValueError('Invalid isolated resource scope')
+        validator = {'external-exact': _external_path, 'unc-virtual': unc_resource_identity}.get(spec.get('scope'), _relative_path)
+        validator(spec.get('path'))
+        allowed = {'path', 'kind', 'scope'} | ({'text'} if spec['kind'] == 'text' else {'tables'} if spec['kind'] == 'sqlite' else set())
+        if set(spec) - allowed:
+            raise ValueError('Invalid isolated resource fields')
+        if spec['kind'] == 'text' and (type(spec.get('text')) is not str or len(spec['text'].encode('utf-8')) > 65536):
+            raise ValueError('Invalid isolated resource text')
+        if spec['kind'] != 'sqlite':
+            continue
+        tables = spec.get('tables', [])
+        if type(tables) is not list or len(tables) > 16:
+            raise ValueError('Invalid isolated SQLite tables')
+        names = set()
+        for table in tables:
+            if (type(table) is not dict or set(table) - {'name', 'columns', 'unique', 'rows'}
+                    or type(table.get('name')) is not str or not _IDENTIFIER.fullmatch(table['name'])
+                    or table['name'].lower().startswith('sqlite_') or table['name'].lower() in names):
+                raise ValueError('Invalid isolated SQLite table')
+            names.add(table['name'].lower())
+            columns = table.get('columns')
+            if type(columns) is not list or not 1 <= len(columns) <= 32:
+                raise ValueError('Invalid isolated SQLite columns')
+            column_names = set()
+            primary_keys = 0
+            for column in columns:
+                if (type(column) is not dict or set(column) - {'name', 'type', 'primaryKey', 'notNull', 'unique', 'autoIncrement', 'default'}
+                        or type(column.get('name')) is not str or not _IDENTIFIER.fullmatch(column['name'])
+                        or column['name'].lower() in column_names
+                        or column.get('type') not in ('INTEGER', 'REAL', 'TEXT', 'BLOB', 'NUMERIC')
+                        or any(key in column and type(column[key]) is not bool for key in ('primaryKey', 'notNull', 'unique', 'autoIncrement'))
+                        or column.get('autoIncrement') is True and (column.get('primaryKey') is not True or column['type'] != 'INTEGER')):
+                    raise ValueError('Invalid isolated SQLite column')
+                if 'default' in column:
+                    value = column['default']
+                    if not (value is None or type(value) is bool
+                            or type(value) is int and abs(value) <= 2 ** 53 - 1
+                            or type(value) is float and math.isfinite(value)
+                                and (not value.is_integer() or abs(value) <= 2 ** 53 - 1)
+                            or type(value) is str and '\0' not in value and len(value.encode('utf-8')) <= 4096):
+                        raise ValueError('Invalid isolated SQLite default literal')
+                column_names.add(column['name'].lower())
+                primary_keys += column.get('primaryKey', False)
+            if primary_keys > 1:
+                raise ValueError('Composite SQLite primary keys require an explicit supported schema')
+            rows = table.get('rows', [])
+            if type(rows) is not list or len(rows) > 256:
+                raise ValueError('Invalid isolated SQLite rows')
+            exact_names = {column['name'] for column in columns}
+            unique_groups = table.get('unique', [])
+            if type(unique_groups) is not list or len(unique_groups) > 16:
+                raise ValueError('Invalid isolated SQLite unique constraints')
+            unique_keys = set()
+            for group in unique_groups:
+                if (type(group) is not list or not 1 <= len(group) <= 32
+                        or any(type(name) is not str or name not in exact_names for name in group)
+                        or len(set(group)) != len(group)):
+                    raise ValueError('Invalid isolated SQLite unique columns')
+                key = tuple(sorted(group))
+                if key in unique_keys:
+                    raise ValueError('Duplicate isolated SQLite unique constraint')
+                unique_keys.add(key)
+            for row in rows:
+                if type(row) is not dict or set(row) - exact_names:
+                    raise ValueError('Invalid isolated SQLite row columns')
+                for value in row.values():
+                    if (value is not None and (type(value) not in (str, int, float, bool)
+                            or type(value) is str and len(value) > 4096
+                            or type(value) is int and not -(2 ** 63) <= value < 2 ** 63
+                            or type(value) is float and not math.isfinite(value))):
+                        raise ValueError('Invalid isolated SQLite cell')
+    return specs
+
+
+def _spec_key(spec):
+    # Windows aliases may differ only in path case. Scope and seed values retain
+    # their exact identity; normalizing data here would hide conflicting inputs.
+    normalized = {**spec, 'path': unc_resource_identity(spec['path']) if spec.get('scope') == 'unc-virtual'
+                  else os.path.normcase(spec['path'])}
+    return json.dumps(normalized, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+
+
+class _LogicalDirEntry:
+    """A local entry whose public path stays in the approved logical namespace."""
+    def __init__(self, entry, directory, resources):
+        self._entry, self._resources = entry, resources
+        self.name = entry.name
+        self.path = os.path.join(os.fspath(directory), self.name)
+
+    def __fspath__(self):
+        return self.path
+
+    def stat(self, *args, **kwargs):
+        self._resources.require_application_caller()
+        return self._entry.stat(*args, **kwargs)
+
+    def is_dir(self, *args, **kwargs):
+        self._resources.require_application_caller()
+        return self._entry.is_dir(*args, **kwargs)
+
+    def is_file(self, *args, **kwargs):
+        self._resources.require_application_caller()
+        return self._entry.is_file(*args, **kwargs)
+
+    def is_symlink(self):
+        self._resources.require_application_caller()
+        return self._entry.is_symlink()
+
+    def inode(self):
+        self._resources.require_application_caller()
+        return self._entry.inode()
+
+
+class _LogicalScandir:
+    def __init__(self, iterator, directory, resources):
+        self._iterator, self._directory, self._resources = iterator, directory, resources
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._resources.require_application_caller()
+        return _LogicalDirEntry(next(self._iterator), self._directory, self._resources)
+
+    def close(self):
+        self._iterator.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+
+class IsolatedResources:
+    def __init__(self, plan):
+        self.plan = plan
+        self.pid = os.getpid()
+        self.root = absolute(plan['root'])
+        self.trial_root = absolute(plan['trialRoot']) if plan.get('trialRoot') else None
+        self.source_spellings = _source_path_spellings((self.root, self.trial_root))
+        self.root = self._source_identity(self.root)
+        self.trial_root = self._source_identity(self.trial_root) if self.trial_root else None
+        self.worker = None
+        self.active = False
+        self.local = threading.local()
+        self.operations = {}
+        self.connections = []
+        self.mounts = []
+        self.specs = {}
+        self.block = None
+        sources = [self._source_identity(rule.get('resolvedFile') or os.path.join(self.root, rule['file'])) for rule in plan['rules']]
+        for rule in plan['rules']:
+            specs = validate_resources(rule)
+            for spec in specs:
+                logical = logical_resource_path(self.root, spec)
+                if any(logical == source or spec['kind'] == 'directory' and inside(source, logical) for source in sources):
+                    raise ValueError('Isolated resources cannot contain source files')
+                previous = self.specs.get(logical)
+                if previous is not None and _spec_key(previous) != _spec_key(spec):
+                    raise ValueError('Conflicting isolated resource specifications')
+                self.specs[logical] = spec
+                aliases = [logical]
+                if rule.get('resolvedFile'):
+                    if not self.trial_root or not inside(self._source_identity(rule['resolvedFile']), self.trial_root):
+                        raise ValueError('Isolated resource mutation source escapes trial')
+                if rule.get('resolvedFile') and spec.get('scope') not in ('external-exact', 'unc-virtual'):
+                    original = absolute(os.path.join(self.root, rule['file']))
+                    derived = self._source_identity(os.path.join(os.path.dirname(rule['resolvedFile']),
+                        os.path.relpath(logical, os.path.dirname(original))))
+                    # A source-bound sibling expression can legitimately point
+                    # outside the mutation copy (e.g. trial/../VMS_Data). Treat
+                    # only this derived root as an alias; I/O is still redirected
+                    # to this worker's namespace, never performed at the alias.
+                    # Flat module copies lose their original directory depth.
+                    # Their source-bound ../resource can land beside baseline
+                    # or mutant_N, inside the driver's owned temporary parent.
+                    if inside(derived, os.path.dirname(self.trial_root)) or spec.get('scope') == 'project-parent':
+                        if (derived == os.path.dirname(derived)
+                                or any(derived == source or spec['kind'] == 'directory' and inside(source, derived)
+                                       for source in sources)
+                                or spec.get('scope') == 'project-parent' and (
+                                    inside(derived, self.root) or inside(self.root, derived))):
+                            raise ValueError('Isolated resource mutation alias overlaps source')
+                        aliases.append(derived)
+                for alias in aliases:
+                    if spec.get('scope') != 'unc-virtual' and _has_link(alias):
+                        raise ValueError('Isolated resource alias uses a link')
+                    self.mounts.append((alias, logical, spec['kind']))
+        for logical, spec in self.specs.items():
+            if spec['kind'] != 'directory' and any(other != logical and inside(other, logical) for other in self.specs):
+                raise ValueError('An isolated file resource cannot contain another resource')
+        external_specs = [(logical, spec['kind']) for logical, spec in self.specs.items()
+                          if spec.get('scope') == 'external-exact']
+        # Only declared ancestors can group nested seeds. Unrelated external
+        # roots get separate hashes even when their basenames are identical.
+        self.external_roots = [(logical, kind) for logical, kind in external_specs
+            if not any(other != logical and other_kind == 'directory' and inside(logical, other)
+                       for other, other_kind in external_specs)]
+        unc_specs = [(logical, spec['kind']) for logical, spec in self.specs.items()
+                     if spec.get('scope') == 'unc-virtual']
+        self.unc_roots = [(logical, kind) for logical, kind in unc_specs
+            if not any(other != logical and other_kind == 'directory' and inside(logical, other)
+                       for other, other_kind in unc_specs)]
+        self.mounts = sorted(set(self.mounts), key=lambda item: len(item[0]), reverse=True)
+        aliases = {}
+        for alias, logical, _ in self.mounts:
+            if alias in aliases and aliases[alias] != logical:
+                raise ValueError('Ambiguous isolated resource mutation binding')
+            aliases[alias] = logical
+        lease = os.environ.get(LEASE_ENV, '')
+        if not lease or not os.path.isabs(lease):
+            raise ValueError('Isolated resource host lease is required')
+        self.lease = self._source_identity(lease)
+        if (_has_link(self.lease) or inside(self.lease, self.root) or inside(self.root, self.lease)
+                or self.trial_root and inside(self.lease, self.trial_root)):
+            raise ValueError('Invalid isolated resource host lease location')
+        if any(inside(self.lease, alias) or inside(alias, self.lease) for alias, _, _ in self.mounts):
+            raise ValueError('Isolated resource logical binding overlaps host lease')
+        marker_path = os.path.join(self.lease, LEASE_MARKER)
+        if _has_link(marker_path):
+            raise ValueError('Invalid isolated resource host lease marker link')
+        with _ORIGINAL_OPEN(marker_path, 'rb') as stream:
+            raw = stream.read(1025)
+        marker = json.loads(raw) if len(raw) <= 1024 else None
+        if (type(marker) is not dict or marker.get('schemaVersion') != 'isolated-resource-lease-v1'
+                or type(marker.get('ownerPid')) is not int or marker['ownerPid'] <= 0):
+            raise ValueError('Invalid isolated resource host lease marker')
+        self.worker = tempfile.mkdtemp(prefix=f'worker-{self.pid}-', dir=self.lease)
+        self.data = os.path.join(self.worker, 'data')
+        try:
+            os.mkdir(self.data)
+            # Each scope has its own tree; nested seeds still share paths with
+            # their directory mount, without copying existing project data.
+            for logical, spec in sorted(self.specs.items(), key=lambda item: len(item[0])):
+                physical = self._physical(logical)
+                if spec['kind'] == 'directory':
+                    os.makedirs(physical, exist_ok=True)
+                else:
+                    os.makedirs(os.path.dirname(physical), exist_ok=True)
+                    if spec['kind'] == 'text':
+                        with _ORIGINAL_OPEN(physical, 'w', encoding='utf-8', newline='') as stream:
+                            stream.write(spec['text'])
+                    else:
+                        self._seed_database(physical, spec)
+        except BaseException:
+            self.cleanup()
+            raise
+        atexit.register(self.cleanup)
+
+    def _physical(self, logical):
+        logical = self._source_identity(logical)
+        if is_unc_or_device(logical):
+            canonical = unc_resource_identity(os.fsdecode(logical))
+            for anchor, kind in self.unc_roots:
+                if logical == anchor or kind == 'directory' and inside(logical, anchor):
+                    root = unc_resource_identity(anchor)
+                    identity = hashlib.sha256(('unc-virtual:' + root).encode('utf-8')).hexdigest()
+                    namespace = os.path.join('unc-virtual', identity)
+                    tail = canonical[len(root):].lstrip('/')
+                    result = absolute(os.path.join(self.data, namespace, *tail.split('/')))
+                    if not inside(result, os.path.join(self.data, namespace)):
+                        raise ValueError('Virtual UNC resource escapes worker')
+                    return result
+            raise ValueError('Virtual UNC path has no declared resource')
+        if inside(logical, self.root):
+            namespace, anchor = 'project', self.root
+        elif inside(logical, os.path.dirname(self.root)):
+            namespace, anchor = 'project-parent', os.path.dirname(self.root)
+            if not inside(logical, anchor) or inside(self.root, logical):
+                raise ValueError('Isolated resource physical mapping escapes declared scope')
+        else:
+            for anchor, kind in self.external_roots:
+                if logical == anchor or kind == 'directory' and inside(logical, anchor):
+                    identity = hashlib.sha256(external_resource_identity(anchor).encode('utf-8')).hexdigest()
+                    namespace = os.path.join('external', identity)
+                    break
+            else:
+                raise ValueError('Isolated resource physical mapping escapes declared external roots')
+        result = absolute(os.path.join(self.data, namespace, os.path.relpath(logical, anchor)))
+        if not inside(result, os.path.join(self.data, namespace)):
+            raise ValueError('Isolated resource physical mapping escapes worker')
+        return result
+
+    @staticmethod
+    def _seed_database(physical, spec):
+        connection = _ORIGINAL_CONNECT(physical)
+        try:
+            with connection:
+                for table in spec.get('tables', []):
+                    columns = []
+                    for column in table['columns']:
+                        columns.append('"' + column['name'] + '" ' + column['type']
+                            + (' PRIMARY KEY' if column.get('primaryKey') else '')
+                            + (' AUTOINCREMENT' if column.get('autoIncrement') else '')
+                            + (' NOT NULL' if column.get('notNull') else '')
+                            + (' UNIQUE' if column.get('unique') else '')
+                            # SQLite itself quotes a bound scalar as a literal. Source SQL is never executed here.
+                            + (' DEFAULT ' + connection.execute('SELECT quote(?)', (column['default'],)).fetchone()[0]
+                               if 'default' in column else ''))
+                    columns.extend('UNIQUE (' + ','.join('"' + name + '"' for name in group) + ')'
+                                   for group in table.get('unique', []))
+                    connection.execute('CREATE TABLE "' + table['name'] + '" (' + ','.join(columns) + ')')
+                    for row in table.get('rows', []):
+                        if row:
+                            names = list(row)
+                            connection.execute('INSERT INTO "' + table['name'] + '" ('
+                                + ','.join('"' + name + '"' for name in names) + ') VALUES ('
+                                + ','.join('?' for _ in names) + ')', [row[name] for name in names])
+                        else:
+                            connection.execute('INSERT INTO "' + table['name'] + '" DEFAULT VALUES')
+        finally:
+            connection.close()
+
+    def cleanup(self):
+        if os.getpid() != self.pid or not self.worker:
+            return
+        for connection in self.connections:
+            try:
+                connection.close()
+            except sqlite3.Error:
+                pass
+        self.connections.clear()
+        worker = self.worker
+        if inside(worker, self.lease) and absolute(worker) != self.lease and not _has_link(worker):
+            try:
+                shutil.rmtree(worker)
+            except OSError:
+                # The host still owns final cleanup after process close, also
+                # when SQLite or another library retains an open handle.
+                return
+            self.worker = None
+
+    def evidence(self):
+        return {'planId': self.plan['id'], 'scope': 'fresh-process', 'resourceCount': len(self.specs),
+                'operations': self.operations}
+
+    def covers(self, value):
+        if not isinstance(value, (str, bytes, os.PathLike)):
+            return False
+        logical = self._logical(value)
+        return any(logical == alias or kind == 'directory' and inside(logical, alias)
+                   for alias, _, kind in self.mounts)
+
+    def _source_identity(self, value):
+        return _known_source_identity(value, self.source_spellings)
+
+    def _logical(self, value):
+        raw = os.fsdecode(value)
+        return self._source_identity(raw if os.path.isabs(raw) else os.path.join(self.root, raw))
+
+    def _application_caller(self):
+        frame = sys._getframe(1)
+        while frame:
+            filename = frame.f_code.co_filename
+            if os.path.isabs(filename):
+                canonical = self._source_identity(filename)
+                generated_identity = _known_source_identity(canonical, _GENERATED_TEST_SPELLINGS)
+                if any(generated_identity == _known_source_identity(self._source_identity(item), _GENERATED_TEST_SPELLINGS)
+                       for item in _GENERATED_TEST_FILES):
+                    return False
+                if inside(canonical, self.root) or self.trial_root and inside(canonical, self.trial_root):
+                    # Tool output and generated test files are registered by
+                    # the runner; the nearest app frame determines ownership.
+                    return True
+            frame = frame.f_back
+        return False
+
+    def require_application_caller(self):
+        if self.active and not self._application_caller():
+            self.block('generated test direct resource I/O')
+
+    def translate(self, value, operation):
+        if not self.active or not isinstance(value, (str, bytes, os.PathLike)):
+            return value, False
+        if type(value) is str and value.startswith('file:'):
+            self.block('SQLite URI is not an isolated resource path')
+        if not is_unc_or_device(value) and _unsafe_raw_components(value):
+            # Windows abspath can turn data/CON into a device path, losing the
+            # declared directory before the mount check. Reject the requested
+            # spelling before any native normalization or resource operation.
+            self.block('isolated resource executable or unsupported filename')
+        if is_unc_or_device(value):
+            try:
+                unc_resource_identity(os.fsdecode(value))
+            except ValueError:
+                self.block('unsupported UNC or device resource path')
+        logical = self._logical(value)
+        for alias, origin, kind in self.mounts:
+            if logical == alias or kind == 'directory' and inside(logical, alias):
+                if _unsafe_raw_components(value):
+                    self.block('isolated resource executable or unsupported filename')
+                if not self._application_caller():
+                    self.block('generated test direct resource I/O')
+                relative = _logical_relative(logical, alias)
+                mapped = self._physical(origin if relative == '.' else os.path.join(origin, relative))
+                if not inside(mapped, self.data) or _has_link(mapped):
+                    self.block('isolated resource path escape or symlink')
+                try:
+                    if is_unc_or_device(logical):
+                        unc_resource_identity(logical)
+                    elif not inside(logical, os.path.dirname(self.root)):
+                        _external_path(external_resource_identity(logical))
+                    else:
+                        relative = os.path.relpath(mapped, self.data).replace(os.sep, '/')
+                        _relative_path(relative.split('/', 1)[1])
+                except ValueError:
+                    self.block('isolated resource executable or unsupported filename')
+                self.operations[operation] = min(self.operations.get(operation, 0) + 1, 1000000)
+                return mapped, True
+        return value, False
+
+    @contextmanager
+    def authorize(self, paths):
+        previous = getattr(self.local, 'authorized', ())
+        self.local.authorized = (*previous, *paths)
+        try:
+            yield
+        finally:
+            self.local.authorized = previous
+
+    def allows_audit(self, event, args):
+        if not self.active or not args or not isinstance(args[0], (str, bytes, os.PathLike)):
+            return False
+        paths = [args[0], args[1]] if event == 'os.rename' else [args[0]]
+        permitted = getattr(self.local, 'authorized', ())
+        return all(isinstance(item, (str, bytes, os.PathLike)) and absolute(item) in permitted
+                   and inside(item, self.data) and not _has_link(item) for item in paths)
+
+    def sqlite_connect(self, connect, args, kwargs):
+        value = args[0] if args else kwargs.get('database')
+        if value == ':memory:':
+            return connect(*args, **kwargs)
+        # URI forms, shared caches and custom factories are deliberately absent.
+        if kwargs.get('uri') or len(args) > 7 and args[7]:
+            self.block('SQLite URI is not an isolated resource path')
+        mapped, matched = self.translate(value, 'sqlite3.connect')
+        if not matched:
+            self.block('non-isolated SQLite connection')
+        args, kwargs = list(args), dict(kwargs)
+        if args:
+            args[0] = mapped
+        else:
+            kwargs['database'] = mapped
+        with self.authorize((absolute(mapped),)):
+            connection = connect(*args, **kwargs)
+        self.connections.append(connection)
+        return connection
+
+    @contextmanager
+    def guarding(self, block):
+        self.block = block
+        self.active = True
+        def wrapper(function, operation, path_index=0):
+            def redirected(*args, **kwargs):
+                if not self.active:
+                    return function(*args, **kwargs)
+                args, kwargs = list(args), dict(kwargs)
+                key = 'file' if operation in ('open', 'io.open') else 'path'
+                value = args[path_index] if len(args) > path_index else kwargs.get(key)
+                mapped, matched = self.translate(value, operation)
+                if not matched:
+                    return function(*args, **kwargs)
+                if (kwargs.get('dir_fd') is not None or kwargs.get('opener') is not None
+                        or operation in ('open', 'io.open') and len(args) > 7 and args[7] is not None
+                        or kwargs.get('follow_symlinks') is False):
+                    block('unsupported isolated resource descriptor or symlink operation')
+                if len(args) > path_index:
+                    args[path_index] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
+                else:
+                    kwargs[key] = os.fsencode(mapped) if isinstance(value, bytes) else mapped
+                with self.authorize((absolute(mapped),)):
+                    try:
+                        result = function(*args, **kwargs)
+                    except OSError as error:
+                        if is_unc_or_device(value) and getattr(error, 'filename', None) is not None:
+                            error.filename = os.fspath(value)
+                        raise
+                if operation == 'os.scandir' and is_unc_or_device(value):
+                    return _LogicalScandir(result, value, self)
+                return result
+            _REDIRECT_CODES.add(redirected.__code__)
+            return redirected
+        try:
+            with ExitStack() as stack:
+                for module, name, operation in ((builtins, 'open', 'open'), (io, 'open', 'io.open'),
+                        *((os, name, 'os.' + name) for name in ('open', 'mkdir', 'stat', 'lstat', 'listdir', 'scandir',
+                                                               'remove', 'unlink', 'rmdir'))):
+                    stack.enter_context(patch.object(module, name, wrapper(getattr(module, name), operation)))
+                yield self
+        finally:
+            self.active = False
+            self.block = None
+
+
+def for_plan(plan):
+    """Allocate once per PID/plan/lease, never once per guard or inherited fork."""
+    if not plan or not any(rule.get('resources') for rule in plan['rules']):
+        return None
+    encoded = json.dumps(plan, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+    key = (os.getpid(), hashlib.sha256(encoded.encode()).hexdigest(), os.environ.get(LEASE_ENV, ''))
+    if key not in _SESSIONS:
+        _SESSIONS[key] = IsolatedResources(plan)
+    return _SESSIONS[key]

@@ -1,0 +1,5 @@
+STRING LENGTH BOUNDARY: use the exact comparison and threshold from source (including <, <=, >, or >=).
+  - Choose inputs on each reachable side of that condition; N-1, N, and N+1 are candidates only when they fit the source comparison and input type.
+  - Do NOT infer that either side raises, returns normally, or returns a specific value. Assertions require an explicit source path or exact verified behavior observation.
+  - Build strings with a deliberately known length; do not use a slice unless its resulting length is independently clear.
+  - Make a case table: exact predicate, threshold, concrete input length, prerequisite guards, and verified observation. A lower bound never implies an upper bound.

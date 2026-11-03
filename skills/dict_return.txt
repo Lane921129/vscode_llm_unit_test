@@ -1,0 +1,4 @@
+DICT RETURN VALUE: this function returns a dict.
+  - Check specific keys: self.assertEqual(result["key"], expected_value)
+  - Or check the whole dict: self.assertEqual(result, {"key1": v1, "key2": v2})
+  - Use self.assertIn("key", result) to verify key existence.

@@ -1,0 +1,161 @@
+import { resultDataDirectory } from '../pipeline/resultLayout';
+import * as fs from 'fs';
+import * as path from 'path';
+import { runSpawn } from './processRunner';
+import { throwIfExecutionCancelled } from '../pipeline/executionContext';
+import { normalizePythonExecutable } from './pythonTestEnvironment';
+
+export interface FunctionAstInfo {
+    name: string;
+    fullName: string;      // 例如 "MyClass.calculate_total" 或 "standalone_func"
+    className: string | null;
+    isAsync: boolean;
+    args: string[];
+}
+
+/**
+ * 透過 Python 原生 AST 完整解析檔案內所有函式、Class Method、Async 函式
+ */
+export async function extractFunctionsWithAst(filePath: string, pythonExecutable?: string, strict = false): Promise<FunctionAstInfo[]> {
+    if (!fs.existsSync(filePath)) {
+        if (strict) { throw new Error('AST discovery failed'); }
+        return [];
+    }
+
+    const pythonScript = `
+import sys, ast, json
+
+class FunctionVisitor(ast.NodeVisitor):
+    def __init__(self):
+        self.functions = []
+        self.scope_stack = []
+        self.function_depth = 0
+
+    def visit_ClassDef(self, node):
+        # Nested classes and classes declared inside functions are not valid
+        # selectors for the current Class.method execution protocol.
+        if self.function_depth or self.scope_stack:
+            return
+        self.scope_stack.append(node.name)
+        self.generic_visit(node)
+        self.scope_stack.pop()
+
+    def _process_func(self, node, is_async=False):
+        # 排除 dunder 與 test 方法
+        if node.name.startswith('__') and node.name.endswith('__'):
+            return
+        if node.name.startswith('test_'):
+            return
+
+        class_name = self.scope_stack[-1] if self.scope_stack else None
+        full_name = f"{class_name}.{node.name}" if class_name else node.name
+        
+        args = [arg.arg for arg in node.args.args if arg.arg != 'self']
+        self.functions.append({
+            'name': node.name,
+            'fullName': full_name,
+            'className': class_name,
+            'isAsync': is_async,
+            'args': args
+        })
+
+    def visit_FunctionDef(self, node):
+        if self.function_depth == 0:
+            self._process_func(node, is_async=False)
+        self.function_depth += 1
+        self.generic_visit(node)
+        self.function_depth -= 1
+
+    def visit_AsyncFunctionDef(self, node):
+        if self.function_depth == 0:
+            self._process_func(node, is_async=True)
+        self.function_depth += 1
+        self.generic_visit(node)
+        self.function_depth -= 1
+
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        tree = ast.parse(f.read(), filename=sys.argv[1])
+    visitor = FunctionVisitor()
+    visitor.visit(tree)
+    print(json.dumps(visitor.functions, ensure_ascii=False))
+except Exception as e:
+    sys.stderr.write(str(e))
+    sys.exit(1)
+`;
+
+    try {
+        const { stdout, code } = await runSpawn(normalizePythonExecutable(pythonExecutable), ['-c', pythonScript, filePath], {
+            env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+        });
+        if (code !== 0 || !stdout.trim()) { throw new Error('AST discovery failed'); }
+        return JSON.parse(stdout);
+    } catch {
+        throwIfExecutionCancelled();
+        if (strict) { throw new Error('AST discovery failed'); }
+        return [];
+    }
+}
+
+/** 遞迴掃描資料夾 */
+export async function findPythonFilesInDir(dir: string, strict = false, excludedRoots: string[] = [], excludeBatchResults = false): Promise<string[]> {
+    throwIfExecutionCancelled();
+    const ignored = new Set(['.git', 'node_modules', 'env', '.env', 'venv', '.venv', '.pytest_cache', '__pycache__']);
+    const results: string[] = [];
+    try {
+        const list = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const item of list) {
+            const fullPath = path.join(dir, item.name);
+            if (excludedRoots.some(root => path.relative(root, fullPath) === '')) { continue; }
+            if (item.isDirectory()) {
+                if (ignored.has(item.name)) {continue;}
+                if (excludeBatchResults && isRecordedBatchDirectory(fullPath)) { continue; }
+                results.push(...await findPythonFilesInDir(fullPath, strict, excludedRoots, excludeBatchResults));
+            } else if (item.name.endsWith('.py')) {
+                results.push(fullPath);
+            }
+        }
+    } catch {
+        throwIfExecutionCancelled();
+        if (strict) { throw new Error('Python source discovery failed'); }
+    }
+    return results;
+}
+
+function isRecordedBatchDirectory(directory: string): boolean {
+    const manifest = path.join(directory, 'batch_manifest.json');
+    try {
+        const data = resultDataDirectory(directory);
+        if (data !== directory) { return true; }
+        if (!fs.existsSync(manifest)) { return false; }
+        const record = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+        return record.schemaVersion === 1 && typeof record.batchId === 'string'
+            && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(record.batchId)
+            && Array.isArray(record.targets) && Array.isArray(record.discoveredFiles);
+    } catch { return false; }
+}
+
+export type MutationEngine = 'mutatest' | 'mutmut' | null;
+
+/**
+ * Resolves the compatible mutation engine for a Python runtime and platform.
+ * Native mutmut does not support Windows; mutatest 3.x cannot use coverage 7.
+ */
+export function detectMutationEngineForPlatform(
+    pythonVersion: string,
+    platform: NodeJS.Platform
+): MutationEngine {
+    const versionMatch = pythonVersion.match(/(\d+)\.(\d+)/);
+    const major = versionMatch ? parseInt(versionMatch[1]) : 3;
+    const minor = versionMatch ? parseInt(versionMatch[2]) : 0;
+
+    if (major > 3 || (major === 3 && minor >= 12)) {
+        return platform === 'win32' ? null : 'mutmut';
+    }
+    return 'mutatest';
+}
+
+/** 偵測目前執行環境可用的突變引擎 */
+export function detectMutationEngine(pythonVersion: string): MutationEngine {
+    return detectMutationEngineForPlatform(pythonVersion, process.platform);
+}

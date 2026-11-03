@@ -119,12 +119,12 @@ function parseMutatestSurvived(mutatestResult: string): string {
         // 移除有些情況下沒有 \x1B 但只有 [0m 的殘留字元
         line = line.replace(/\[\d+m/g, '');
 
-        if (line === 'SURVIVED' && lines[i + 1]?.replace(/\[\d+m/g, '').trim() === '--------') {
+        if (line === 'SURVIVED' && lines[i + 1]?.replace(/\x1B\[\d+m/g, '').replace(/\[\d+m/g, '').trim() === '--------') {
             isSurvivedSection = true;
             i++; continue;
         }
         if (isSurvivedSection) {
-            if (line === '' || line.startsWith('2026-') || line.match(/^\d{4}-\d{2}-\d{2}/)) { break; }
+            if (line === '' || /^\d{4}-\d{2}-\d{2}/.test(line)) { break; }
             if (line.startsWith('- ')) { survivedList.push(line); }
         }
     }

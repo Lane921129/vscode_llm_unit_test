@@ -1,0 +1,3 @@
+BRANCH THRESHOLD COVERAGE: the function has multiple if/elif numeric thresholds.
+  - Cover each reachable source branch, including a final else/default branch when present.
+  - Use values on the appropriate side of every source threshold; derive expected results from the matching source branch or exact behavior observation, not from this rule.

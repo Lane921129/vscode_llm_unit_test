@@ -4,6 +4,14 @@
   "publisher": "lane",
   "description": "Using llm to generate unit test and analyzation for user",
   "version": "0.0.1",
+  "homepage": "https://github.com/Lane921129/vscode_llm_unit_test#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lane921129/vscode_llm_unit_test.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Lane921129/vscode_llm_unit_test/issues"
+  },
   "engines": {
     "vscode": "^1.116.0"
   },
@@ -11,16 +19,13 @@
   "categories": [
     "Testing"
   ],
-  "activationEvents": [
-    "onView:mutation-test-view"
-  ],
   "main": "./dist/extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
           "id": "mutation-test-explorer",
-          "title": "突變測試分析",
+          "title": "%contributes.viewsContainers.activitybar.0.title%",
           "icon": "$(beaker)"
         }
       ]
@@ -30,55 +35,338 @@
         {
           "type": "webview",
           "id": "mutation-test-view",
-          "name": "模型與測試設定"
+          "name": "%contributes.views.mutation-test-explorer.0.name%",
+          "icon": "$(beaker)"
         }
       ]
     },
     "commands": [
       {
+        "command": "llm-unit-test.configureWriterSeedPromptMode",
+        "title": "%contributes.commands.configureWriterSeedPromptMode.title%"
+      },
+      {
         "command": "llm-unit-test.runCaptureAndTest",
-        "title": "執行自動化測試循環"
+        "title": "%contributes.commands.0.title%"
+      },
+      {
+        "command": "llm-unit-test.runBatchAnalysis",
+        "title": "%contributes.commands.1.title%"
+      },
+      {
+        "command": "llm-unit-test.abortTest",
+        "title": "%contributes.commands.2.title%"
+      },
+      {
+        "command": "llm-unit-test.preparePythonEnvironment",
+        "title": "%contributes.commands.3.title%"
+      },
+      {
+        "command": "llm-unit-test.prepareImportSetup",
+        "title": "%contributes.commands.4.title%"
+      },
+      {
+        "command": "llm-unit-test.configureTestResources",
+        "title": "%contributes.commands.5.title%"
       }
     ],
     "configuration": {
-      "title": "LLM 自動化測試設定",
+      "title": "%contributes.configuration.title%",
       "properties": {
-        "llmUnitTest.modelName": {
+        "llmUnitTest.writerSeedPromptMode": {
           "type": "string",
-          "default": "phi4-mini-reasoning",
-          "description": "請輸入本地 Ollama 模型名稱 (例如: phi4-mini-reasoning, llama3)"
+          "enum": ["instruction", "code-completion"],
+          "default": "instruction",
+          "description": "%contributes.configuration.properties.llmUnitTest.writerSeedPromptMode.description%"
         },
-        "llmUnitTest.apiKeys": {
-          "type": "object",
-          "default": {},
-          "description": "請輸入雲端 LLM 的 API Key (例如 Gemini 或 OpenAI)"
+        "llmUnitTest.traceTimeoutSeconds": {
+          "type": "integer", "default": 60, "minimum": 1, "maximum": 300,
+          "description": "%contributes.configuration.properties.llmUnitTest.traceTimeoutSeconds.description%"
+        },
+        "llmUnitTest.tracePlanningTimeoutSeconds": {
+          "type": "integer", "default": 15, "minimum": 1, "maximum": 300,
+          "description": "%contributes.configuration.properties.llmUnitTest.tracePlanningTimeoutSeconds.description%"
+        },
+        "llmUnitTest.traceCaseTimeoutSeconds": {
+          "type": "integer", "default": 5, "minimum": 1, "maximum": 30,
+          "description": "%contributes.configuration.properties.llmUnitTest.traceCaseTimeoutSeconds.description%"
+        },
+        "llmUnitTest.probeInputFile": {
+          "type": "string",
+          "default": "",
+          "description": "%contributes.configuration.properties.llmUnitTest.probeInputFile.description%"
+        },
+        "llmUnitTest.importFixtureRoot": {
+          "type": "string",
+          "default": "",
+          "description": "%contributes.configuration.properties.llmUnitTest.importFixtureRoot.description%"
         },
         "llmUnitTest.projectPath": {
           "type": "string",
           "default": "",
-          "description": "測試專案資料夾路徑"
+          "description": "%contributes.configuration.properties.llmUnitTest.projectPath.description%"
         },
         "llmUnitTest.outputPath": {
           "type": "string",
           "default": "",
-          "description": "測試結果輸出資料夾路徑"
+          "description": "%contributes.configuration.properties.llmUnitTest.outputPath.description%"
         },
         "llmUnitTest.language": {
           "type": "string",
-          "enum": ["auto", "en", "zh-tw"],
+          "enum": [
+            "auto",
+            "en",
+            "zh-tw"
+          ],
           "default": "auto",
           "description": "UI and output language (auto will follow VS Code language)"
         },
         "llmUnitTest.promptStrategy": {
           "type": "string",
-          "enum": ["auto", "small", "large"],
-          "default": "auto",
-          "description": "Prompt strategy: small (strict formatting) vs large (advanced reasoning)"
+          "enum": ["full", "boundary", "coverage", "mutation", "auto", "small", "large", "tier1", "tier2", "tier3", "tier4"],
+          "default": "full",
+          "description": "Test priority: full, boundary, coverage or mutation. All quality gates remain active. Other values are retained for legacy settings."
+        },
+        "llmUnitTest.requireRoleQualification": {
+          "type": "boolean",
+          "default": false,
+          "description": "%contributes.configuration.properties.llmUnitTest.requireRoleQualification.description%"
+        },
+        "llmUnitTest.validationMode": {
+          "type": "string",
+          "enum": [
+            "execution",
+            "full"
+          ],
+          "default": "full",
+          "enumDescriptions": [
+            "%contributes.configuration.properties.llmUnitTest.validationMode.enumDescriptions.0%",
+            "%contributes.configuration.properties.llmUnitTest.validationMode.enumDescriptions.1%"
+          ],
+          "description": "%contributes.configuration.properties.llmUnitTest.validationMode.description%"
+        },
+        "llmUnitTest.mutationEngine": {
+          "type": "string",
+          "enum": ["builtin", "mutatest", "mutmut", "auto"],
+          "default": "builtin",
+          "enumDescriptions": [
+            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.0%",
+            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.1%",
+            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.2%",
+            "%contributes.configuration.properties.llmUnitTest.mutationEngine.enumDescriptions.3%"
+          ],
+          "description": "%contributes.configuration.properties.llmUnitTest.mutationEngine.description%"
+        },
+        "llmUnitTest.mutationWorkers": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 4,
+          "description": "%contributes.configuration.properties.llmUnitTest.mutationWorkers.description%"
         },
         "llmUnitTest.ollamaBaseUrl": {
           "type": "string",
           "default": "http://127.0.0.1:11434",
           "description": "Base URL for Ollama API"
+        },
+        "llmUnitTest.runtimeContextTokens": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "description": "%contributes.configuration.properties.llmUnitTest.runtimeContextTokens.description%"
+        },
+        "llmUnitTest.localThinkingMode": {
+          "type": "string",
+          "enum": ["provider-default", "disabled"],
+          "default": "provider-default",
+          "description": "%contributes.configuration.properties.llmUnitTest.localThinkingMode.description%"
+        },
+        "llmUnitTest.cloudThinkingMode": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "provider-default"
+          ],
+          "default": "minimal",
+          "description": "%contributes.configuration.properties.llmUnitTest.cloudThinkingMode.description%"
+        },
+        "llmUnitTest.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "%contributes.configuration.properties.llmUnitTest.pythonPath.description%"
+        },
+        "llmUnitTest.packageMappings": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+          },
+          "description": "%contributes.configuration.properties.llmUnitTest.packageMappings.description%"
+        },
+        "llmUnitTest.importFixtures": {
+          "type": "array",
+          "default": [],
+          "maxItems": 64,
+          "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.description%",
+          "items": {
+            "type": "object",
+            "required": [
+              "file"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.file.description%"
+              },
+              "mkdir": {
+                "type": "boolean",
+                "default": false,
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.mkdir.description%"
+              },
+              "configFiles": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.configFiles.description%"
+              },
+              "entryPoints": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPoints.description%"
+              },
+              "entryPointLines": {
+                "type": "object",
+                "maxProperties": 8,
+                "additionalProperties": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointLines.description%"
+              },
+              "entryPointSourceHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointSourceHash.description%"
+              },
+              "resourceSourceHash": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resourceSourceHash.description%"
+              },
+              "sourceDependencies": {
+                "type": "array",
+                "maxItems": 64,
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.sourceDependencies.description%",
+                "items": {
+                  "type": "object",
+                  "required": ["file", "sourceHash"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "file": { "type": "string" },
+                    "sourceHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                  }
+                }
+              },
+              "pythonSourceMode": {
+                "type": "boolean",
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.pythonSourceMode.description%"
+              },
+              "resources": {
+                "type": "array",
+                "maxItems": 16,
+                "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.description%",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "kind"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1, "maxLength": 240 },
+                    "scope": { "type": "string", "enum": ["project-parent", "external-exact", "unc-virtual"], "description": "%contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.resources.items.properties.scope.description%" },
+                    "kind": { "type": "string", "enum": ["directory", "text", "sqlite"] },
+                    "text": { "type": "string", "maxLength": 65536 },
+                    "tables": {
+                      "type": "array", "maxItems": 16,
+                      "items": {
+                        "type": "object", "required": ["name", "columns"], "additionalProperties": false,
+                        "properties": {
+                          "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z_0-9]{0,63}$" },
+                          "columns": {
+                            "type": "array", "minItems": 1, "maxItems": 32,
+                            "items": {
+                              "type": "object", "required": ["name", "type"], "additionalProperties": false,
+                              "properties": {
+                                "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z_0-9]{0,63}$" },
+                                "type": { "type": "string", "enum": ["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC"] },
+                                "primaryKey": { "type": "boolean" }, "notNull": { "type": "boolean" },
+                                "unique": { "type": "boolean" }, "autoIncrement": { "type": "boolean" },
+                                "default": { "type": ["string", "number", "boolean", "null"], "maxLength": 4096 }
+                              }
+                            }
+                          },
+                          "unique": { "type": "array", "maxItems": 16, "items": { "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z_0-9]{0,63}$" } } },
+                          "rows": { "type": "array", "maxItems": 256, "items": { "type": "object", "additionalProperties": { "type": ["string", "number", "boolean", "null"] } } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "llmUnitTest.stopPolicy": {
+          "type": "object",
+          "default": { "failureLimit": 5, "qualityNoImprovementLimit": 3, "batchFailureLimit": 0 },
+          "additionalProperties": false,
+          "properties": {
+            "failureLimit": { "type": "integer", "minimum": 1, "default": 5 },
+            "qualityNoImprovementLimit": { "type": "integer", "minimum": 0, "default": 3 },
+            "batchFailureLimit": { "type": "integer", "minimum": 0, "default": 0 }
+          },
+          "description": "%contributes.configuration.properties.llmUnitTest.stopPolicy.description%"
+        },
+        "llmUnitTest.targetBudget": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 600000
+            },
+            "logicalRequests": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 20
+            },
+            "transportAttempts": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 40
+            },
+            "estimatedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 200000
+            },
+            "candidateAttempts": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 20
+            }
+          },
+          "description": "%contributes.configuration.properties.llmUnitTest.targetBudget.description%"
         }
       }
     }
@@ -95,7 +383,14 @@
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "test:python": "node test/run_python_tests.js",
+    "test:fast": "node test/verification.js fast",
+    "test:integration": "node test/verification.js integration",
+    "test:full": "node test/verification.js full",
+    "test:related": "node test/verification.js related",
+    "test:unit": "node test/verification.js full",
+    "test:webview": "node test/extract_script.js"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
@@ -107,6 +402,7 @@
     "eslint": "^9.39.3",
     "npm-run-all": "^4.1.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.1"
+    "typescript-eslint": "^8.56.1",
+    "undici": "7.30.1"
   }
 }

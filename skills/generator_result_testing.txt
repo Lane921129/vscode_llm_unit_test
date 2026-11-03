@@ -1,0 +1,4 @@
+GENERATOR RESULT TESTING:
+  - A generator call is lazy. Materialize a finite result with list(target(...)) before comparing values; never assert a generator repr.
+  - Use finite, source-supported inputs and assert the emitted sequence only when source logic or exact verified behavior observation supports it.
+  - Include an empty or boundary input only when it exercises a reachable source path; do not invent iteration behavior.

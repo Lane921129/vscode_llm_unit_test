@@ -1,0 +1,187 @@
+{
+  "schemaVersion": "test-skill-catalog-v1",
+  "skills": [
+    {
+      "id": "numeric_calculation",
+      "version": 1,
+      "title": "Numeric Calculation Skill",
+      "trigger_hint": "Source contains numeric arithmetic or rounding",
+      "file": "numeric_calculation.txt"
+    },
+    {
+      "id": "string_length_boundary",
+      "version": 1,
+      "title": "String Length Boundary",
+      "trigger_hint": "Use when source has a len(x) comparison against a literal threshold",
+      "file": "string_length_boundary.txt"
+    },
+    {
+      "id": "python_slicing",
+      "version": 1,
+      "title": "Python Slicing Semantics",
+      "trigger_hint": "Use when function uses x[:N], x[-N:], x[a:b] to extract substrings",
+      "file": "python_slicing.txt"
+    },
+    {
+      "id": "branch_threshold_coverage",
+      "version": 1,
+      "title": "Multi-Branch Threshold Coverage",
+      "trigger_hint": "Use when function has multiple if/elif branches based on numeric comparisons",
+      "file": "branch_threshold_coverage.txt"
+    },
+    {
+      "id": "boolean_truthiness_coverage",
+      "version": 1,
+      "title": "Boolean Truthiness Branch Coverage",
+      "trigger_hint": "Use when AST confirms an annotated boolean parameter is itself a branch condition",
+      "file": "boolean_truthiness_coverage.txt"
+    },
+    {
+      "id": "pattern_matching",
+      "version": 1,
+      "title": "Structural Pattern Matching",
+      "trigger_hint": "Use when the function contains Python match/case branches",
+      "file": "pattern_matching.txt"
+    },
+    {
+      "id": "float_precision",
+      "version": 1,
+      "title": "Float Precision",
+      "trigger_hint": "Use when function uses round(), math operations, or returns float values",
+      "file": "float_precision.txt"
+    },
+    {
+      "id": "tuple_return",
+      "version": 1,
+      "title": "Tuple Return Value",
+      "trigger_hint": "Use when function returns multiple values via tuple (e.g. return a, b)",
+      "file": "tuple_return.txt"
+    },
+    {
+      "id": "dict_return",
+      "version": 1,
+      "title": "Dict Return Value",
+      "trigger_hint": "Use when function returns a dict with specific keys",
+      "file": "dict_return.txt"
+    },
+    {
+      "id": "none_input_handling",
+      "version": 1,
+      "title": "None and Empty Input Handling",
+      "trigger_hint": "Use when function explicitly checks for None or empty string/list",
+      "file": "none_input_handling.txt"
+    },
+    {
+      "id": "assert_raises_syntax",
+      "version": 1,
+      "title": "assertRaises Correct Syntax",
+      "trigger_hint": "Use when function has raise statements that tests should catch",
+      "file": "assert_raises_syntax.txt"
+    },
+    {
+      "id": "try_except_returns_string",
+      "version": 1,
+      "title": "try/except Returns Error String",
+      "trigger_hint": "Use when function catches exceptions internally and returns an error message string instead of re-raising",
+      "file": "try_except_returns_string.txt"
+    },
+    {
+      "id": "import_module_name",
+      "version": 1,
+      "title": "Correct Import Module Name",
+      "trigger_hint": "Always include — reminds writer to use the correct module name in imports",
+      "file": "import_module_name.txt"
+    },
+    {
+      "id": "zero_division",
+      "version": 1,
+      "title": "Zero Division Handling",
+      "trigger_hint": "Use when function performs division and may raise ZeroDivisionError",
+      "file": "zero_division.txt"
+    },
+    {
+      "id": "class_method_testing",
+      "version": 1,
+      "title": "Instance and Property Testing",
+      "trigger_hint": "Use when the target is an instance method or property that needs an object instance",
+      "file": "class_method_testing.txt"
+    },
+    {
+      "id": "mock_external_dependency",
+      "version": 1,
+      "title": "Mock External Dependencies",
+      "trigger_hint": "Use when function calls source-proven external dependencies",
+      "file": "dependency_protocol.txt"
+    },
+    {
+      "id": "observation_mock_isolation",
+      "version": 1,
+      "title": "Executed Observation and Mock Isolation",
+      "trigger_hint": "Use when dependencies may be mocked alongside executed-observation tests",
+      "file": "observation_mock_isolation.txt"
+    },
+    {
+      "id": "caller_dependency_contract",
+      "version": 1,
+      "title": "Caller Constraints and Dependency Outcomes",
+      "trigger_hint": "Use when the target has resolved dependencies",
+      "file": "caller_dependency_contract.txt"
+    },
+    {
+      "id": "database_state_isolation",
+      "version": 1,
+      "title": "Database State Isolation",
+      "trigger_hint": "Source-used imports or stable module factory bindings identify a database dependency",
+      "file": "database.txt"
+    },
+    {
+      "id": "async_coroutine_testing",
+      "version": 1,
+      "title": "Async Coroutine Testing",
+      "trigger_hint": "Use when the target is async or awaits another coroutine",
+      "file": "async_coroutine_testing.txt"
+    },
+    {
+      "id": "file_io_mocking",
+      "version": 1,
+      "title": "File I/O Mocking",
+      "trigger_hint": "Use when the target opens, reads, writes, or closes files",
+      "file": "file_io_mocking.txt"
+    },
+    {
+      "id": "datetime_freezing",
+      "version": 1,
+      "title": "Time Control",
+      "trigger_hint": "Use when the target reads the current date, time, or timezone",
+      "file": "datetime_freezing.txt"
+    },
+    {
+      "id": "context_manager_testing",
+      "version": 1,
+      "title": "Context Manager Testing",
+      "trigger_hint": "Use when the target contains a Python with or async with statement",
+      "file": "context_manager_testing.txt"
+    },
+    {
+      "id": "async_context_manager_testing",
+      "version": 1,
+      "title": "Async Context Manager Testing",
+      "trigger_hint": "Use only when the selected callable contains an async with statement",
+      "file": "async_context_manager_testing.txt"
+    },
+    {
+      "id": "http_client_mocking",
+      "version": 1,
+      "title": "HTTP Client Mocking",
+      "trigger_hint": "Source-used imports or stable module factory bindings identify an HTTP client",
+      "file": "http_client.txt"
+    },
+    {
+      "id": "generator_result_testing",
+      "version": 1,
+      "title": "Generator Result Testing",
+      "trigger_hint": "Use only when AST confirms that the selected callable contains yield or yield from",
+      "file": "generator_result_testing.txt"
+    }
+  ]
+}

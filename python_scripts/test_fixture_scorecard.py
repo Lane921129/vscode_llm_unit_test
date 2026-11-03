@@ -1,0 +1,521 @@
+import json
+import copy
+import hashlib
+import pathlib
+import sys
+import tempfile
+import unittest
+
+
+SCRIPTS_DIR = pathlib.Path(__file__).parent
+sys.path.insert(0, str(SCRIPTS_DIR))
+from fixture_scorecard import AI_WORKFLOW_VERSION, DEFAULT_BATCH_MANIFEST, DEFAULT_MANIFEST, build_scorecard, format_markdown, load_manifest, main, write_scorecard, report_fields
+from quality_policy import create_default_quality_policy, create_fixture_quality_policy, create_strict_quality_policy, evaluate_quality
+
+
+def report(target_file, target_function, coverage, mutation, error=False, generation_mode='llm-evidence-bound', failure_category=None, resolved_tier=1, model_identity='cloud/test-model'):
+    interrupted = '\n### ❌ 執行中斷（第 2 輪）\n' if error else ''
+    mode_line = f'- **Tier 1 generation mode**: {generation_mode}\n' if generation_mode else ''
+    failure_line = f'- **失敗分類**: {failure_category}\n' if failure_category else ''
+    return f'''# 突變測試與修復分析報告
+
+- **目標檔案**: {target_file}
+- **測試函式**: {target_function}
+
+- **模型識別**: `{model_identity}`
+- **Reviewer status**: completed
+- **策略**: 請求 tier{resolved_tier}，實際 Tier {resolved_tier}
+{mode_line}{failure_line}- **覆蓋率**: {coverage}% (未覆蓋行號: 無)
+- **突變分數**: {mutation}%
+{interrupted}'''
+
+
+class FixtureScorecardTests(unittest.TestCase):
+    def test_organized_reports_preserve_scores_and_reject_missing_or_invalid_layout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            report_path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            expected = report_fields(report_path)
+            folder = report_path.parent
+            data = folder / 'loop' / '_run'
+            files = list(folder.iterdir())
+            data.mkdir(parents=True)
+            (data / 'layout.json').write_text(json.dumps({'schemaVersion': 'function-loops-v1'}), encoding='utf-8')
+            for file in files:
+                if file != report_path and file.is_file():
+                    file.rename(data / file.name)
+            round_folder = data.parent / '1'
+            round_folder.mkdir()
+            (data / 'loop1_test.py').rename(round_folder / 'loop1_test.py')
+            self.assertEqual(report_fields(report_path), expected)
+            (data / 'quality_baseline.json').unlink()
+            self.assertTrue(report_fields(report_path)['invalid_journal'])
+            (data / 'layout.json').write_text('{}', encoding='utf-8')
+            self.assertTrue(report_fields(report_path)['invalid_journal'])
+
+    def test_concise_report_uses_bound_manifest_and_retained_evidence_not_markdown_maxima(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            report_path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            expected = report_fields(report_path)
+            manifest_path = report_path.with_name('run_manifest.json')
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['report'] = {'schemaVersion': 'target-report-v1', 'sourcePath': expected['target_file'],
+                                  'sourceFile': pathlib.Path(expected['target_file']).name,
+                                  'target': expected['target_function'], 'modelIdentity': expected['model_identity'],
+                                  'requestedTier': expected['requested_tier']}
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+            concise = (f"- **Target file**: {manifest['report']['sourceFile']}\n"
+                       f"- **Target function**: {expected['target_function']}\n"
+                       f"- **Model identity**: {expected['model_identity']}\n"
+                       '- **Coverage**: 1%\n- **Mutation score**: 2%\n')
+            report_path.write_text(concise, encoding='utf-8')
+            fields = report_fields(report_path)
+            self.assertFalse(fields['invalid_journal'])
+            self.assertEqual(fields, {**expected, 'target_file': manifest['report']['sourceFile']})
+            for field in ['sourcePath', 'sourceFile', 'modelIdentity', 'target']:
+                bad = copy.deepcopy(manifest)
+                bad['report'][field] = 'other-project-or-model'
+                manifest_path.write_text(json.dumps(bad), encoding='utf-8')
+                self.assertTrue(report_fields(report_path)['invalid_journal'], field)
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+            report_path.with_name('quality_baseline.json').unlink()
+            self.assertTrue(report_fields(report_path)['invalid_journal'])
+
+    def test_english_report_preserves_scores_identity_failures_and_retained_tier(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = pathlib.Path(root) / 'final_report.md'
+            chinese = report('sample.py', 'Group.method', 90, 80, error=True, failure_category='validation')
+            chinese = chinese.replace('- **策略**: 請求 tier1，實際 Tier 1', '- **起始策略**: 請求 tier2，起始 Tier 2')
+            path.write_text(chinese, encoding='utf-8')
+            expected = report_fields(path)
+            english = chinese
+            for before, after in [('目標檔案', 'Target file'), ('測試函式', 'Target function'),
+                                  ('模型識別', 'Model identity'), ('失敗分類', 'Failure category'),
+                                  ('覆蓋率', 'Coverage'), ('突變分數', 'Mutation score'),
+                                  ('起始策略**: 請求 tier2，起始 Tier 2', 'Initial strategy**: requested tier2, initial Tier 2'),
+                                  ('### ❌ 執行中斷（第 2 輪）', '### ❌ Execution interrupted (round 2)')]:
+                english = english.replace(before, after)
+            path.write_text(english, encoding='utf-8')
+            self.assertEqual(report_fields(path), expected)
+            self.assertEqual(expected['requested_tier'], 'tier2')
+            self.assertTrue(expected['execution_error'])
+            self.assertIsNone(expected['resolved_tier'], 'initial strategy cannot become retained tier')
+
+            # The report language must not bypass or invalidate verified journal evidence.
+            policy_path, _ = self.write_policy_report(pathlib.Path(root), create_strict_quality_policy())
+            content = policy_path.read_text(encoding='utf-8').replace(
+                '- **策略**: 請求 tier1，實際 Tier 1', '- **起始策略**: 請求 tier2，起始 Tier 2')
+            policy_path.write_text(content, encoding='utf-8')
+            verified = report_fields(policy_path)
+            for before, after in [('目標檔案', 'Target file'), ('測試函式', 'Target function'),
+                                  ('模型識別', 'Model identity'), ('覆蓋率', 'Coverage'), ('突變分數', 'Mutation score'),
+                                  ('起始策略**: 請求 tier2，起始 Tier 2', 'Initial strategy**: requested tier2, initial Tier 2')]:
+                content = content.replace(before, after)
+            policy_path.write_text(content, encoding='utf-8')
+            self.assertEqual(report_fields(policy_path), verified)
+            self.assertEqual(verified['resolved_tier'], 1)
+            self.assertEqual(verified['requested_tier'], 'tier2')
+            policy_path.with_name('quality_baseline.json').unlink()
+            self.assertTrue(report_fields(policy_path)['invalid_journal'])
+
+    def test_standard80_report_reassessment_does_not_relabel_strict_history(self):
+        for policy, passed in [(create_default_quality_policy(), True), (create_strict_quality_policy(), False)]:
+            with self.subTest(policy=policy['policyId']), tempfile.TemporaryDirectory() as root:
+                path, _ = self.write_policy_report(pathlib.Path(root), policy, 'strict-90-of-100-below')
+                parsed = report_fields(path)
+                self.assertFalse(parsed['invalid_journal'])
+                self.assertEqual(parsed['quality_assessment']['fullyPassed'], passed)
+                self.assertEqual(parsed['mutation_score'], 90)
+
+    def write_policy_report(self, root, policy, vector_name='strict-full-success', terminal='passed'):
+        fixture = next(item for item in load_manifest()['fixtures'] if item['id'] == 'tier1-class-method')
+        vectors = json.loads((SCRIPTS_DIR.parent / 'contracts' / 'quality-policy-cases-v1.json').read_text(encoding='utf-8'))
+        evidence = copy.deepcopy(next(item['evidence'] for item in vectors['cases'] if item['name'] == vector_name))
+        source_file = '/portable/' + fixture['source']
+        code = '# retained policy fixture\r\n'
+        digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        evidence['identity'].update(sourcePath=source_file, testHash=digest, policyHash=policy['policyHash'])
+        evidence['mutation'].update(sourcePath=source_file, testHash=digest)
+        evidence['coverage']['testHash'] = digest
+        evidence['coverage']['assessment']['invocationEvidence']['testHash'] = digest
+        for scope in (evidence['identity']['targetScope'], evidence['mutation']['targetScope'], evidence['coverage']['targetScope']):
+            scope['qualifiedName'] = fixture['target']
+        assessment = evaluate_quality(policy, evidence)
+        coverage = {'coverageText': '100%', 'missingLines': 'none', 'assessment': evidence['coverage']['assessment'],
+                    'selectedTarget': {'qualifiedName': fixture['target'], 'executableLines': [2, 3], 'missingLines': [], 'branchesCovered': True}}
+        path = self.write_report(root, 'policy-case', report(source_file, fixture['target'], 100, 100))
+        snapshot = {'schemaVersion': 'quality-baseline-v1', 'sourceHash': evidence['identity']['sourceHash'], 'target': fixture['target'],
+                    'code': code, 'codeHash': digest, 'testFile': 'immutable_test.py', 'execution': 'Ran 1 test\nOK',
+                    'coverage': coverage, 'mutation': evidence['mutation'], 'reviewStatus': evidence['reviewStatus'],
+                    'generationMode': evidence['generationMode'], 'tier': 1, 'qualityGaps': [], 'measuredQualityGaps': [],
+                    'qualityPolicy': policy, 'qualityAssessment': assessment}
+        manifest = {'runId': 'new-policy-run', 'sourceHash': snapshot['sourceHash'], 'target': fixture['target'],
+                    'qualityContractVersion': 'quality-policy-v1', 'qualityPolicy': policy}
+        knowledge = {**manifest, 'terminalStatus': terminal, 'reviewStatus': snapshot['reviewStatus'],
+                     'generationMode': snapshot['generationMode'], 'execution': snapshot['execution'], 'resolvedTier': 1,
+                     'acceptedTest': 'loop1_test.py', 'acceptedCodeHash': digest, 'coverage': coverage,
+                     'mutation': snapshot['mutation'], 'mutationScore': 100, 'qualityGaps': [], 'qualityAssessment': assessment}
+        path.with_name('immutable_test.py').write_bytes(code.encode('utf-8'))
+        path.with_name('loop1_test.py').write_bytes(code.encode('utf-8'))
+        artifacts = {'quality_baseline.json': snapshot, 'run_manifest.json': manifest, 'function_knowledge.json': knowledge}
+        for name, value in artifacts.items():
+            path.with_name(name).write_text(json.dumps(value), encoding='utf-8')
+        return path, artifacts
+
+    def test_new_policy_reader_recomputes_exact_counts_and_retains_strict_vs_fixture_distinction(self):
+        fixture_policy = create_fixture_quality_policy(fixtureId='tier1-class-method',
+            manifestHash=hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest(), minLineCoverage=100, minMutationScore=85)
+        for policy, vector, expected in [(create_strict_quality_policy(), 'fixture-90-of-100-meets-85', 'threshold_failed'),
+                                         (fixture_policy, 'fixture-90-of-100-meets-85', 'passed'),
+                                         (create_strict_quality_policy(), 'strict-199-of-200-does-not-round', 'threshold_failed'),
+                                         (create_strict_quality_policy(), 'strict-full-success', 'passed')]:
+            with self.subTest(policy=policy['mode'], vector=vector), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                self.write_policy_report(root, policy, vector)
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+                self.assertEqual(result['status'], expected)
+                self.assertEqual(result['policy_mode'], policy['mode'])
+                self.assertEqual(result['mutation_score'], 99.5 if '199' in vector else 100 if 'full-success' in vector else 90)
+
+    def test_ai_workflow_requires_approval_bound_to_retained_test_with_manifest_only_detection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            path, original = self.write_policy_report(root, create_strict_quality_policy())
+            original = copy.deepcopy(json.loads(json.dumps(original)))
+            manifest, knowledge = original['run_manifest.json'], original['function_knowledge.json']
+            manifest['workflowVersion'] = knowledge['workflowVersion'] = AI_WORKFLOW_VERSION
+            knowledge['reviewApproval'] = {'workflowVersion': AI_WORKFLOW_VERSION,
+                'runId': manifest['runId'], 'sourceHash': manifest['sourceHash'], 'target': manifest['target'],
+                'testHash': knowledge['acceptedCodeHash']}
+
+            def reread(change=lambda artifacts: None):
+                artifacts = copy.deepcopy(original)
+                change(artifacts)
+                for name, value in artifacts.items():
+                    path.with_name(name).write_text(json.dumps(value), encoding='utf-8')
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+
+            self.assertEqual(reread()['status'], 'passed')
+            self.assertEqual(reread(lambda a: a['function_knowledge.json'].pop('workflowVersion'))['status'], 'passed')
+            self.assertEqual(reread(lambda a: a['run_manifest.json'].pop('workflowVersion'))['status'], 'passed')
+            mutations = [
+                lambda a: a['function_knowledge.json'].pop('reviewApproval'),
+                lambda a: (a['function_knowledge.json'].pop('workflowVersion'), a['function_knowledge.json'].pop('reviewApproval')),
+                lambda a: a['run_manifest.json'].update(workflowVersion='seed-expand-v1'),
+                lambda a: a['function_knowledge.json'].update(workflowVersion='seed-expand-v1'),
+            ]
+            for field in ['workflowVersion', 'runId', 'sourceHash', 'target', 'testHash']:
+                mutations.append(lambda a, field=field: a['function_knowledge.json']['reviewApproval'].update({field: 'wrong-identity'}))
+                mutations.append(lambda a, field=field: a['function_knowledge.json']['reviewApproval'].pop(field))
+            for version in ['unknown-workflow-v1', ' ', '', None, 1]:
+                def unknown_workflow(artifacts, version=version):
+                    artifacts['run_manifest.json']['workflowVersion'] = version
+                    artifacts['function_knowledge.json']['workflowVersion'] = version
+                    artifacts['function_knowledge.json'].pop('reviewApproval')
+                mutations.append(unknown_workflow)
+            for index, mutation in enumerate(mutations):
+                with self.subTest(index=index):
+                    self.assertEqual(reread(mutation)['status'], 'incomplete_provenance')
+
+            # Valid pre-refactor evidence keeps its historical interpretation.
+            def historical(artifacts):
+                artifacts['run_manifest.json']['workflowVersion'] = 'seed-expand-v1'
+                artifacts['function_knowledge.json'].pop('workflowVersion')
+                artifacts['function_knowledge.json'].pop('reviewApproval')
+            self.assertEqual(reread(historical)['status'], 'passed')
+            def legacy(artifacts):
+                artifacts['run_manifest.json'].pop('workflowVersion')
+                artifacts['function_knowledge.json'].pop('workflowVersion')
+                artifacts['function_knowledge.json'].pop('reviewApproval')
+            self.assertEqual(reread(legacy)['status'], 'passed')
+
+            # The manifest still enforces the new contract if its journal disappears.
+            reread()
+            path.with_name('function_knowledge.json').unlink()
+            result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            self.assertEqual(result['status'], 'incomplete_provenance')
+
+    def test_new_policy_requires_bound_manifest_contract_and_does_not_upgrade_round_limit(self):
+        correct_hash = hashlib.sha256(DEFAULT_MANIFEST.read_bytes()).hexdigest()
+        for threshold, manifest_hash, fixture_id, terminal, expected in [
+                (85, correct_hash, 'tier1-class-method', 'round-limit', 'incomplete_run'),
+                (80, correct_hash, 'tier1-class-method', 'passed', 'incomplete_provenance'),
+                (85, 'e' * 64, 'tier1-class-method', 'passed', 'incomplete_provenance'),
+                (85, correct_hash, 'another-fixture', 'passed', 'incomplete_provenance')]:
+            with self.subTest(threshold=threshold, terminal=terminal, fixture=fixture_id), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                policy = create_fixture_quality_policy(fixtureId=fixture_id, manifestHash=manifest_hash,
+                                                       minLineCoverage=100, minMutationScore=threshold)
+                self.write_policy_report(root, policy, 'fixture-90-of-100-meets-85', terminal)
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+                self.assertEqual(result['status'], expected)
+
+    def test_new_policy_rejects_mixed_or_missing_artifacts_and_self_declared_pass(self):
+        mutations = [
+            lambda a: a['function_knowledge.json'].update(evidenceValid=False),
+            lambda a: a['run_manifest.json'].pop('qualityPolicy'),
+            lambda a: a['function_knowledge.json'].pop('qualityPolicy'),
+            lambda a: a['quality_baseline.json'].pop('qualityPolicy'),
+            lambda a: a['run_manifest.json'].update(qualityContractVersion='unknown'),
+            lambda a: a['quality_baseline.json'].update(sourceHash='e' * 64),
+            lambda a: a['quality_baseline.json'].update(target='other'),
+            lambda a: a['quality_baseline.json']['mutation'].update(candidateSetId='e' * 64),
+            lambda a: a['function_knowledge.json']['qualityAssessment'].update(fullyPassed=False),
+            lambda a: a['function_knowledge.json'].pop('terminalStatus'),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                path, artifacts = self.write_policy_report(root, create_strict_quality_policy())
+                # Break aliases intentionally: persisted files are separate values.
+                artifacts = copy.deepcopy(json.loads(json.dumps(artifacts)))
+                mutate(artifacts)
+                for name, value in artifacts.items():
+                    path.with_name(name).write_text(json.dumps(value), encoding='utf-8')
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+                self.assertEqual(result['status'], 'incomplete_provenance')
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            path.with_name('function_knowledge.json').unlink()
+            result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            self.assertEqual(result['status'], 'incomplete_provenance')
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path, _ = self.write_policy_report(root, create_strict_quality_policy())
+            path.with_name('immutable_test.py').write_bytes(b'# changed test\n')
+            result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            self.assertEqual(result['status'], 'incomplete_provenance')
+
+    def test_selected_target_coverage_is_bound_to_retained_test_and_keeps_module_coverage_separate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path = self.write_report(root, 'case', report('/portable/tier1_class.py', 'Labeler.render', 86, 100))
+            code = b'# retained neutral fixture\n'
+            path.with_name('loop1_test.py').write_bytes(code)
+            identity = {'runId': 'run', 'sourceHash': 'source', 'target': 'Labeler.render'}
+            path.with_name('run_manifest.json').write_text(json.dumps(identity), encoding='utf-8')
+            selected = {'qualifiedName': 'Labeler.render', 'executableLines': [6], 'missingLines': [], 'branchesCovered': True}
+            knowledge = {**identity, 'terminalStatus': 'passed', 'reviewStatus': 'completed', 'resolvedTier': 1,
+                         'acceptedTest': 'loop1_test.py', 'acceptedCodeHash': hashlib.sha256(code).hexdigest(),
+                         'coverage': {'coverageText': '86%', 'selectedTarget': selected}, 'mutationScore': 100, 'qualityGaps': []}
+            def evaluate():
+                path.with_name('function_knowledge.json').write_text(json.dumps(knowledge), encoding='utf-8')
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-class-method')
+            result = evaluate()
+            self.assertEqual((result['coverage'], result['module_coverage'], result['coverage_scope']), (100, 86, 'selected-target'))
+            self.assertEqual(result['status'], 'passed')
+            knowledge['coverage']['coverageText'] = ''
+            self.assertIsNone(evaluate()['module_coverage'], 'a target measurement cannot invent missing module coverage')
+            knowledge['coverage']['coverageText'] = '86%'
+            selected['missingLines'] = [6]
+            self.assertEqual(evaluate()['status'], 'threshold_failed')
+            selected.update(missingLines=[], branchesCovered=False)
+            self.assertEqual(evaluate()['status'], 'quality_incomplete')
+            selected.update(branchesCovered=True, qualifiedName='render')
+            self.assertEqual(evaluate()['status'], 'incomplete_provenance')
+            selected['qualifiedName'] = 'Labeler.render'
+            selected['executableLines'] = []
+            self.assertEqual(evaluate()['status'], 'incomplete_provenance')
+            selected['executableLines'] = [6]
+            knowledge['resolvedTier'] = 2
+            self.assertEqual(evaluate()['status'], 'tier_mismatch', 'retained Tier supersedes stale report header')
+            knowledge['resolvedTier'] = 1
+            del knowledge['coverage']['selectedTarget']
+            self.assertEqual(evaluate()['status'], 'threshold_failed', 'legacy module scores are never silently upgraded')
+
+    def test_incomplete_reviews_missing_review_provenance_and_unexecuted_runs_never_pass(self):
+        for review_status, terminal, expected in [
+                ('incomplete', 'passed', 'review_incomplete'),
+                ('completed', 'execution-passed-review-incomplete', 'review_incomplete'),
+                ('completed', 'stub-smoke-generated', 'incomplete_run'),
+                ('completed', 'running', 'incomplete_run'),
+                ('completed', 'retained-after-failure', 'incomplete_run'),
+                (None, None, 'incomplete_provenance'),
+                ('not-required', None, 'incomplete_provenance')]:
+            with self.subTest(review_status=review_status, terminal=terminal), tempfile.TemporaryDirectory() as folder:
+                root = pathlib.Path(folder)
+                content = report('/portable/tier1_boundary.py', 'clamp', 100, 100)
+                content = content.replace('- **Reviewer status**: completed\n',
+                                          f'- **Reviewer status**: {review_status}\n' if review_status else '')
+                path = self.write_report(root, 'case', content)
+                if terminal:
+                    path.with_name('function_knowledge.json').write_text(json.dumps({
+                        'terminalStatus': terminal, 'reviewStatus': review_status}), encoding='utf-8')
+                result = next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-boundary')
+                self.assertEqual(result['status'], expected)
+
+    def test_scorecard_binds_scores_to_retained_file_and_rejects_stale_or_incomplete_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            path = self.write_report(root, 'case', report('/portable/tier1_boundary.py', 'clamp', 100, 100))
+            code = b'# neutral retained test\n'
+            path.with_name('loop1_test.py').write_bytes(code)
+            identity = {'runId': 'neutral-run', 'sourceHash': 'neutral-source'}
+            path.with_name('run_manifest.json').write_text(json.dumps(identity), encoding='utf-8')
+            knowledge = {**identity, 'terminalStatus': 'passed', 'reviewStatus': 'completed',
+                         'acceptedTest': 'loop1_test.py', 'acceptedCodeHash': hashlib.sha256(code).hexdigest(),
+                         'coverage': {'coverageText': '80%'}, 'mutationScore': 70, 'qualityGaps': []}
+            def evaluate():
+                path.with_name('function_knowledge.json').write_text(json.dumps(knowledge), encoding='utf-8')
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-boundary')
+            result = evaluate()
+            self.assertEqual((result['coverage'], result['mutation_score']), (80, 70))
+            self.assertEqual(result['status'], 'threshold_failed')
+            knowledge.update(coverage={'coverageText': '100%'}, mutationScore=100, qualityGaps=['missing branch'])
+            self.assertEqual(evaluate()['status'], 'quality_incomplete')
+            knowledge['qualityGaps'] = []
+            self.assertEqual(evaluate()['status'], 'passed')
+            path.with_name('loop1_test.py').write_bytes(b'# changed\n')
+            self.assertEqual(evaluate()['status'], 'incomplete_provenance')
+
+    def test_legacy_review_warning_and_last_loop_scores_cannot_be_hidden_by_earlier_high_scores(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            content = report('/portable/tier1_boundary.py', 'clamp', 100, 100)
+            content = content.replace('- **Reviewer status**: completed\n', '') + '\nReviewer 審查未完成\n'
+            path = self.write_report(root, 'case', content)
+            def evaluate():
+                return next(item for item in build_scorecard(root)['results'] if item['id'] == 'tier1-boundary')
+            self.assertEqual(evaluate()['status'], 'review_incomplete')
+            path.write_text(report('/portable/tier1_boundary.py', 'clamp', 100, 70) +
+                            '\n- **覆蓋率**: 70%\n- **突變分數**: 100%\n', encoding='utf-8')
+            self.assertEqual(evaluate()['status'], 'threshold_failed')
+
+    def write_report(self, root, directory, content):
+        path = root / directory / 'final_report.md'
+        path.parent.mkdir(parents=True)
+        path.write_text(content, encoding='utf-8')
+        return path
+
+    def test_scorecard_uses_actual_report_facts_and_keeps_missing_fixtures_unpassed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            self.write_report(root, 'pass', report('/portable/tier1_boundary.py', 'clamp', 100, 100))
+            self.write_report(root, 'below-threshold', report('/portable/tier1_exception.py', 'require_value', 60, 60))
+            card = build_scorecard(root)
+
+        results = {item['id']: item for item in card['results']}
+        self.assertEqual(results['tier1-boundary']['status'], 'passed')
+        self.assertEqual(results['tier1-boundary']['tier1_generation_mode'], 'llm-evidence-bound')
+        self.assertEqual(results['tier1-boundary']['report'], 'pass/final_report.md')
+        self.assertEqual(results['tier1-explicit-exception']['status'], 'threshold_failed')
+        self.assertEqual(results['tier1-class-method']['status'], 'missing_report')
+        self.assertEqual(card['status_counts']['passed'], 1)
+        self.assertEqual(card['status_counts']['threshold_failed'], 1)
+
+    def test_execution_error_cannot_be_counted_as_a_pass_and_outputs_are_machine_readable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            self.write_report(root, 'error', report('/portable/tier1_boundary.py', 'clamp', 100, 100, error=True, failure_category='model-format'))
+            card = build_scorecard(root)
+            output = root / 'scorecard'
+            json_path, markdown_path = write_scorecard(card, output)
+            stored = json.loads(json_path.read_text(encoding='utf-8'))
+            markdown = markdown_path.read_text(encoding='utf-8')
+
+        result = next(item for item in card['results'] if item['id'] == 'tier1-boundary')
+        self.assertEqual(result['status'], 'execution_error')
+        self.assertEqual(result['failure_category'], 'model-format')
+        self.assertEqual(stored['schema_version'], 3)
+        self.assertIn('execution_error', format_markdown(card))
+        self.assertIn('Fixture Corpus Scorecard', markdown)
+
+    def test_tier1_modes_are_not_mixed_and_can_be_scored_separately(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            self.write_report(root, 'llm', report('/portable/tier1_boundary.py', 'clamp', 100, 100, generation_mode='llm-evidence-bound'))
+            self.write_report(root, 'fallback', report('/portable/tier1_boundary.py', 'clamp', 100, 100, generation_mode='deterministic-fallback'))
+
+            mixed = build_scorecard(root)
+            llm_only = build_scorecard(root, tier1_generation_mode='llm-evidence-bound')
+            fallback_only = build_scorecard(root, tier1_generation_mode='deterministic-fallback')
+
+        mixed_result = next(item for item in mixed['results'] if item['id'] == 'tier1-boundary')
+        llm_result = next(item for item in llm_only['results'] if item['id'] == 'tier1-boundary')
+        fallback_result = next(item for item in fallback_only['results'] if item['id'] == 'tier1-boundary')
+        self.assertEqual(mixed_result['status'], 'mixed_generation_modes')
+        self.assertEqual(mixed_result['available_tier1_generation_modes'], ['deterministic-fallback', 'llm-evidence-bound'])
+        self.assertEqual(llm_result['status'], 'passed')
+        self.assertEqual(llm_result['tier1_generation_mode'], 'llm-evidence-bound')
+        self.assertEqual(fallback_result['status'], 'passed')
+        self.assertEqual(fallback_result['tier1_generation_mode'], 'deterministic-fallback')
+
+    def test_legacy_tier1_report_without_mode_is_not_counted_as_an_llm_result(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            self.write_report(root, 'legacy', report('/portable/tier1_boundary.py', 'clamp', 100, 100, generation_mode=None))
+            card = build_scorecard(root)
+
+        result = next(item for item in card['results'] if item['id'] == 'tier1-boundary')
+        self.assertEqual(result['status'], 'incomplete_provenance')
+
+    def test_scorecard_filters_the_exact_provider_model_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            self.write_report(root, 'cloud', report('/portable/tier1_boundary.py', 'clamp', 100, 100, model_identity='cloud/shared-name'))
+            self.write_report(root, 'local', report('/portable/tier1_boundary.py', 'clamp', 100, 100, model_identity='local/shared-name'))
+            cloud = build_scorecard(root, model_identity='cloud/shared-name')
+            unavailable = build_scorecard(root, model_identity='custom/shared-name')
+
+        cloud_result = next(item for item in cloud['results'] if item['id'] == 'tier1-boundary')
+        unavailable_result = next(item for item in unavailable['results'] if item['id'] == 'tier1-boundary')
+        self.assertEqual(cloud_result['status'], 'passed')
+        self.assertEqual(cloud_result['model_identity'], 'cloud/shared-name')
+        self.assertEqual(cloud_result['available_model_identities'], ['cloud/shared-name', 'local/shared-name'])
+        self.assertEqual(unavailable_result['status'], 'missing_report')
+
+    def test_tier1_llm_release_gate_requires_all_llm_reports_at_the_correct_tier(self):
+        tier1_fixtures = [fixture for fixture in load_manifest()['fixtures'] if fixture['tier'] == 1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            for fixture in tier1_fixtures:
+                self.write_report(
+                    root,
+                    fixture['id'],
+                    report(
+                        f"/portable/{fixture['source']}", fixture['target'], 100, 100,
+                        generation_mode='llm-evidence-bound', resolved_tier=1
+                    )
+                )
+            unfiltered = build_scorecard(root)
+            llm_only = build_scorecard(root, tier1_generation_mode='llm-evidence-bound', model_identity='cloud/test-model')
+            self.assertFalse(unfiltered['tier1_llm_release']['ready'])
+            self.assertTrue(llm_only['tier1_llm_release']['ready'])
+            self.assertEqual(llm_only['tier1_llm_release']['passed'], len(tier1_fixtures))
+            self.assertEqual(main([str(root), '--model-identity', 'cloud/test-model', '--require-tier1-llm-release']), 0)
+
+            self.write_report(
+                root,
+                'wrong-tier',
+                report('/portable/tier1_boundary.py', 'clamp', 100, 100, resolved_tier=2)
+            )
+            mismatch = build_scorecard(root, tier1_generation_mode='llm-evidence-bound', model_identity='cloud/test-model')
+            self.assertEqual(main([str(root), '--model-identity', 'cloud/test-model', '--require-tier1-llm-release']), 1)
+
+        result = next(item for item in mismatch['results'] if item['id'] == 'tier1-boundary')
+        self.assertEqual(result['status'], 'tier_mismatch')
+        self.assertFalse(mismatch['tier1_llm_release']['ready'])
+
+    def test_lab_batch_manifest_scores_only_the_five_selected_fixtures(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            card = build_scorecard(temp_dir, batch_manifest_path=DEFAULT_BATCH_MANIFEST)
+
+        self.assertEqual(card['batch_name'], 'five-category-lab-batch')
+        self.assertEqual(card['fixture_count'], 5)
+        self.assertEqual(
+            [item['id'] for item in card['results']],
+            [
+                'tier1-boundary',
+                'tier1-class-method',
+                'tier3-database-context',
+                'tier4-async-context',
+                'tier3-http-client',
+            ],
+        )
+        self.assertIn('five-category-lab-batch', format_markdown(card))
+
+
+if __name__ == '__main__':
+    unittest.main()
