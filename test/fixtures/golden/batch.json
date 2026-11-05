@@ -1,0 +1,4642 @@
+{
+  "artifacts": {
+    "golden-runtime_<SESSION_TIME>/batch_manifest.json": {
+      "allTargetsExecutionVerified": false,
+      "allTargetsPassed": false,
+      "attemptedTargets": 3,
+      "batchId": "<RUN_1>",
+      "buildTimestamp": "<TIME>",
+      "complete": false,
+      "cost": {
+        "modelRequests": 9,
+        "outputTokens": 0,
+        "transportAttempts": 9,
+        "unknownRequestTargets": 0
+      },
+      "discoveredFiles": [
+        "sample.py"
+      ],
+      "discoveryFailures": [],
+      "environmentIssues": [],
+      "expectedTargets": 3,
+      "finishedAt": "<TIME>",
+      "finishedTargets": 3,
+      "model": "golden-fixture",
+      "modelCapabilitySummary": {
+        "completedTransports": 9,
+        "lengthStoppedTransports": 0,
+        "outputEvalMs": 0,
+        "outputTokens": 0,
+        "timedOutTransports": 0,
+        "version": "model-capability-summary-v1"
+      },
+      "preflightBlockedModules": 0,
+      "preflightBlockedTargets": 0,
+      "preflightEvents": [
+        {
+          "at": "<TIME>",
+          "blockedModules": 0,
+          "fixtureId": null,
+          "phase": "initial",
+          "report": "preflight/import_check.md",
+          "resourceCount": 0,
+          "status": "checked"
+        },
+        {
+          "at": "<TIME>",
+          "blockedModules": 0,
+          "fixtureId": null,
+          "phase": "decision",
+          "report": "preflight/final_import_check.md",
+          "status": "ready"
+        }
+      ],
+      "pythonExecutable": "<PYTHON>",
+      "rates": {
+        "blocked": 0,
+        "denominator": 3,
+        "incomplete": 0,
+        "passed": 0
+      },
+      "roleContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "bugFix": "bug-fix-v5",
+        "inputPlan": "input-plan-v1",
+        "qualityAnalyst": "quality-task-v3",
+        "qualityAnalystGrounded": "quality-task-v4",
+        "reviewer": "review-v8",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v3",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3",
+        "writerRevision": "writer-revision-v2"
+      },
+      "schemaVersion": 1,
+      "scope": {
+        "excludedFiles": [],
+        "knownFiles": [
+          "sample.py"
+        ],
+        "root": "<ROOT>",
+        "scopeId": "a55f3574665f9f1060d552c0e0e4239bdf14ad1666a9c14eda3c2c1ada98913d",
+        "selectedFiles": [
+          "sample.py"
+        ]
+      },
+      "startedAt": "<TIME>",
+      "status": "failed",
+      "statusCounts": {
+        "execution-passed": 2,
+        "failed": 1
+      },
+      "stopPolicy": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "stopReason": null,
+      "targets": [
+        {
+          "capabilitySummary": {
+            "completedTransports": 5,
+            "lengthStoppedTransports": 0,
+            "outputEvalMs": 0,
+            "outputTokens": 0,
+            "timedOutTransports": 0,
+            "version": "model-capability-summary-v1"
+          },
+          "category": "validation",
+          "effectiveSettings": {
+            "batchFailureLimit": 0,
+            "failureLimit": 5,
+            "qualityNoImprovementLimit": 3
+          },
+          "failureCount": 5,
+          "failureLimit": 5,
+          "file": "sample.py",
+          "formalRequests": 5,
+          "id": 0,
+          "modelRequests": 5,
+          "qualificationRequests": 0,
+          "reportDirectory": "sample_af2bdbe1/first_6fad662b",
+          "stage": "target-failure-policy",
+          "state": "finished",
+          "stopReason": "failure-limit",
+          "target": "first",
+          "terminalStatus": "failed",
+          "transportAttempts": 5
+        },
+        {
+          "capabilitySummary": {
+            "completedTransports": 2,
+            "lengthStoppedTransports": 0,
+            "outputEvalMs": 0,
+            "outputTokens": 0,
+            "timedOutTransports": 0,
+            "version": "model-capability-summary-v1"
+          },
+          "effectiveSettings": {
+            "batchFailureLimit": 0,
+            "failureLimit": 5,
+            "qualityNoImprovementLimit": 3
+          },
+          "failureCount": 1,
+          "failureLimit": 5,
+          "file": "sample.py",
+          "formalRequests": 2,
+          "id": 1,
+          "modelRequests": 2,
+          "qualificationRequests": 0,
+          "reportDirectory": "sample_af2bdbe1/second_572aac51",
+          "state": "finished",
+          "stopReason": "execution-passed",
+          "target": "second",
+          "terminalStatus": "execution-passed",
+          "transportAttempts": 2
+        },
+        {
+          "capabilitySummary": {
+            "completedTransports": 2,
+            "lengthStoppedTransports": 0,
+            "outputEvalMs": 0,
+            "outputTokens": 0,
+            "timedOutTransports": 0,
+            "version": "model-capability-summary-v1"
+          },
+          "effectiveSettings": {
+            "batchFailureLimit": 0,
+            "failureLimit": 5,
+            "qualityNoImprovementLimit": 3
+          },
+          "failureCount": 1,
+          "failureLimit": 5,
+          "file": "sample.py",
+          "formalRequests": 2,
+          "id": 2,
+          "modelRequests": 2,
+          "qualificationRequests": 0,
+          "reportDirectory": "sample_af2bdbe1/third_61f86f66",
+          "state": "finished",
+          "stopReason": "execution-passed",
+          "target": "third",
+          "terminalStatus": "execution-passed",
+          "transportAttempts": 2
+        }
+      ],
+      "validationMode": "execution"
+    },
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/first_6fad662b/final_report.md": "## Final outcome: Not passed: execution or validation failed\n\n- **Target file**: sample.py\n- **Target function**: first\n- **Model identity**: local/golden-fixture\n- **Failure reason**: Target stopped after 5 recoverable failures (limit 5).\n- **Coverage**: N/A (Not run)\n- **Mutation score**: N/A (Not run)\n- **Requested mutation engine**: builtin (no verified measurement yet)\n- [Failure report and full workflow](failure_report.md)\n- **Test method counts**: generated Unknown; added relative to baseline Unknown; rejected Unknown; currently retained Unknown.\n\n### Test cases\n\nNo verified, retained test cases are available.\n\n### Mutation cases\n\nNo completed mutation cases are bound to the test cases above.\n\n### Workflows by round\n\n- [Round 1 results](loop/1/report.md) · [Failure report](loop/1/failure_report.md)\n<!-- result-layout: function-loops-v1 -->\n",
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/first_6fad662b/loop/_run/function_knowledge.json": {
+      "coverage": null,
+      "dependencyEvidenceVersion": "loaded-project-sources-v1",
+      "dependencyVersions": [
+        {
+          "file": "<ROOT>/sample.py",
+          "hash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe"
+        }
+      ],
+      "diagnostic": {
+        "effectiveSettings": {
+          "batchFailureLimit": 0,
+          "failureLimit": 5,
+          "qualityNoImprovementLimit": 3
+        },
+        "failureCount": 5,
+        "failureLimit": 5,
+        "reasonCode": "repeated-candidate",
+        "stopReason": "failure-limit"
+      },
+      "effectiveSettings": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "failure": "Target stopped after 5 recoverable failures (limit 5).",
+      "failureCategory": "validation",
+      "failureCount": 5,
+      "failureLimit": 5,
+      "failureStage": "target-failure-policy",
+      "firstFailure": {
+        "category": "unknown",
+        "reason": "Missing unittest import",
+        "sequence": 18,
+        "stage": "structure",
+        "status": "rejected"
+      },
+      "firstRepairFailure": {
+        "attempt": 2,
+        "category": "validation",
+        "contractVersion": "writer-revision-v2",
+        "diagnostic": {
+          "candidateTestHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+          "gate": "candidate-deduplication",
+          "previousTestHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+          "previousTestUnchanged": true,
+          "reasonCodes": [
+            "repeated-candidate"
+          ],
+          "version": "repair-diagnostics-v1"
+        },
+        "executableBaselineAvailable": false,
+        "loop": 1,
+        "reason": "NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\nMissing unittest import",
+        "sequence": 43,
+        "stage": "writer",
+        "status": "repeated"
+      },
+      "importContract": {
+        "className": null,
+        "dependencies": {},
+        "module": "sample",
+        "moduleSourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "source": "def first(value):\n    return value + 1",
+        "target": "first"
+      },
+      "initialTargetObservations": null,
+      "lastEvent": {
+        "sequence": 67,
+        "status": "failed",
+        "time": "<TIME>"
+      },
+      "lastFailure": {
+        "category": "validation",
+        "reason": "Target stopped after 5 recoverable failures (limit 5).",
+        "sequence": 67,
+        "stage": "target-failure-policy",
+        "status": "failed"
+      },
+      "lastRepairFailure": {
+        "attempt": 3,
+        "category": "validation",
+        "contractVersion": "writer-revision-v2",
+        "diagnostic": {
+          "candidateTestHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+          "gate": "candidate-deduplication",
+          "previousTestHash": "dfec4486a542099719bea56b06b39af5d2ae28f9c4dca59b616c6379015d5cb5",
+          "previousTestUnchanged": true,
+          "reasonCodes": [
+            "repeated-candidate"
+          ],
+          "version": "repair-diagnostics-v1"
+        },
+        "executableBaselineAvailable": false,
+        "loop": 1,
+        "reason": "NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\nRepeated candidate: change the rejected cause. NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\nMissing unittest import",
+        "sequence": 55,
+        "stage": "writer",
+        "status": "repeated"
+      },
+      "localThinkingMode": "provider-default",
+      "mutationScore": null,
+      "mutationStatus": "deferred",
+      "promptCapacity": {
+        "contextWindow": 16384,
+        "effectiveInputTokens": 2006,
+        "estimatedInputTokens": 2006,
+        "estimation": "conservative-character-estimate",
+        "inputBudget": 14848,
+        "inputShortfallTokens": 0,
+        "limitInputBudget": 31232,
+        "limitInputShortfallTokens": 0,
+        "limitReservedOutputTokens": 1536,
+        "minimumContextTokens": 2866,
+        "modelContextLimit": 32768,
+        "modelContextLimitSource": "ollama-show",
+        "observedInputTokens": null,
+        "requestOutputTokens": 1536,
+        "requiredInputTokens": 2006,
+        "reservedInputTokens": 0,
+        "reservedOutputTokens": 1536,
+        "role": "writer-revision",
+        "scope": "current-role-prompt",
+        "state": "fits-current",
+        "version": "prompt-capacity-v1"
+      },
+      "qualityAssessment": null,
+      "repairFailureCounts": {
+        "repeated-candidate": 2
+      },
+      "reviewStatus": "deferred",
+      "roleQualification": null,
+      "roleQualificationRequired": false,
+      "runId": "<RUN_2>",
+      "schemaVersion": 2,
+      "sourceContext": {
+        "args": [
+          "value"
+        ],
+        "calls": [],
+        "class_context": null,
+        "class_name": null,
+        "code": "def first(value):\n    return value + 1",
+        "condition_facts": [],
+        "dependencies": [],
+        "dependencyContexts": [],
+        "dependencyResolution": [],
+        "dependency_fixture_contract": {
+          "assertionOracle": false,
+          "authority": "fixture-shape-only",
+          "diagnostics": [],
+          "endLine": 2,
+          "flows": [],
+          "patchAuthorization": false,
+          "schemaVersion": "dependency-fixture-contract-v1",
+          "sourceHashKind": "normalized-target-source",
+          "startLine": 1,
+          "status": "complete",
+          "target": "first",
+          "targetSourceHash": "01eab2949245f37b89ac56f003b4573ebcd6a462b9fa91e777f2875eafa01284"
+        },
+        "dependency_skill_facts": {
+          "assertionOracle": false,
+          "authority": "skill-selection-only",
+          "bindings": [],
+          "patchAuthorization": false,
+          "schemaVersion": "dependency-skill-facts-v1",
+          "status": "complete",
+          "target": "first",
+          "targetSourceHash": "01eab2949245f37b89ac56f003b4573ebcd6a462b9fa91e777f2875eafa01284"
+        },
+        "docstring": "",
+        "executable_lines": [
+          2
+        ],
+        "file_imports": [],
+        "is_async": false,
+        "is_generator": false,
+        "localDependencyContexts": [],
+        "method_kind": "module",
+        "name": "first",
+        "property_context": null,
+        "raised_exceptions": [],
+        "referenced_globals": [],
+        "required_args": [
+          "value"
+        ],
+        "retrieval": {
+          "maxChars": 12000,
+          "maxDepth": 2,
+          "maxSymbols": 6,
+          "omitted": [],
+          "selected": 0,
+          "version": "symbol-retrieval-v1"
+        },
+        "signature": [
+          {
+            "annotation": null,
+            "default": null,
+            "kind": "positional_or_keyword",
+            "name": "value",
+            "required": true,
+            "type_shape": {
+              "kind": "unknown",
+              "reason": "missing-annotation"
+            }
+          }
+        ],
+        "sourceVersions": [
+          {
+            "file": "<ROOT>/sample.py",
+            "hash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe"
+          }
+        ],
+        "source_location": {
+          "endLine": 2,
+          "sourceHash": "01eab2949245f37b89ac56f003b4573ebcd6a462b9fa91e777f2875eafa01284",
+          "startLine": 1,
+          "version": "python-source-location-v1"
+        },
+        "source_setup_call_contract": {
+          "assertionOracle": false,
+          "authority": "source-spelling-only",
+          "calls": [],
+          "literalCallArguments": [],
+          "optionalLookups": [],
+          "parameterMembers": [],
+          "patchAuthorization": false,
+          "returnFlow": {
+            "discardedCalls": [],
+            "kind": "contains-value-return"
+          },
+          "schemaVersion": "source-setup-call-contract-v1",
+          "sourceHashKind": "normalized-target-source",
+          "sourceLocations": [],
+          "spellingKind": "ast-normalized",
+          "status": "complete",
+          "target": "first",
+          "targetSourceHash": "01eab2949245f37b89ac56f003b4573ebcd6a462b9fa91e777f2875eafa01284"
+        },
+        "target_import_module": "sample",
+        "type_shape_version": "type-shape-v1"
+      },
+      "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+      "sourceStructure": "def first(value):\n    return value + 1",
+      "stage": "target-failure-policy",
+      "stopReason": "failure-limit",
+      "target": "first",
+      "targetBudget": {
+        "deadlineAt": "<TIME>",
+        "elapsedMs": "<TIME>",
+        "limits": {
+          "candidateAttempts": 20,
+          "estimatedInputTokens": 360000,
+          "logicalRequests": 36,
+          "timeoutMs": 600000,
+          "transportAttempts": 72
+        },
+        "remainingMs": "<TIME>",
+        "startedAt": "<TIME>",
+        "used": {
+          "candidateAttempts": 5,
+          "estimatedInputTokens": 10012,
+          "logicalRequests": 5,
+          "transportAttempts": 5
+        }
+      },
+      "terminalStatus": "failed",
+      "traceStatus": "deferred",
+      "validationMode": "execution"
+    },
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/first_6fad662b/loop/_run/role_events.jsonl": [
+      {
+        "detail": {
+          "target": "first"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 1,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "pipeline",
+        "status": "running",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "priorProbeRequired": false
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 2,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "qualification-policy",
+        "status": "optional",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "inputBudget": 11468,
+          "lastObservedRuntimeContextTokens": 16384,
+          "metadataContextKnown": true,
+          "metadataDiagnostic": {
+            "allocation": {
+              "elapsedMs": "<TIME>",
+              "httpStatus": 200,
+              "reasonCode": "allocation-unavailable"
+            },
+            "endpointKey": "b26993598dffd1f14aed97def57ef67f753518a9b773d8a12033c82b4fa545ca",
+            "show": {
+              "elapsedMs": "<TIME>",
+              "httpStatus": 200,
+              "reasonCode": "loaded"
+            },
+            "source": "ollama-show",
+            "status": "fresh",
+            "version": "local-runtime-metadata-v1"
+          },
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "qualificationApplicable": false,
+          "runtimeContextSource": "ollama-num-ctx"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 3,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-runtime",
+        "status": "selected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "importFixtures": null,
+          "module": "sample",
+          "traceStartupBudget": {
+            "calibrationReason": "successful-module-preflight",
+            "caseTimeoutSeconds": 2,
+            "observedPreflightElapsedMs": "<TIME>",
+            "outerTimeoutMs": 20000,
+            "planningTimeoutSeconds": 5,
+            "totalTimeoutSeconds": "<TIME>",
+            "version": "trace-startup-budget-v1"
+          }
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 4,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "environment",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "dispatcherVersion": "test-rule-dispatcher-v2",
+          "guidance": "=== FUNCTION-SPECIFIC RULES (Selected for this function) ===\n(Derived from actual source code analysis — follow them precisely)\n\n[Correct Import Module Name]\n  IMPORT MODULE NAME:\n  - Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.\n  - Correct: from module_name import target_function\n  - WRONG:   from target_function import target_function\n  - WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths.\n\n[Numeric Calculation Skill]\n  Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.\n  After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.\n  Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain.\n\n",
+          "ids": [
+            "import_module_name",
+            "numeric_calculation"
+          ],
+          "provenance": "deterministic",
+          "schemaVersion": "rule-selection-v2",
+          "selectedRules": [
+            {
+              "guidance": [
+                "IMPORT MODULE NAME:",
+                "- Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.",
+                "- Correct: from module_name import target_function",
+                "- WRONG:   from target_function import target_function",
+                "- WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths."
+              ],
+              "relatedAnalystHints": [],
+              "ruleId": "import_module_name",
+              "skillVersion": 1,
+              "title": "Correct Import Module Name",
+              "triggerFacts": [
+                "runner-contract: canonical target module path is required"
+              ]
+            },
+            {
+              "guidance": [
+                "Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.",
+                "After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.",
+                "Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain."
+              ],
+              "relatedAnalystHints": [],
+              "ruleId": "numeric_calculation",
+              "skillVersion": 1,
+              "title": "Numeric Calculation Skill",
+              "triggerFacts": [
+                "source-line-2: return value + 1"
+              ]
+            }
+          ],
+          "sourceHash": "01eab2949245f37b89ac56f003b4573ebcd6a462b9fa91e777f2875eafa01284",
+          "validationMode": "execution"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 5,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "rule-dispatcher",
+        "status": "deterministic",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 6,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 2206,
+          "estimatedInputTokens": 2206,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 3152,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 2206,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 7,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2206,
+            "estimatedInputTokens": 2206,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 3152,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2206,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 2206,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 8,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 9,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 10,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 11,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 8015,
+          "requestBodyHash": "b56f2c65ca91c09db3fce417a4fc7a776c70311c3c99f83977fbd863696c36bb",
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 12,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 13,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 14,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2206,
+            "estimatedInputTokens": 2206,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 3152,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2206,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 2206,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 15,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "methodBodyAuthor": "model",
+          "reasonCode": "completed-without-test-code"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 16,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer-seed",
+        "status": "completion-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "code": "I will explain the steps instead of returning Python.",
+          "validationMode": "execution"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 17,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 0,
+          "reason": "Missing unittest import"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 18,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "structure",
+        "status": "rejected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer-revision",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 19,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 1920,
+          "estimatedInputTokens": 1920,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 2743,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 1920,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer-revision",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 20,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1920,
+            "estimatedInputTokens": 1920,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2743,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1920,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 1920,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 21,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 22,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer-revision",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 23,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 24,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 7024,
+          "requestBodyHash": "fd55876718e895489f098973a26216a9b63fbdc548176433bed006dddac2da6c",
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 25,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 26,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 27,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1920,
+            "estimatedInputTokens": 1920,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2743,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1920,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 1920,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 28,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1,
+          "code": "The requested revision is still unavailable."
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 29,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1,
+          "reason": "Missing unittest import"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 30,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "structure",
+        "status": "rejected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "approved": false,
+          "attempt": 1,
+          "codeHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+          "executable": false,
+          "executionAttempted": false,
+          "reasonCode": "unexecuted-structure-repair",
+          "retainedCodeHash": "dfec4486a542099719bea56b06b39af5d2ae28f9c4dca59b616c6379015d5cb5"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 31,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer-draft",
+        "status": "continued",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer-revision",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 32,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 1917,
+          "estimatedInputTokens": 1917,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 2739,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 1917,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer-revision",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 33,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1917,
+            "estimatedInputTokens": 1917,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2739,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1917,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 1917,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 34,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 35,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer-revision",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 36,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 37,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 7015,
+          "requestBodyHash": "fd05445042c0137aaeffcebe3d0c61f3fe28f6d2ec74ec4ca59299f1348faeb1",
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 38,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 39,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 40,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1917,
+            "estimatedInputTokens": 1917,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2739,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1917,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 1917,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 41,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 2,
+          "code": "The requested revision is still unavailable."
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 42,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 2,
+          "category": "validation",
+          "contractVersion": "writer-revision-v2",
+          "diagnostic": {
+            "candidateTestHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+            "gate": "candidate-deduplication",
+            "previousTestHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+            "previousTestUnchanged": true,
+            "reasonCodes": [
+              "repeated-candidate"
+            ],
+            "version": "repair-diagnostics-v1"
+          },
+          "executableBaselineAvailable": false,
+          "reason": "NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\nMissing unittest import"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 43,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "repeated",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer-revision",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 44,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 1963,
+          "estimatedInputTokens": 1963,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 2805,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 1963,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer-revision",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 45,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1963,
+            "estimatedInputTokens": 1963,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2805,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1963,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 1963,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 46,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 47,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer-revision",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 48,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 49,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 7175,
+          "requestBodyHash": "b8fc5450ed4733f0255e4553aec516700731f3e8987cf4e76db9563dd5c55abd",
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 50,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 51,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 52,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1963,
+            "estimatedInputTokens": 1963,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2805,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1963,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 1963,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 53,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 3,
+          "code": "The requested revision is still unavailable."
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 54,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 3,
+          "category": "validation",
+          "contractVersion": "writer-revision-v2",
+          "diagnostic": {
+            "candidateTestHash": "0f75236d2f9d76660678cc9fd2e8198220ee6d3cea950da1e8261a3fe97494f2",
+            "gate": "candidate-deduplication",
+            "previousTestHash": "dfec4486a542099719bea56b06b39af5d2ae28f9c4dca59b616c6379015d5cb5",
+            "previousTestUnchanged": true,
+            "reasonCodes": [
+              "repeated-candidate"
+            ],
+            "version": "repair-diagnostics-v1"
+          },
+          "executableBaselineAvailable": false,
+          "reason": "NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\nRepeated candidate: change the rejected cause. NO CHANGE: this candidate was already tried. Make a focused correction using the latest failure below.\nMissing unittest import"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 55,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "repeated",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer-revision",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 56,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 2006,
+          "estimatedInputTokens": 2006,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 2866,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 2006,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer-revision",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 57,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2006,
+            "estimatedInputTokens": 2006,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2866,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2006,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 2006,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 58,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 59,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer-revision",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 60,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 61,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 7326,
+          "requestBodyHash": "a138dafa62048914f6ac49c81ee90e76fc8810468c1f1e2da7acc14ce2179a9d",
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 62,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 63,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 64,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2006,
+            "estimatedInputTokens": 2006,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2866,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2006,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 2006,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 65,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 4,
+          "code": "The requested revision is still unavailable."
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 66,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "category": "validation",
+          "reason": "Target stopped after 5 recoverable failures (limit 5)."
+        },
+        "loop": 1,
+        "runId": "<RUN_2>",
+        "sequence": 67,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "target-failure-policy",
+        "status": "failed",
+        "time": "<TIME>"
+      }
+    ],
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/first_6fad662b/loop/_run/run_manifest.json": {
+      "evidenceContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "inputPlan": "input-plan-v1",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v2",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3"
+      },
+      "model": "golden-fixture",
+      "promptVersion": "role-contracts-v7",
+      "qualityExperimentVersion": "quality-experiment-result-v2",
+      "repairDiagnosticsVersion": "repair-diagnostics-v1",
+      "report": {
+        "build": {
+          "buildArtifactHash": "<BUILD_HASH>",
+          "buildTimestamp": "<TIME>",
+          "extensionId": "fixture",
+          "extensionMode": "test",
+          "extensionVersion": "0.0.1"
+        },
+        "modelIdentity": "local/golden-fixture",
+        "mutationWorkers": 4,
+        "requestedMutationEngine": "builtin",
+        "requestedTier": "tier1",
+        "schemaVersion": "target-report-v1",
+        "sourceFile": "sample.py",
+        "sourcePath": "<ROOT>/sample.py",
+        "target": "first"
+      },
+      "reviewRepairVersion": "review-contract-repair-v1",
+      "roleContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "bugFix": "bug-fix-v5",
+        "inputPlan": "input-plan-v1",
+        "qualityAnalyst": "quality-task-v3",
+        "qualityAnalystGrounded": "quality-task-v4",
+        "reviewer": "review-v8",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v3",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3",
+        "writerRevision": "writer-revision-v2"
+      },
+      "runId": "<RUN_2>",
+      "schemaVersion": 2,
+      "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+      "startedAt": "<TIME>",
+      "stopPolicy": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "target": "first",
+      "validationMode": "execution",
+      "workflowVersion": "llm-execution-v1",
+      "writerExpansionVersion": "writer-expansion-v2",
+      "writerSeedVersion": "writer-seed-v2"
+    },
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/second_572aac51/final_report.md": "## Final outcome: Execution verified; mutation not run and full quality not verified\n\n- **Target file**: sample.py\n- **Target function**: second\n- **Model identity**: local/golden-fixture\n- **Failure reason**: None\n- **Coverage**: N/A (Not run)\n- **Mutation score**: N/A (Not run)\n- **Requested mutation engine**: builtin (no verified measurement yet)\n- [Failure report and full workflow](failure_report.md)\n- **Test method counts**: generated Unknown; added relative to baseline Unknown; rejected Unknown; currently retained Unknown.\n\n### Test cases\n\n[loop/1/exec1_test.py](loop/1/exec1_test.py)\n\n```python\nimport unittest\nfrom sample import second\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(second(2), 3)\n```\n\n### Mutation cases\n\nNo completed mutation cases are bound to the test cases above.\n\n### Workflows by round\n\n- [Round 1 results](loop/1/report.md) · [Failure report](loop/1/failure_report.md)\n<!-- result-layout: function-loops-v1 -->\n",
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/second_572aac51/loop/_run/function_knowledge.json": {
+      "acceptedCodeHash": "efb429b7e5dd1d21039c49c38fbfee398a2e4730879255885a1ff9109410a2c9",
+      "acceptedTest": "exec1_test.py",
+      "coverage": null,
+      "dependencyEvidenceVersion": "loaded-project-sources-v1",
+      "dependencyVersions": [
+        {
+          "file": "<ROOT>/sample.py",
+          "hash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe"
+        }
+      ],
+      "effectiveSettings": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "evidenceValid": true,
+      "execution": "test_value (exec1_test.Cases.test_value) ... ok\r\n\r\n----------------------------------------------------------------------\r\nRan 1 tests in <TIME>s\r\n\r\nOK",
+      "executionBaseline": "execution_baseline.json",
+      "executionVerified": true,
+      "failureCount": 1,
+      "failureLimit": 5,
+      "firstFailure": {
+        "category": "unknown",
+        "reason": "Missing unittest import",
+        "sequence": 18,
+        "stage": "structure",
+        "status": "rejected"
+      },
+      "generationMode": "llm-execution",
+      "importContract": {
+        "className": null,
+        "dependencies": {},
+        "module": "sample",
+        "moduleSourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "source": "def second(value):\n    return value + 1",
+        "target": "second"
+      },
+      "initialTargetObservations": null,
+      "lastEvent": {
+        "sequence": 33,
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      "lastFailure": {
+        "category": "unknown",
+        "reason": "Missing unittest import",
+        "sequence": 18,
+        "stage": "structure",
+        "status": "rejected"
+      },
+      "localThinkingMode": "provider-default",
+      "mutationScore": null,
+      "mutationStatus": "deferred",
+      "promptCapacity": {
+        "contextWindow": 16384,
+        "effectiveInputTokens": 1919,
+        "estimatedInputTokens": 1919,
+        "estimation": "conservative-character-estimate",
+        "inputBudget": 14848,
+        "inputShortfallTokens": 0,
+        "limitInputBudget": 31232,
+        "limitInputShortfallTokens": 0,
+        "limitReservedOutputTokens": 1536,
+        "minimumContextTokens": 2742,
+        "modelContextLimit": 32768,
+        "modelContextLimitSource": "ollama-show",
+        "observedInputTokens": null,
+        "requestOutputTokens": 1536,
+        "requiredInputTokens": 1919,
+        "reservedInputTokens": 0,
+        "reservedOutputTokens": 1536,
+        "role": "writer-revision",
+        "scope": "current-role-prompt",
+        "state": "fits-current",
+        "version": "prompt-capacity-v1"
+      },
+      "qualityAssessment": null,
+      "reviewStatus": "deferred",
+      "roleQualification": null,
+      "roleQualificationRequired": false,
+      "runId": "<RUN_3>",
+      "schemaVersion": 2,
+      "sourceContext": {
+        "args": [
+          "value"
+        ],
+        "calls": [],
+        "class_context": null,
+        "class_name": null,
+        "code": "def second(value):\n    return value + 1",
+        "condition_facts": [],
+        "dependencies": [],
+        "dependencyContexts": [],
+        "dependencyResolution": [],
+        "dependency_fixture_contract": {
+          "assertionOracle": false,
+          "authority": "fixture-shape-only",
+          "diagnostics": [],
+          "endLine": 5,
+          "flows": [],
+          "patchAuthorization": false,
+          "schemaVersion": "dependency-fixture-contract-v1",
+          "sourceHashKind": "normalized-target-source",
+          "startLine": 4,
+          "status": "complete",
+          "target": "second",
+          "targetSourceHash": "29db53640e749b8968c314098ac829972ba6d2fa92aa1ed146f140620f22c490"
+        },
+        "dependency_skill_facts": {
+          "assertionOracle": false,
+          "authority": "skill-selection-only",
+          "bindings": [],
+          "patchAuthorization": false,
+          "schemaVersion": "dependency-skill-facts-v1",
+          "status": "complete",
+          "target": "second",
+          "targetSourceHash": "29db53640e749b8968c314098ac829972ba6d2fa92aa1ed146f140620f22c490"
+        },
+        "docstring": "",
+        "executable_lines": [
+          5
+        ],
+        "file_imports": [],
+        "is_async": false,
+        "is_generator": false,
+        "localDependencyContexts": [],
+        "method_kind": "module",
+        "name": "second",
+        "property_context": null,
+        "raised_exceptions": [],
+        "referenced_globals": [],
+        "required_args": [
+          "value"
+        ],
+        "retrieval": {
+          "maxChars": 12000,
+          "maxDepth": 2,
+          "maxSymbols": 6,
+          "omitted": [],
+          "selected": 0,
+          "version": "symbol-retrieval-v1"
+        },
+        "signature": [
+          {
+            "annotation": null,
+            "default": null,
+            "kind": "positional_or_keyword",
+            "name": "value",
+            "required": true,
+            "type_shape": {
+              "kind": "unknown",
+              "reason": "missing-annotation"
+            }
+          }
+        ],
+        "sourceVersions": [
+          {
+            "file": "<ROOT>/sample.py",
+            "hash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe"
+          }
+        ],
+        "source_location": {
+          "endLine": 5,
+          "sourceHash": "29db53640e749b8968c314098ac829972ba6d2fa92aa1ed146f140620f22c490",
+          "startLine": 4,
+          "version": "python-source-location-v1"
+        },
+        "source_setup_call_contract": {
+          "assertionOracle": false,
+          "authority": "source-spelling-only",
+          "calls": [],
+          "literalCallArguments": [],
+          "optionalLookups": [],
+          "parameterMembers": [],
+          "patchAuthorization": false,
+          "returnFlow": {
+            "discardedCalls": [],
+            "kind": "contains-value-return"
+          },
+          "schemaVersion": "source-setup-call-contract-v1",
+          "sourceHashKind": "normalized-target-source",
+          "sourceLocations": [],
+          "spellingKind": "ast-normalized",
+          "status": "complete",
+          "target": "second",
+          "targetSourceHash": "29db53640e749b8968c314098ac829972ba6d2fa92aa1ed146f140620f22c490"
+        },
+        "target_import_module": "sample",
+        "type_shape_version": "type-shape-v1"
+      },
+      "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+      "sourceStructure": "def second(value):\n    return value + 1",
+      "stage": "execution-verification",
+      "stopReason": "execution-passed",
+      "target": "second",
+      "targetBudget": {
+        "deadlineAt": "<TIME>",
+        "elapsedMs": "<TIME>",
+        "limits": {
+          "candidateAttempts": 20,
+          "estimatedInputTokens": 360000,
+          "logicalRequests": 36,
+          "timeoutMs": 600000,
+          "transportAttempts": 72
+        },
+        "remainingMs": "<TIME>",
+        "startedAt": "<TIME>",
+        "used": {
+          "candidateAttempts": 2,
+          "estimatedInputTokens": 4127,
+          "logicalRequests": 2,
+          "transportAttempts": 2
+        }
+      },
+      "terminalStatus": "execution-passed",
+      "traceStatus": "deferred",
+      "validationMode": "execution"
+    },
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/second_572aac51/loop/_run/role_events.jsonl": [
+      {
+        "detail": {
+          "target": "second"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 1,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "pipeline",
+        "status": "running",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "priorProbeRequired": false
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 2,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "qualification-policy",
+        "status": "optional",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "inputBudget": 11468,
+          "lastObservedRuntimeContextTokens": 16384,
+          "metadataContextKnown": true,
+          "metadataDiagnostic": {
+            "allocation": {
+              "elapsedMs": "<TIME>",
+              "httpStatus": 200,
+              "reasonCode": "allocation-unavailable"
+            },
+            "endpointKey": "b26993598dffd1f14aed97def57ef67f753518a9b773d8a12033c82b4fa545ca",
+            "show": {
+              "elapsedMs": "<TIME>",
+              "httpStatus": 200,
+              "reasonCode": "loaded"
+            },
+            "source": "ollama-show",
+            "status": "fresh",
+            "version": "local-runtime-metadata-v1"
+          },
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "qualificationApplicable": false,
+          "runtimeContextSource": "ollama-num-ctx"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 3,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-runtime",
+        "status": "selected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "importFixtures": null,
+          "module": "sample",
+          "traceStartupBudget": {
+            "calibrationReason": "successful-module-preflight",
+            "caseTimeoutSeconds": 2,
+            "observedPreflightElapsedMs": "<TIME>",
+            "outerTimeoutMs": 20000,
+            "planningTimeoutSeconds": 5,
+            "totalTimeoutSeconds": "<TIME>",
+            "version": "trace-startup-budget-v1"
+          }
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 4,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "environment",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "dispatcherVersion": "test-rule-dispatcher-v2",
+          "guidance": "=== FUNCTION-SPECIFIC RULES (Selected for this function) ===\n(Derived from actual source code analysis — follow them precisely)\n\n[Correct Import Module Name]\n  IMPORT MODULE NAME:\n  - Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.\n  - Correct: from module_name import target_function\n  - WRONG:   from target_function import target_function\n  - WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths.\n\n[Numeric Calculation Skill]\n  Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.\n  After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.\n  Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain.\n\n",
+          "ids": [
+            "import_module_name",
+            "numeric_calculation"
+          ],
+          "provenance": "deterministic",
+          "schemaVersion": "rule-selection-v2",
+          "selectedRules": [
+            {
+              "guidance": [
+                "IMPORT MODULE NAME:",
+                "- Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.",
+                "- Correct: from module_name import target_function",
+                "- WRONG:   from target_function import target_function",
+                "- WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths."
+              ],
+              "relatedAnalystHints": [],
+              "ruleId": "import_module_name",
+              "skillVersion": 1,
+              "title": "Correct Import Module Name",
+              "triggerFacts": [
+                "runner-contract: canonical target module path is required"
+              ]
+            },
+            {
+              "guidance": [
+                "Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.",
+                "After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.",
+                "Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain."
+              ],
+              "relatedAnalystHints": [],
+              "ruleId": "numeric_calculation",
+              "skillVersion": 1,
+              "title": "Numeric Calculation Skill",
+              "triggerFacts": [
+                "source-line-2: return value + 1"
+              ]
+            }
+          ],
+          "sourceHash": "29db53640e749b8968c314098ac829972ba6d2fa92aa1ed146f140620f22c490",
+          "validationMode": "execution"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 5,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "rule-dispatcher",
+        "status": "deterministic",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 6,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 2208,
+          "estimatedInputTokens": 2208,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 3155,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 2208,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 7,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2208,
+            "estimatedInputTokens": 2208,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 3155,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2208,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 2208,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 8,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 9,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 10,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 11,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 8021,
+          "requestBodyHash": "3aa07b0f2ca5edd3f0f77a4112578fd39068296ca563f4171fcecc0233271aa1",
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 12,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 13,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 14,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2208,
+            "estimatedInputTokens": 2208,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 3155,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2208,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 2208,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 15,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "methodBodyAuthor": "model",
+          "reasonCode": "completed-without-test-code"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 16,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer-seed",
+        "status": "completion-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "code": "The requested revision is still unavailable.",
+          "validationMode": "execution"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 17,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 0,
+          "reason": "Missing unittest import"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 18,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "structure",
+        "status": "rejected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer-revision",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 19,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 1919,
+          "estimatedInputTokens": 1919,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 2742,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 1919,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer-revision",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 20,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1919,
+            "estimatedInputTokens": 1919,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2742,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1919,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 1919,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 21,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 22,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer-revision",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 23,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 24,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 7021,
+          "requestBodyHash": "480d80ab9cc3a41bbbf4d8e2aa68daf10cee7c61472386203357f3def7e872a8",
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 25,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 26,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 27,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1919,
+            "estimatedInputTokens": 1919,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2742,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1919,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 1919,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 28,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1,
+          "code": "import unittest\nfrom sample import second\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(second(2), 3)"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 29,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 30,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "structure",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1,
+          "code": "import unittest\nfrom sample import second\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(second(2), 3)",
+          "ok": true,
+          "out": "test_value (exec1_test.Cases.test_value) ... ok\r\n\r\n----------------------------------------------------------------------\r\nRan 1 tests in <TIME>s\r\n\r\nOK",
+          "qualityGaps": [],
+          "testModule": "exec1_test"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 31,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "validation",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 32,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "reviewer",
+        "status": "not-required",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "testFile": "exec1_test.py",
+          "testHash": "efb429b7e5dd1d21039c49c38fbfee398a2e4730879255885a1ff9109410a2c9"
+        },
+        "loop": 1,
+        "runId": "<RUN_3>",
+        "sequence": 33,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "execution-verification",
+        "status": "passed",
+        "time": "<TIME>"
+      }
+    ],
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/second_572aac51/loop/_run/run_manifest.json": {
+      "evidenceContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "inputPlan": "input-plan-v1",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v2",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3"
+      },
+      "model": "golden-fixture",
+      "promptVersion": "role-contracts-v7",
+      "qualityExperimentVersion": "quality-experiment-result-v2",
+      "repairDiagnosticsVersion": "repair-diagnostics-v1",
+      "report": {
+        "build": {
+          "buildArtifactHash": "<BUILD_HASH>",
+          "buildTimestamp": "<TIME>",
+          "extensionId": "fixture",
+          "extensionMode": "test",
+          "extensionVersion": "0.0.1"
+        },
+        "modelIdentity": "local/golden-fixture",
+        "mutationWorkers": 4,
+        "requestedMutationEngine": "builtin",
+        "requestedTier": "tier1",
+        "schemaVersion": "target-report-v1",
+        "sourceFile": "sample.py",
+        "sourcePath": "<ROOT>/sample.py",
+        "target": "second"
+      },
+      "reviewRepairVersion": "review-contract-repair-v1",
+      "roleContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "bugFix": "bug-fix-v5",
+        "inputPlan": "input-plan-v1",
+        "qualityAnalyst": "quality-task-v3",
+        "qualityAnalystGrounded": "quality-task-v4",
+        "reviewer": "review-v8",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v3",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3",
+        "writerRevision": "writer-revision-v2"
+      },
+      "runId": "<RUN_3>",
+      "schemaVersion": 2,
+      "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+      "startedAt": "<TIME>",
+      "stopPolicy": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "target": "second",
+      "validationMode": "execution",
+      "workflowVersion": "llm-execution-v1",
+      "writerExpansionVersion": "writer-expansion-v2",
+      "writerSeedVersion": "writer-seed-v2"
+    },
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/third_61f86f66/final_report.md": "## Final outcome: Execution verified; mutation not run and full quality not verified\n\n- **Target file**: sample.py\n- **Target function**: third\n- **Model identity**: local/golden-fixture\n- **Failure reason**: None\n- **Coverage**: N/A (Not run)\n- **Mutation score**: N/A (Not run)\n- **Requested mutation engine**: builtin (no verified measurement yet)\n- [Failure report and full workflow](failure_report.md)\n- **Test method counts**: generated Unknown; added relative to baseline Unknown; rejected Unknown; currently retained Unknown.\n\n### Test cases\n\n[loop/1/exec1_test.py](loop/1/exec1_test.py)\n\n```python\nimport unittest\nfrom sample import third\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(third(2), 3)\n```\n\n### Mutation cases\n\nNo completed mutation cases are bound to the test cases above.\n\n### Workflows by round\n\n- [Round 1 results](loop/1/report.md) · [Failure report](loop/1/failure_report.md)\n<!-- result-layout: function-loops-v1 -->\n",
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/third_61f86f66/loop/_run/function_knowledge.json": {
+      "acceptedCodeHash": "308223215a351835556bc7629d50f3f4f734dcf6519be3605904d8aed5a37998",
+      "acceptedTest": "exec1_test.py",
+      "coverage": null,
+      "dependencyEvidenceVersion": "loaded-project-sources-v1",
+      "dependencyVersions": [
+        {
+          "file": "<ROOT>/sample.py",
+          "hash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe"
+        }
+      ],
+      "effectiveSettings": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "evidenceValid": true,
+      "execution": "test_value (exec1_test.Cases.test_value) ... ok\r\n\r\n----------------------------------------------------------------------\r\nRan 1 tests in <TIME>s\r\n\r\nOK",
+      "executionBaseline": "execution_baseline.json",
+      "executionVerified": true,
+      "failureCount": 1,
+      "failureLimit": 5,
+      "firstFailure": {
+        "category": "unknown",
+        "reason": "Missing unittest import",
+        "sequence": 18,
+        "stage": "structure",
+        "status": "rejected"
+      },
+      "generationMode": "llm-execution",
+      "importContract": {
+        "className": null,
+        "dependencies": {},
+        "module": "sample",
+        "moduleSourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "source": "def third(value):\n    return value + 1",
+        "target": "third"
+      },
+      "initialTargetObservations": null,
+      "lastEvent": {
+        "sequence": 33,
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      "lastFailure": {
+        "category": "unknown",
+        "reason": "Missing unittest import",
+        "sequence": 18,
+        "stage": "structure",
+        "status": "rejected"
+      },
+      "localThinkingMode": "provider-default",
+      "mutationScore": null,
+      "mutationStatus": "deferred",
+      "promptCapacity": {
+        "contextWindow": 16384,
+        "effectiveInputTokens": 1917,
+        "estimatedInputTokens": 1917,
+        "estimation": "conservative-character-estimate",
+        "inputBudget": 14848,
+        "inputShortfallTokens": 0,
+        "limitInputBudget": 31232,
+        "limitInputShortfallTokens": 0,
+        "limitReservedOutputTokens": 1536,
+        "minimumContextTokens": 2739,
+        "modelContextLimit": 32768,
+        "modelContextLimitSource": "ollama-show",
+        "observedInputTokens": null,
+        "requestOutputTokens": 1536,
+        "requiredInputTokens": 1917,
+        "reservedInputTokens": 0,
+        "reservedOutputTokens": 1536,
+        "role": "writer-revision",
+        "scope": "current-role-prompt",
+        "state": "fits-current",
+        "version": "prompt-capacity-v1"
+      },
+      "qualityAssessment": null,
+      "reviewStatus": "deferred",
+      "roleQualification": null,
+      "roleQualificationRequired": false,
+      "runId": "<RUN_4>",
+      "schemaVersion": 2,
+      "sourceContext": {
+        "args": [
+          "value"
+        ],
+        "calls": [],
+        "class_context": null,
+        "class_name": null,
+        "code": "def third(value):\n    return value + 1",
+        "condition_facts": [],
+        "dependencies": [],
+        "dependencyContexts": [],
+        "dependencyResolution": [],
+        "dependency_fixture_contract": {
+          "assertionOracle": false,
+          "authority": "fixture-shape-only",
+          "diagnostics": [],
+          "endLine": 8,
+          "flows": [],
+          "patchAuthorization": false,
+          "schemaVersion": "dependency-fixture-contract-v1",
+          "sourceHashKind": "normalized-target-source",
+          "startLine": 7,
+          "status": "complete",
+          "target": "third",
+          "targetSourceHash": "e639f45c46f4d840a887a89ef604e6e852c91909c07e8239bb328fc957e1f5db"
+        },
+        "dependency_skill_facts": {
+          "assertionOracle": false,
+          "authority": "skill-selection-only",
+          "bindings": [],
+          "patchAuthorization": false,
+          "schemaVersion": "dependency-skill-facts-v1",
+          "status": "complete",
+          "target": "third",
+          "targetSourceHash": "e639f45c46f4d840a887a89ef604e6e852c91909c07e8239bb328fc957e1f5db"
+        },
+        "docstring": "",
+        "executable_lines": [
+          8
+        ],
+        "file_imports": [],
+        "is_async": false,
+        "is_generator": false,
+        "localDependencyContexts": [],
+        "method_kind": "module",
+        "name": "third",
+        "property_context": null,
+        "raised_exceptions": [],
+        "referenced_globals": [],
+        "required_args": [
+          "value"
+        ],
+        "retrieval": {
+          "maxChars": 12000,
+          "maxDepth": 2,
+          "maxSymbols": 6,
+          "omitted": [],
+          "selected": 0,
+          "version": "symbol-retrieval-v1"
+        },
+        "signature": [
+          {
+            "annotation": null,
+            "default": null,
+            "kind": "positional_or_keyword",
+            "name": "value",
+            "required": true,
+            "type_shape": {
+              "kind": "unknown",
+              "reason": "missing-annotation"
+            }
+          }
+        ],
+        "sourceVersions": [
+          {
+            "file": "<ROOT>/sample.py",
+            "hash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe"
+          }
+        ],
+        "source_location": {
+          "endLine": 8,
+          "sourceHash": "e639f45c46f4d840a887a89ef604e6e852c91909c07e8239bb328fc957e1f5db",
+          "startLine": 7,
+          "version": "python-source-location-v1"
+        },
+        "source_setup_call_contract": {
+          "assertionOracle": false,
+          "authority": "source-spelling-only",
+          "calls": [],
+          "literalCallArguments": [],
+          "optionalLookups": [],
+          "parameterMembers": [],
+          "patchAuthorization": false,
+          "returnFlow": {
+            "discardedCalls": [],
+            "kind": "contains-value-return"
+          },
+          "schemaVersion": "source-setup-call-contract-v1",
+          "sourceHashKind": "normalized-target-source",
+          "sourceLocations": [],
+          "spellingKind": "ast-normalized",
+          "status": "complete",
+          "target": "third",
+          "targetSourceHash": "e639f45c46f4d840a887a89ef604e6e852c91909c07e8239bb328fc957e1f5db"
+        },
+        "target_import_module": "sample",
+        "type_shape_version": "type-shape-v1"
+      },
+      "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+      "sourceStructure": "def third(value):\n    return value + 1",
+      "stage": "execution-verification",
+      "stopReason": "execution-passed",
+      "target": "third",
+      "targetBudget": {
+        "deadlineAt": "<TIME>",
+        "elapsedMs": "<TIME>",
+        "limits": {
+          "candidateAttempts": 20,
+          "estimatedInputTokens": 360000,
+          "logicalRequests": 36,
+          "timeoutMs": 600000,
+          "transportAttempts": 72
+        },
+        "remainingMs": "<TIME>",
+        "startedAt": "<TIME>",
+        "used": {
+          "candidateAttempts": 2,
+          "estimatedInputTokens": 4123,
+          "logicalRequests": 2,
+          "transportAttempts": 2
+        }
+      },
+      "terminalStatus": "execution-passed",
+      "traceStatus": "deferred",
+      "validationMode": "execution"
+    },
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/third_61f86f66/loop/_run/role_events.jsonl": [
+      {
+        "detail": {
+          "target": "third"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 1,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "pipeline",
+        "status": "running",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "priorProbeRequired": false
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 2,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "qualification-policy",
+        "status": "optional",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "inputBudget": 11468,
+          "lastObservedRuntimeContextTokens": 16384,
+          "metadataContextKnown": true,
+          "metadataDiagnostic": {
+            "allocation": {
+              "elapsedMs": "<TIME>",
+              "httpStatus": 200,
+              "reasonCode": "allocation-unavailable"
+            },
+            "endpointKey": "b26993598dffd1f14aed97def57ef67f753518a9b773d8a12033c82b4fa545ca",
+            "show": {
+              "elapsedMs": "<TIME>",
+              "httpStatus": 200,
+              "reasonCode": "loaded"
+            },
+            "source": "ollama-show",
+            "status": "fresh",
+            "version": "local-runtime-metadata-v1"
+          },
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "qualificationApplicable": false,
+          "runtimeContextSource": "ollama-num-ctx"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 3,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-runtime",
+        "status": "selected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "importFixtures": null,
+          "module": "sample",
+          "traceStartupBudget": {
+            "calibrationReason": "successful-module-preflight",
+            "caseTimeoutSeconds": 2,
+            "observedPreflightElapsedMs": "<TIME>",
+            "outerTimeoutMs": 20000,
+            "planningTimeoutSeconds": 5,
+            "totalTimeoutSeconds": "<TIME>",
+            "version": "trace-startup-budget-v1"
+          }
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 4,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "environment",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "dispatcherVersion": "test-rule-dispatcher-v2",
+          "guidance": "=== FUNCTION-SPECIFIC RULES (Selected for this function) ===\n(Derived from actual source code analysis — follow them precisely)\n\n[Correct Import Module Name]\n  IMPORT MODULE NAME:\n  - Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.\n  - Correct: from module_name import target_function\n  - WRONG:   from target_function import target_function\n  - WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths.\n\n[Numeric Calculation Skill]\n  Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.\n  After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.\n  Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain.\n\n",
+          "ids": [
+            "import_module_name",
+            "numeric_calculation"
+          ],
+          "provenance": "deterministic",
+          "schemaVersion": "rule-selection-v2",
+          "selectedRules": [
+            {
+              "guidance": [
+                "IMPORT MODULE NAME:",
+                "- Use the exact canonical module path supplied by the runner, including its package prefix. Do not mix bare-file and package imports.",
+                "- Correct: from module_name import target_function",
+                "- WRONG:   from target_function import target_function",
+                "- WRONG:   from c:\\path\\to\\file import ... — never use filesystem paths."
+              ],
+              "relatedAnalystHints": [],
+              "ruleId": "import_module_name",
+              "skillVersion": 1,
+              "title": "Correct Import Module Name",
+              "triggerFacts": [
+                "runner-contract: canonical target module path is required"
+              ]
+            },
+            {
+              "guidance": [
+                "Use exact-input verified observations; source arithmetic is a hypothesis. Choose concrete inputs and simple local target results.",
+                "After execution failures the host calculates bounded arithmetic/rounding/branches and checks identical inputs in isolated Trace. Unsupported cases retain normal repair.",
+                "Bind exceptions to exact inputs: zero numerator need not raise. Do not copy formulas into tests or use eval/exec/shell. All validation gates remain."
+              ],
+              "relatedAnalystHints": [],
+              "ruleId": "numeric_calculation",
+              "skillVersion": 1,
+              "title": "Numeric Calculation Skill",
+              "triggerFacts": [
+                "source-line-2: return value + 1"
+              ]
+            }
+          ],
+          "sourceHash": "e639f45c46f4d840a887a89ef604e6e852c91909c07e8239bb328fc957e1f5db",
+          "validationMode": "execution"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 5,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "rule-dispatcher",
+        "status": "deterministic",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 6,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 2206,
+          "estimatedInputTokens": 2206,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 3152,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 2206,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 7,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2206,
+            "estimatedInputTokens": 2206,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 3152,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2206,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 2206,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 8,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 9,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 10,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 11,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 8015,
+          "requestBodyHash": "00cf1a6a126ebcc0803b6d922eda5fa1992e0b6acff16bc081c476b30fe054b7",
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 12,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 13,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 14,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 2206,
+            "estimatedInputTokens": 2206,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 3152,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 2206,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 2206,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 15,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "methodBodyAuthor": "model",
+          "reasonCode": "completed-without-test-code"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 16,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer-seed",
+        "status": "completion-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "code": "The requested revision is still unavailable.",
+          "validationMode": "execution"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 17,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 0,
+          "reason": "Missing unittest import"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 18,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "structure",
+        "status": "rejected",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "deadlineAt": "<TIME>",
+          "maximumAttempts": 2,
+          "role": "writer-revision",
+          "targetDeadlinePreserved": true,
+          "timeoutSeconds": 60,
+          "version": "output-recovery-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 19,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "recovery-stage-planned",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "contextWindow": 16384,
+          "effectiveInputTokens": 1917,
+          "estimatedInputTokens": 1917,
+          "estimation": "conservative-character-estimate",
+          "inputBudget": 14848,
+          "inputShortfallTokens": 0,
+          "limitInputBudget": 31232,
+          "limitInputShortfallTokens": 0,
+          "limitReservedOutputTokens": 1536,
+          "minimumContextTokens": 2739,
+          "modelContextLimit": 32768,
+          "modelContextLimitSource": "ollama-show",
+          "observedInputTokens": null,
+          "requestOutputTokens": 1536,
+          "requiredInputTokens": 1917,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "role": "writer-revision",
+          "scope": "current-role-prompt",
+          "state": "fits-current",
+          "version": "prompt-capacity-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 20,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-capacity",
+        "status": "assessed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1917,
+            "estimatedInputTokens": 1917,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2739,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1917,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "estimatedInputTokens": 1917,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 21,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "requested",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "queued",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 22,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "format": "text",
+          "kind": "queue",
+          "queueWaitMs": "<TIME>",
+          "role": "writer-revision",
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 23,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "dispatch",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": null,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 24,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": null,
+          "kind": "progress",
+          "phase": "http-request",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": 7015,
+          "requestBodyHash": "2cd876ae88c680bcccf1539c9e20a54168432026510545caf652461247eefbb1",
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 25,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "firstTextMs": null,
+          "format": "text",
+          "httpStatus": 200,
+          "kind": "progress",
+          "phase": "http-headers",
+          "receivedBytes": null,
+          "receivedChunks": null,
+          "requestBodyBytes": null,
+          "requestBodyHash": null,
+          "responseCharacters": null,
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-progress-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 26,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "elapsedMs": "<TIME>",
+          "format": "text",
+          "httpStatus": 200,
+          "httpWaitMs": "<TIME>",
+          "kind": "transport",
+          "ollama": {
+            "completionReason": "stop",
+            "done": true,
+            "evalCount": null,
+            "evalDurationMs": null,
+            "loadDurationMs": null,
+            "promptEvalCount": null,
+            "promptEvalDurationMs": null,
+            "totalDurationMs": null
+          },
+          "outcome": "completed",
+          "queueWaitMs": "<TIME>",
+          "responseReadMs": "<TIME>",
+          "role": "writer-revision",
+          "transportAttempt": 1,
+          "version": "model-request-timing-v1"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 27,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "timing",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "capacity": {
+            "contextWindow": 16384,
+            "effectiveInputTokens": 1917,
+            "estimatedInputTokens": 1917,
+            "estimation": "conservative-character-estimate",
+            "inputBudget": 14848,
+            "inputShortfallTokens": 0,
+            "limitInputBudget": 31232,
+            "limitInputShortfallTokens": 0,
+            "limitReservedOutputTokens": 1536,
+            "minimumContextTokens": 2739,
+            "modelContextLimit": 32768,
+            "modelContextLimitSource": "ollama-show",
+            "observedInputTokens": null,
+            "requestOutputTokens": 1536,
+            "requiredInputTokens": 1917,
+            "reservedInputTokens": 0,
+            "reservedOutputTokens": 1536,
+            "role": "writer-revision",
+            "scope": "current-role-prompt",
+            "state": "fits-current",
+            "version": "prompt-capacity-v1"
+          },
+          "configuredContextTokens": 0,
+          "contextPolicy": "automatic",
+          "contextWindow": 16384,
+          "deadlineAt": "<TIME>",
+          "elapsedMs": "<TIME>",
+          "estimatedInputTokens": 1917,
+          "format": "text",
+          "inputBudget": 14848,
+          "localThinkingMode": "provider-default",
+          "outputAttempt": 0,
+          "requestOutputTokens": 1536,
+          "reservedInputTokens": 0,
+          "reservedOutputTokens": 1536,
+          "revisionWorkload": {
+            "findingCount": 1,
+            "missingScenarioCount": 0
+          },
+          "role": "writer-revision",
+          "stageDeadlineAt": "<TIME>"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 28,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "model-request",
+        "status": "completed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1,
+          "code": "import unittest\nfrom sample import third\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(third(2), 3)"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 29,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "writer",
+        "status": "candidate",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 30,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "structure",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1,
+          "code": "import unittest\nfrom sample import third\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(third(2), 3)",
+          "ok": true,
+          "out": "test_value (exec1_test.Cases.test_value) ... ok\r\n\r\n----------------------------------------------------------------------\r\nRan 1 tests in <TIME>s\r\n\r\nOK",
+          "qualityGaps": [],
+          "testModule": "exec1_test"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 31,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "validation",
+        "status": "passed",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "attempt": 1
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 32,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "reviewer",
+        "status": "not-required",
+        "time": "<TIME>"
+      },
+      {
+        "detail": {
+          "testFile": "exec1_test.py",
+          "testHash": "308223215a351835556bc7629d50f3f4f734dcf6519be3605904d8aed5a37998"
+        },
+        "loop": 1,
+        "runId": "<RUN_4>",
+        "sequence": 33,
+        "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+        "stage": "execution-verification",
+        "status": "passed",
+        "time": "<TIME>"
+      }
+    ],
+    "golden-runtime_<SESSION_TIME>/sample_af2bdbe1/third_61f86f66/loop/_run/run_manifest.json": {
+      "evidenceContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "inputPlan": "input-plan-v1",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v2",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3"
+      },
+      "model": "golden-fixture",
+      "promptVersion": "role-contracts-v7",
+      "qualityExperimentVersion": "quality-experiment-result-v2",
+      "repairDiagnosticsVersion": "repair-diagnostics-v1",
+      "report": {
+        "build": {
+          "buildArtifactHash": "<BUILD_HASH>",
+          "buildTimestamp": "<TIME>",
+          "extensionId": "fixture",
+          "extensionMode": "test",
+          "extensionVersion": "0.0.1"
+        },
+        "modelIdentity": "local/golden-fixture",
+        "mutationWorkers": 4,
+        "requestedMutationEngine": "builtin",
+        "requestedTier": "tier1",
+        "schemaVersion": "target-report-v1",
+        "sourceFile": "sample.py",
+        "sourcePath": "<ROOT>/sample.py",
+        "target": "third"
+      },
+      "reviewRepairVersion": "review-contract-repair-v1",
+      "roleContracts": {
+        "analystEvidence": "analysis-evidence-v2",
+        "behaviorObservations": "behavior-observations-v2",
+        "bugFix": "bug-fix-v5",
+        "inputPlan": "input-plan-v1",
+        "qualityAnalyst": "quality-task-v3",
+        "qualityAnalystGrounded": "quality-task-v4",
+        "reviewer": "review-v8",
+        "ruleSelection": "rule-selection-v2",
+        "semanticPlan": "semantic-plan-v3",
+        "typeShape": "type-shape-v1",
+        "writerEvidence": "writer-evidence-v3",
+        "writerRevision": "writer-revision-v2"
+      },
+      "runId": "<RUN_4>",
+      "schemaVersion": 2,
+      "sourceHash": "c137c40bded5d2197ddd4da0fd71e0df1423506a9a0c6f530dca0d8058b91afe",
+      "startedAt": "<TIME>",
+      "stopPolicy": {
+        "batchFailureLimit": 0,
+        "failureLimit": 5,
+        "qualityNoImprovementLimit": 3
+      },
+      "target": "third",
+      "validationMode": "execution",
+      "workflowVersion": "llm-execution-v1",
+      "writerExpansionVersion": "writer-expansion-v2",
+      "writerSeedVersion": "writer-seed-v2"
+    }
+  },
+  "requests": [
+    {
+      "promptHash": "d5a42a4177ecabc09cc39221e0a90492b3d96738689577a7d191b9f446d0cbda",
+      "role": "writer",
+      "sequence": 1
+    },
+    {
+      "promptHash": "80ca10e3c3869974e8f5fc566c15deacfb415672fc89ada3d2898485a4a0cd6c",
+      "role": "writer-revision",
+      "sequence": 2
+    },
+    {
+      "promptHash": "9ea1f4e637346976d51c488ac220d8e48e5774307718f47a21d4b835c4e8437e",
+      "role": "writer-revision",
+      "sequence": 3
+    },
+    {
+      "promptHash": "a6bab01dc2f89499c1dbd5b08f720f6e1f1c1164cef594f93b4a91315e6246db",
+      "role": "writer-revision",
+      "sequence": 4
+    },
+    {
+      "promptHash": "3b7fec620917352a5cc9156618adff0da97410480ba9fd5eb7c001d39b07e222",
+      "role": "writer-revision",
+      "sequence": 5
+    },
+    {
+      "promptHash": "267d1e8dd26952ca228349460d3417bcf890dd48dc2dfabf7eb30bba52ed91e9",
+      "role": "writer",
+      "sequence": 6
+    },
+    {
+      "promptHash": "eb2ee11aa9d2d187950d687442f188bf9fbf685a46e3f410563bb22a1eda9063",
+      "role": "writer-revision",
+      "sequence": 7
+    },
+    {
+      "promptHash": "865c99b13357f985542f47fe27c639cc0f0fddea56ddd0bf2b8078a7ec1b9312",
+      "role": "writer",
+      "sequence": 8
+    },
+    {
+      "promptHash": "6b2b00010908735028fed5832b6d27f491f60eb76f1afe1e3e30291809685ce3",
+      "role": "writer-revision",
+      "sequence": 9
+    }
+  ]
+}
