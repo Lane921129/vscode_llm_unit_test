@@ -143,7 +143,12 @@ test('bounded contract repair keeps valid missing-scenario findings and never st
     const result = await reviewWithContractRepair({ tests: clock, prompt: 'TEST_FILE and complete evidence',
         constraints: constraints(actual), deadlineAt: 1000, now: () => 10, checkCancelled: () => {},
         event: status => events.push(status), request: async prompt => {
-            if (replies.length === 1) { assert.match(prompt, /proposal identical to the AST-owned/); }
+            if (replies.length === 1) {
+                assert.match(prompt, /non-actionable-action/);
+                assert.match(prompt, /target-binding-contradiction/);
+                assert.match(prompt, /non-actionable-reason/);
+                assert.match(prompt, /REJECTED_PREVIOUS_ASSESSMENT_V1/);
+            }
             return replies.shift()!;
         } });
     assert.equal(result?.issues.length, 1);

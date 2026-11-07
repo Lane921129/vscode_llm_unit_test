@@ -161,7 +161,7 @@ class Cases(unittest.TestCase):
             assert.equal(body.options.num_ctx, 16384, 'the declared known fixture capacity drives the actual wire request');
             const request = readOllamaRoleRequest(body);
             let response: string;
-            if (request.roleInstructions.includes('You are the test Reviewer')) {
+            if (request.isReviewer) {
                 roles.push('reviewer'); response = '{"findings":[]}';
             } else if (request.roleInstructions.includes('Analyst after successful')) {
                 roles.push('analyst-quality'); response = '{"tasks":[]}';

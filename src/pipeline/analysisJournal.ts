@@ -11,6 +11,7 @@ import type { ReportIdentity } from './targetReport';
 import { normalizeKnownSecrets, redactCredentialStrings } from './artifactSafety';
 import { AI_WORKFLOW_VERSION } from './aiWorkflow';
 import { currentStopPolicy } from './stopPolicy';
+import { renameAtomicSync } from '../utils/atomicRename';
 
 export const evidenceHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
@@ -107,7 +108,7 @@ export class AnalysisJournal {
             ...this.knowledgeState }, null, 2);
         const temporary = path.join(this.directory, 'function_knowledge.pending.json');
         fs.writeFileSync(temporary, output, 'utf8');
-        fs.renameSync(temporary, path.join(this.directory, 'function_knowledge.json'));
+        renameAtomicSync(temporary, path.join(this.directory, 'function_knowledge.json'));
     }
 }
 

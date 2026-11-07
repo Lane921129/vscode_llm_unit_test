@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { evidenceHash } from './analysisJournal';
 import { checkOutputPath } from './artifactPaths';
+import { renameAtomicSync } from '../utils/atomicRename';
 
 const VERSION = 'function-loops-v1';
 
@@ -11,7 +12,7 @@ export function createResultLayout(root: string): string {
     checkOutputPath(data, 48);
     fs.mkdirSync(data, { recursive: true });
     fs.writeFileSync(path.join(data, 'layout.json'), JSON.stringify({ schemaVersion: VERSION }), { flag: 'wx' });
-    fs.renameSync(path.join(root, 'target.json'), path.join(data, 'target.json'));
+    renameAtomicSync(path.join(root, 'target.json'), path.join(data, 'target.json'));
     return data;
 }
 

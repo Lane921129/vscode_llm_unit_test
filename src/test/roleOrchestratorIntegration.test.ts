@@ -139,7 +139,7 @@ class Cases(unittest.TestCase):
                 'explicit role output caps stay inside the preserved output reserve');
         }
         let response: string;
-        if (request.roleInstructions.includes('You are the test Reviewer')) {
+        if (request.isReviewer) {
             reviewerTransport.push({ format: typeof request.format === 'object' ? 'schema' : 'text',
                 temperature: request.options.temperature, numCtx: request.options.num_ctx });
             if (!rejectedReviewSchema && typeof request.format === 'object') {
@@ -589,7 +589,7 @@ class Cases(unittest.TestCase):
             if (metadata) { return metadata; }
             const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
             let response: string;
-            if (request.roleInstructions.includes('You are the test Reviewer')) {
+            if (request.isReviewer) {
                 partialReviews++;
                 response = '{"findings":[]}';
             } else if (request.roleInstructions.includes('Analyst after successful')) {
@@ -681,7 +681,7 @@ class Cases(unittest.TestCase):
                     const fragment = "def test_false(self):\n    with patch('sample.read', return_value={'ready': False, 'kind': 'other'}):\n        self.assertFalse(target())";
                     response = mode === 'format' ? marker + '\n```python\n' + fragment + '\n```'
                         : '```python\nfrom datetime import datetime\n' + fragment + '\n```';
-                } else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+                } else if (request.isReviewer) { response = '{"findings":[]}'; }
                 else {
                     const failingMethod = 'import unittest\nfrom unittest.mock import patch\nfrom sample import target\n'
                         + 'class Cases(unittest.TestCase):\n    def test_false(self):\n'

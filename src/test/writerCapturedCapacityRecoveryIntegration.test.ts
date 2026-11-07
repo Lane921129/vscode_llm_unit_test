@@ -24,8 +24,7 @@ test('captured capacity recovers a length response using measured input and time
         endpointKey: qualificationEndpointKey('local'), modelName: model
     }, 8192, 'captured-runtime'));
     const complete = 'import unittest\nfrom sample import advance\nclass Cases(unittest.TestCase):\n'
-        + '    def test_numbers(self):\n        self.assertEqual(advance(0), 1)\n'
-        + '        self.assertEqual(advance(1), 2)\n        self.assertEqual(advance(-1), 0)\n';
+        + '    def test_numbers(self):\n        self.assertEqual(advance(0), 1)\n';
     const prefix = 'TRUNCATED_PREFIX_IS_NEVER_A_CANDIDATE';
     let scenario: 'capacity-bound' | 'time-bound' | 'no-headroom' = 'capacity-bound';
     let writers = 0, timeShift = 0;
@@ -55,11 +54,11 @@ test('captured capacity recovers a length response using measured input and time
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) {
             response = JSON.stringify({ test_strategy: { approach: 'Call advance with verified integer inputs and preserve its observed results.' } });
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             response = '{"findings":[]}';
         } else {
             writers++;
-            if (writers === 1) {
+            if (writers === 1 || scenario === 'no-headroom') {
                 if (scenario === 'time-bound') { timeShift = 46820; }
                 return new Response(JSON.stringify({ response: prefix, done: true, done_reason: 'length',
                     prompt_eval_count: scenario === 'no-headroom' ? 6600 : 5729, eval_count: 1536,
@@ -88,7 +87,7 @@ test('captured capacity recovers a length response using measured input and time
                 const events = fs.readFileSync(artifact('role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                 const knowledge = JSON.parse(fs.readFileSync(artifact('function_knowledge.json'), 'utf8'));
                 const formalWriters = requests.filter(request => !request.roleInstructions.includes('dependency_behaviors')
-                    && !request.roleInstructions.includes('You are the test Reviewer'));
+                    && !request.isReviewer);
                 assert.equal(JSON.stringify([persisted.get(RUNTIME_CONTEXT_PREFERENCES_KEY), persisted.get('llmUnitTest.modelProfiles.v1')]),
                     before, 'recovery cannot change user preferences or stored profiles');
                 assert.equal(fs.readFileSync(source, 'utf8'), sourceText);
@@ -99,7 +98,9 @@ test('captured capacity recovers a length response using measured input and time
                     assert.ok(!fs.readFileSync(path.join(output, file), 'utf8').includes(prefix));
                 }
                 if (scenario === 'no-headroom') {
-                    assert.equal(formalWriters.length, 1);
+                    assert.equal(formalWriters.length, 5, 'the approved failure limit bounds fresh target attempts after blocked recovery');
+                    assert.equal(knowledge.failureCount, 5);
+                    assert.equal(knowledge.terminalStatus, 'failed');
                     assert.ok(events.some(event => event.status === 'output-recovery-blocked' && event.detail.reasonCode === 'no-output-headroom'));
                     assert.ok(!events.some(event => event.stage === 'reviewer' || event.stage === 'mutation'));
                     return;

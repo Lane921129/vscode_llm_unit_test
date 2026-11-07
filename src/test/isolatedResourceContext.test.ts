@@ -196,7 +196,7 @@ test('resource role guidance is scoped and bounded; ordinary functions and quali
         assert.equal(buildIsolatedResourceContext(plan()).split(ISOLATED_RESOURCE_ROLE_RULE).length - 1, 1);
     });
     assert.deepEqual(prompts(), ordinary, 'resource settings cannot leak into later qualification or pure-function prompts');
-    assert.match(getTestReviewerSystemPrompt(), /ONE findings array/);
+    assert.match(getTestReviewerSystemPrompt(), /one JSON object containing a findings array/);
 });
 
 test('host resource support does not allow generated tests to perform direct file or SQLite I/O', () => {

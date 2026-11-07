@@ -8,7 +8,7 @@ import { partitionBatchPreflight } from '../pipeline/batchPreflightPartition';
 import { AnalysisJournal } from '../pipeline/analysisJournal';
 import { createAnalysisDirectory } from '../pipeline/analysisOutput';
 
-test('partial batch reports blocked targets as terminal environment evidence without executing or counting them as passes', () => {
+test('a failed batch preserves blocked targets as terminal environment evidence without executing or counting them as passes', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-preflight-journal-'));
     try {
         const directory = path.join(root, 'results'); fs.mkdirSync(directory);
@@ -32,7 +32,7 @@ test('partial batch reports blocked targets as terminal environment evidence wit
         journal.knowledge({ terminalStatus: 'failed', failureCategory: 'validation', failureStage: 'validation' });
         batch.refresh(0); batch.finish('completed');
         const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'batch_manifest.json'), 'utf8'));
-        assert.equal(manifest.status, 'partial'); assert.equal(manifest.complete, false);
+        assert.equal(manifest.status, 'failed'); assert.equal(manifest.complete, false);
         assert.equal(manifest.expectedTargets, 2); assert.equal(manifest.finishedTargets, 2);
         assert.equal(manifest.attemptedTargets, 1); assert.equal(manifest.preflightBlockedTargets, 1);
         assert.deepEqual(manifest.statusCounts, { failed: 1, 'environment-blocked': 1 });

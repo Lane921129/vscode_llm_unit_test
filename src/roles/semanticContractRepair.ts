@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { boundedRoleAttemptDeadline } from '../llm/requestTiming';
 import { currentTargetBudget } from '../pipeline/targetBudget';
 import { estimatePromptTokens } from '../prompts/promptBudget';
-import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { AnalysisStageError, isModelContentFormatError } from '../utils/executionFailureCategory';
 import { ROLE_CONTRACT_VERSIONS } from './roleContracts';
 import { hasMeaningfulSemanticStrategy, parseSemanticAnalysisDetailed, restrictSemanticInputHintsToTargetParameters,
     SemanticAnalysis, SemanticAnalysisRejectionCode } from './semanticAnalyzer';
@@ -86,7 +86,7 @@ export async function semanticWithContractRepair(options: SemanticContractOption
         try { raw = await options.request(prompt, requestDeadlineAt,
             attempt === 0 ? SEMANTIC_CONTRACT_REPAIR_INPUT_RESERVE : 0, deadlineAt); }
         catch (error) {
-            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            if (!isModelContentFormatError(error) || !currentStopPolicy()) { throw error; }
             currentStopPolicy()!.reject('semantic-response-format');
             continue;
         }

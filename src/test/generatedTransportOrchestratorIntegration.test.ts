@@ -5,17 +5,17 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { captureFetchFixture, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 
 test('formal candidate transport preserves literals and routes real loader failure to Writer before review and mutation', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'candidate-transport-flow-'));
     const source = path.join(directory, 'sample.py');
     const sourceText = 'def compute(value):\n    return value * 2\n';
     fs.writeFileSync(source, sourceText);
+    fs.writeFileSync(path.join(directory, 'caller.py'), 'from sample import compute\ncompute("[PYTHON]")\n');
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const candidate = 'import unittest\nfrom sample import compute\nclass Cases(unittest.TestCase):\n'
-        + '    def test_actual_result(self):\n        self.assertEqual(compute(3), 6)\n'
-        + '        self.assertEqual(compute("[PYTHON]"), "[PYTHON][PYTHON]")\n';
+        + '    def test_actual_result(self):\n        self.assertEqual(compute("[PYTHON]"), "[PYTHON][PYTHON]")\n';
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
     const roles: string[] = [];
@@ -36,13 +36,16 @@ test('formal candidate transport preserves literals and routes real loader failu
     Module._load = function (name: string, ...args: any[]) {
         return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
     };
-    globalThis.fetch = async (_url, options) => {
+    const fetchFixture = captureFetchFixture(async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options,
+            { modelName: 'neutral-candidate-flow', contextLength: 16384 });
+        if (metadata) { return metadata; }
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) {
             roles.push('analyst');
             response = JSON.stringify({ test_strategy: { approach: 'Verify real results using controlled inputs.' } });
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             roles.push('reviewer'); response = '{"findings":[]}';
         } else if (request.prompt.startsWith('WRITER_REVISION_REQUEST_V2')) {
             roles.push('writer-revision');
@@ -71,7 +74,8 @@ test('formal candidate transport preserves literals and routes real loader failu
                 : '```python\n' + candidate.split('\n').map(line => '  ' + line).join('\n') + '\n```';
         }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
-    };
+    });
+    globalThis.fetch = fetchFixture.fetch;
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
@@ -88,6 +92,7 @@ test('formal candidate transport preserves literals and routes real loader failu
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-candidate-flow',
                     filePath: source, funcName: 'compute', promptStrategy: 'tier1', validationMode: 'full', maxLoops: 1,
                     timeoutSeconds: 60, mutationEngine: 'builtin', outputPath: output });
+                fetchFixture.assertNoFailure();
                 const artifacts = fs.readdirSync(output, { recursive: true }).map(String);
                 const find = (name: string) => path.join(output, artifacts.find(item => path.basename(item) === name)!);
                 const events = fs.readFileSync(find('role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));

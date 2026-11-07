@@ -7,7 +7,7 @@ import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualifi
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { resultDataDirectory } from '../pipeline/resultLayout';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { observedSeedReply, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 
 test('real batch honors optional qualification, reuses strict runtime evidence, and requires actual review before mutation', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-qualification-reuse-'));
@@ -53,6 +53,8 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
         return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
     };
     globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'neutral-batch-reuse', metadataAvailable: false });
+        if (metadata) { return metadata; }
         const wire = JSON.parse(String(options?.body));
         const probe = wire.prompt.includes('A safe runtime already provides increment(value)')
             || wire.prompt.includes('Review this exact TEST_FILE');
@@ -68,13 +70,11 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
         } else if (request.roleInstructions.includes('dependency_behaviors')) {
             assert.ok(request.prompt.includes('FULL_REQUIRED_SOURCE_MARKER') && request.prompt.includes('source note 89'));
             response = JSON.stringify({ test_strategy: { approach: 'Call advance with observed integer inputs.' } });
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             response = rejectActualReviewer ? 'not a valid actual candidate review' : '{"findings":[]}';
         } else {
             const module = /\bsample_a\b/.test(request.prompt) ? 'sample_a' : 'sample_b';
-            response = `import unittest\nfrom ${module} import advance\nclass Cases(unittest.TestCase):\n`
-                + '    def test_integers(self):\n        self.assertEqual(advance(0), 1)\n'
-                + '        self.assertEqual(advance(1), 2)\n        self.assertEqual(advance(-1), 0)\n';
+            response = (observedSeedReply(request.prompt, module, 'advance') ?? `import unittest\nfrom ${module} import advance\nclass Cases(unittest.TestCase):\n    def test_integers(self):\n        self.assertEqual(advance(0), 1)\n`);
         }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
     };
@@ -97,18 +97,25 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
             const writesBefore = writes.length;
             await handlers.get('llm-unit-test.runBatchAnalysis')!({ envType: 'local', modelName: 'neutral-batch-reuse',
                 batchPath: project, promptStrategy: strategy, requireRoleQualification, validationMode: 'full', maxLoops: 1,
+                stopPolicy: { batchFailureLimit: rejectActualReviewer ? 1 : 0 },
                 timeoutSeconds: 60, mutationEngine: 'builtin', outputPath: output });
             const batch = path.join(output, fs.readdirSync(output)[0]);
             const manifest = JSON.parse(fs.readFileSync(path.join(batch, 'batch_manifest.json'), 'utf8'));
             assert.equal(manifest.expectedTargets, 2);
             assert.ok(manifest.finishedTargets >= 1 && manifest.finishedTargets <= 2);
-            const targets = manifest.targets.filter((target: any) => target.state !== 'pending').map((target: any) => {
+            const notRun = manifest.targets.filter((target: any) => target.terminalStatus === 'policy-not-run');
+            for (const target of notRun) {
+                assert.equal(target.state, 'finished'); assert.equal(target.reportDirectory, undefined);
+                assert.equal(target.modelRequests, 0); assert.equal(target.formalRequests, 0); assert.equal(target.transportAttempts, 0);
+            }
+            const targets = manifest.targets.filter((target: any) => target.state !== 'pending'
+                && target.terminalStatus !== 'policy-not-run').map((target: any) => {
                 const data = resultDataDirectory(path.join(batch, target.reportDirectory));
                 const events = fs.readFileSync(path.join(data, 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
                 const knowledge = JSON.parse(fs.readFileSync(path.join(data, 'function_knowledge.json'), 'utf8'));
                 return { target, data, events, knowledge };
             });
-            assert.equal(targets.length, manifest.finishedTargets);
+            assert.equal(targets.length + notRun.length, manifest.finishedTargets);
             assert.ok(writes.slice(writesBefore).every(key => key !== 'llmUnitTest.modelProfiles.v1'
                 && !/runtimeContext|contextPreference/i.test(key)),
             'ordinary last-folder memory is allowed; runtime model/context preferences must stay unchanged');
@@ -172,10 +179,11 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
             rejectActualReviewer = true;
             const result = await run('optional-rejected-actual-review', 'tier2');
             assert.equal(result.manifest.allTargetsPassed, false);
-            assert.equal(result.manifest.finishedTargets, 1);
-            assert.ok(result.manifest.targets.some((target: any) => target.state === 'pending'));
+            assert.equal(result.targets.length, 1, 'only the first target is actually executed');
+            assert.equal(result.manifest.finishedTargets, 2, 'the remaining target receives an explicit policy-not-run diagnostic');
+            assert.equal(result.manifest.targets.filter((target: any) => target.terminalStatus === 'policy-not-run').length, 1);
             assert.ok(!result.wire.some(request => !request.roleInstructions));
-            assert.ok(result.wire.some(request => request.roleInstructions.includes('You are the test Reviewer')),
+            assert.ok(result.wire.some(request => request.isReviewer),
                 'optional policy permits the actual review attempt');
             for (const item of result.targets) {
                 assert.ok(!item.events.some((event: any) => event.stage === 'reviewer' && event.status === 'approved'));

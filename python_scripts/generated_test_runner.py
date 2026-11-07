@@ -167,7 +167,8 @@ def guarded_test_runtime(test_directory=None):
         # same name (for example data/loop1_test.py). This must happen inside
         # the guard, which installs the declared roots in their given order.
         paths = [test_directory, *paths]
-    with guarded_runtime(error_type=TestIsolationError, protect_profile=_target_tracking, import_paths=paths) as violations:
+    with guarded_runtime(error_type=TestIsolationError, protect_profile=_target_tracking,
+                         import_paths=paths, protect_evidence=True) as violations:
         yield violations
 
 

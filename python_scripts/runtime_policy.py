@@ -558,7 +558,7 @@ def _drain_background_threads(initial_threads):
 
 
 @contextmanager
-def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, import_paths=None):
+def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, import_paths=None, protect_evidence=False):
     global _active
     if _active is not None:
         raise RuntimeError('Nested execution policy guards are unsupported')
@@ -615,6 +615,11 @@ def guarded_runtime(*, error_type=RuntimePolicyError, protect_profile=False, imp
                         stack.enter_context(patch.object(threading, name, block_profile_replacement))
             stack.enter_context(fixtures)
             stack.enter_context(_guard_unc_metadata(resources))
+            if protect_evidence:
+                from runner_evidence_guard import preserve_runner_evidence
+                # ExitStack checks after the background-thread drain, while
+                # policy violations are still recorded and before guard teardown.
+                stack.enter_context(preserve_runner_evidence())
             stack.enter_context(patch.object(socket.socket, 'bind', _probe_bind))
             if resources:
                 stack.enter_context(resources.guarding(block_operation))

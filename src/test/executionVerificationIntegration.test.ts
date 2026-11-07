@@ -41,7 +41,7 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
     };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body))); requests.push(request);
-        assert.ok(!/You are the test Reviewer|SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.roleInstructions));
+        assert.ok(!request.isReviewer && !/SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.roleInstructions));
         if (changeSource) { fs.appendFileSync(file, '\n# source changed\n'); }
         if (cancel) { handlers.get('llm-unit-test.abortTest')!(); }
         const response = replies.length > 1 ? replies.shift()! : replies[0];
@@ -75,7 +75,8 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         assert.equal(passed.knowledge.qualityAssessment, null); assert.equal(passed.knowledge.coverage, null);
         assert.equal(passed.knowledge.mutationScore, null); assert.equal(passed.knowledge.reviewStatus, 'deferred');
         assert.equal(presentOutcome(passed.knowledge).kind, 'executed');
-        assert.equal(requests.length, 1); assert.match(requests[0].roleInstructions, /EXECUTION_VERIFICATION_V1/);
+        assert.equal(requests.length, 1); assert.match(requests[0].roleInstructions, /^WRITER_SEED_V1 OUTPUT SCOPE/);
+        assert.match(requests[0].prompt, /EXECUTION_VERIFICATION_V1/);
         assert.equal(fs.readFileSync(file, 'utf8'), source);
         assert.ok(messages.some(message => message.outcome?.kind === 'executed'));
         const baseline = JSON.parse(fs.readFileSync(path.join(passed.directory, 'execution_baseline.json'), 'utf8'));
@@ -154,7 +155,8 @@ test('execution mode runs real guarded tests, preserves failures, and never invo
         const unqualifiedOutput = path.join(root, 'unqualified');
         const beforeFinished = messages.filter(message => message.command === 'analysisFinished').length;
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: file,
-            funcName: 'target', outputPath: unqualifiedOutput, promptStrategy: 'auto', maxLoops: 3, timeoutSeconds: 30 });
+            funcName: 'target', outputPath: unqualifiedOutput, promptStrategy: 'auto', requireRoleQualification: true,
+            maxLoops: 3, timeoutSeconds: 30 });
         assert.equal(requests.length, before);
         assert.equal(fs.existsSync(unqualifiedOutput), false, 'missing Auto qualification stops before target analysis');
         assert.equal(messages.filter(message => message.command === 'analysisFinished').length, beforeFinished + 1);

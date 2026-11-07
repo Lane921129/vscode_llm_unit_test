@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readGeneratedRunnerDiagnostics, GeneratedRunnerDiagnosticIdentity } from '../pipeline/generatedRunnerDiagnostics';
-import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure } from '../utils/executionFailureCategory';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 const digest = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -38,7 +38,7 @@ function fixture() {
 }
 
 const rejects = (callback: () => unknown) => assert.throws(callback,
-    (error: unknown) => error instanceof AnalysisStageError && error.category === 'validation'
+    (error: unknown) => error instanceof AnalysisStageError && error.category === 'tool'
         && error.stage === 'generated-test-runner'
         && (error.diagnostic as { reasonCode: string }).reasonCode === 'generated-test-diagnostics-invalid');
 
@@ -142,3 +142,39 @@ test('real Python loader artifacts bind native paths and preserve original impor
         assert.equal(readGeneratedRunnerDiagnostics(f.expected)?.repairRole, 'writer');
     } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
+
+for (const [name, setup, exitCode] of [
+    ['stdout', 'print("{not a runner result}")', 0],
+    ['output write', 'open("result.json", "w").write("broken")', 86],
+    ['unscoped serializer mock', 'import json\njson.dump = lambda obj, fp, **kw: fp.write("broken")', 86],
+    ['unscoped encoder mock', 'import json\njson.JSONEncoder.iterencode = lambda *args, **kw: iter(["broken"])', 86],
+    ['unscoped cached encoder mock', 'import json\njson._default_encoder = None', 86],
+    ['unscoped background serializer mock', 'import json, threading, time\ndef interfere():\n    time.sleep(0.05)\n    json.dump = lambda obj, fp, **kw: fp.write("broken")\nthreading.Thread(target=interfere).start()', 86],
+    ['scoped serializer mock', 'from unittest.mock import patch\nwith patch("json.dump"):\n    pass', 0]
+] as const) {
+    test(`candidate ${name} cannot become a tool diagnostic failure`, () => {
+        const f = fixture();
+        try {
+            fs.writeFileSync(f.expected.testFile, 'import unittest\nfrom sample import target\n' + setup
+                + '\nclass Cases(unittest.TestCase):\n    def test_case(self):\n        self.assertEqual(target(), 1)\n');
+            f.expected.testHash = digest(f.expected.testFile);
+            const project = path.resolve(__dirname, '../..');
+            const isolationFile = path.join(f.root, 'isolation.jsonl');
+            const run = spawnSync(resolvePythonExecutable(undefined, project),
+                ['-B', path.join(project, 'python_scripts/generated_test_runner.py'), 'generated',
+                    '--result-json', f.expected.resultFile, '--violation-report', isolationFile,
+                    '--target-file', f.expected.sourceFile, '--target-name', f.expected.target,
+                    '--target-evidence', f.expected.invocationFile, '--target-run-id', f.expected.testRunId,
+                    '--target-test-file', f.expected.testFile],
+                { cwd: f.root, encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' }, timeout: 20000 });
+            assert.equal(run.status, exitCode, run.stderr);
+            assert.equal(readGeneratedRunnerDiagnostics(f.expected), undefined);
+            const result = JSON.parse(fs.readFileSync(f.expected.resultFile, 'utf8'));
+            assert.equal(result.status, exitCode === 0 ? 'passed' : 'isolation-blocked');
+            if (exitCode !== 0) { assert.equal(classifyExecutionFailure(run.stderr), 'validation'); }
+            const events = fs.readFileSync(isolationFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+            assert.equal(events.at(-1).status, result.status);
+            if (name.startsWith('unscoped')) { assert.equal(events.at(-1).operation, 'runner evidence interference'); }
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
+}

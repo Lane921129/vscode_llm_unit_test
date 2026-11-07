@@ -156,7 +156,8 @@ test('dependency rules include mock isolation, caller constraints, and mixed boo
     assert.ok(ids.includes('observation_mock_isolation'));
     assert.ok(ids.includes('caller_dependency_contract'));
     const rules = getTestRuleCards(ids).flatMap(card => card.rules).join('\n');
-    assert.match(rules, /assert_called_once_with/);
+    assert.match(rules, /Do not replay module initializers or call dependencies to manufacture expected values or call history/);
+    assert.match(rules, /Source call sites alone do not prove runtime call counts/);
     assert.match(rules, /mixed truth values/);
     const ordinary = inferTestRuleIdsFromCode('def render(value):\n    return value');
     assert.ok(!ordinary.includes('observation_mock_isolation'));

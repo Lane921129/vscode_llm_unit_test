@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { currentExecution, ExecutionContext } from '../pipeline/executionContext';
 
-test('abort and immediate restart suppress stale completion and freeze model facts per batch', async () => {
+test('abort retains ownership through cleanup, then restart freezes model facts per batch', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-lifecycle-'));
     const source = path.join(directory, 'constants.py');
     fs.writeFileSync(source, 'VALUE = 1\n');
@@ -80,9 +80,19 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         await waitForScan(1);
         assert.strictEqual(scans.length, 1);
         handlers.get('llm-unit-test.abortTest')!();
-        assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 1);
+        // Both baselines keep a cancelled execution's ownership until its scan settles.
+        assert.strictEqual(messages.filter(m => m.command === 'analysisStopping').length, 1);
+        assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 0);
+        assert.strictEqual(scans[0].context.cancelled, true);
         update({ envType: 'local', modelName: 'second', paramSize: '8B', contextLength: 8192 });
         runtimeContextTokens = 16384;
+        await batch(params);
+        assert.strictEqual(scans.length, 1, 'cancelled work still owns cleanup and prevents overlapping scans');
+        assert.strictEqual(warnings.length, 1);
+        scans[0].resume();
+        await oldBatch;
+        assert.strictEqual(scopePreviews, 0, 'a cancelled source scan must not open a scope picker');
+        assert.strictEqual(messages.filter(m => m.command === 'analysisFinished').length, 1);
         const newBatch = batch(params);
         await waitForScan(2);
         assert.strictEqual(scans.length, 2);
@@ -96,12 +106,7 @@ test('abort and immediate restart suppress stale completion and freeze model fac
         assert.strictEqual(scans[1].context.snapshot.stored.find((profile: any) => profile.modelName === 'second').contextLength, 8192);
         await batch(params);
         assert.strictEqual(scans.length, 2);
-        assert.strictEqual(warnings.length, 1);
-        const beforeOldCompletion = messages.length;
-        scans[0].resume();
-        await oldBatch;
-        assert.strictEqual(messages.length, beforeOldCompletion);
-        assert.strictEqual(scopePreviews, 0, 'a cancelled source scan must not open or invalidate a new scope picker');
+        assert.strictEqual(warnings.length, 2);
         assert.strictEqual(scans[1].context.cancelled, false);
         scans[1].resume();
         await newBatch;

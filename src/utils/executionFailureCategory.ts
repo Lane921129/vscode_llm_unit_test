@@ -22,6 +22,12 @@ export class AnalysisStageError extends Error {
     }
 }
 
+/** A broken provider envelope contains no returned model content to repair.
+ * Preserve its diagnostic category while excluding it from model retries. */
+export function isModelContentFormatError(error: unknown): error is AnalysisStageError {
+    return error instanceof AnalysisStageError && error.category === 'model-format' && error.stage !== 'model-response';
+}
+
 /** Preserve only a transport-owned numeric status, never provider text or a
  * status guessed from a traceback, target name or arbitrary exception. */
 export function modelRequestHttpStatus(error: unknown): number | undefined {

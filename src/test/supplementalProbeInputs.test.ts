@@ -31,10 +31,31 @@ test('builds complete, bounded calls from semantic candidates and AST defaults',
     ]);
 
     assert.deepStrictEqual(candidates, [
-        { args: [], kwargs: { value: 0, mode: 'draft' } },
-        { args: [], kwargs: { value: 10, mode: 'draft' } },
-        { args: [], kwargs: { value: null, mode: 'draft' } }
+        { args: [0], kwargs: { mode: 'draft' } },
+        { args: [10], kwargs: { mode: 'draft' } },
+        { args: [null], kwargs: { mode: 'draft' } }
     ]);
+});
+
+test('an omitted middle parameter makes following positional-or-keyword values keywords', () => {
+    assert.deepStrictEqual(buildSupplementalProbeInputs(strategy([
+        { param_name: 'first', boundary_inputs: ['1'], invalid_inputs: [] },
+        { param_name: 'last', boundary_inputs: ['3'], invalid_inputs: [] }
+    ]), [
+        { name: 'first', kind: 'positional_or_keyword', required: true, default: null },
+        { name: 'middle', kind: 'positional_or_keyword', required: false, default: 'factory()' },
+        { name: 'last', kind: 'positional_or_keyword', required: false, default: '0' }
+    ]), [{ args: [1], kwargs: { last: 3 } }]);
+});
+
+test('positional-only values stay in args and keyword-only values always stay in kwargs', () => {
+    assert.deepStrictEqual(buildSupplementalProbeInputs(strategy([
+        { param_name: 'position', boundary_inputs: ['1'], invalid_inputs: [] },
+        { param_name: 'keyword', boundary_inputs: ['2'], invalid_inputs: [] }
+    ]), [
+        { name: 'position', kind: 'positional_only', required: true, default: null },
+        { name: 'keyword', kind: 'keyword_only', required: true, default: null }
+    ]), [{ args: [1], kwargs: { keyword: 2 } }]);
 });
 
 test('does not invent a value when a required AST parameter lacks a safe candidate', () => {

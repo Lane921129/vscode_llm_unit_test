@@ -379,7 +379,7 @@ class _Planner:
             return isinstance(node.operand, ast.Constant) and type(node.operand.value) in (int, float)
         return False
 
-    def candidate(self, call, env, file, digest):
+    def candidate(self, call, env, file, digest, return_used=False):
         result = None
         if isinstance(call.func, ast.Attribute) and call.func.attr == 'mkdir':
             receiver = self.value(call.func.value, env, file)
@@ -432,6 +432,10 @@ class _Planner:
                         and callback and all(keyword.arg is not None for keyword in call.keywords)
                         and all(self.arguments_safe(arg, env) for arg in arguments)):
                     result = {'kind': 'entry-point', 'operation': operation}
+        if result and return_used and result['kind'] != 'read-file':
+            # Only read-file fixtures model a consumed return value. Replacing
+            # a startup/mkdir result with None would alter module initialization.
+            return False
         if result:
             if len(self.result['candidates']) >= MAX_CANDIDATES:
                 self.fail('candidate-limit', self.relative(file), call.lineno)
@@ -468,7 +472,7 @@ class _Planner:
                         env[name] = _Value('path-constructor', None) if module == 'pathlib' and item.name == 'Path' else _Value('external', module + '.' + item.name)
             elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
                 if isinstance(statement.value, ast.Call):
-                    self.candidate(statement.value, env, file, digest)
+                    self.candidate(statement.value, env, file, digest, return_used=True)
                 value = self.value(statement.value, env, file) if statement.value else None
                 self.invalidate(statement, env)
                 targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]

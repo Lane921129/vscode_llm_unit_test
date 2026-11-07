@@ -121,8 +121,8 @@ test('Tier 1 corpus builds, executes, and mutation-checks deterministic tests fr
             for (const semanticInput of fixture.expected.semantic_trace_inputs || []) {
                 assert.ok(
                     trace.examples.some((example: { args?: unknown[]; kwargs?: Record<string, unknown> }) =>
-                        JSON.stringify(example.args || []) === JSON.stringify([])
-                        && Object.values(example.kwargs || {}).includes(semanticInput)
+                        (example.args || []).includes(semanticInput)
+                        || Object.values(example.kwargs || {}).includes(semanticInput)
                     ),
                     `${fixture.id}: analyst-proposed input ${semanticInput} was not executed by the behavior probe`
                 );

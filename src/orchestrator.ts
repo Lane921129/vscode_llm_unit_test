@@ -151,7 +151,7 @@ import { formatSourceLineContext } from './pipeline/sourceLineContext';
 import { prepareParameterFixtureExperiments, ParameterFixtureSession, checkParameterFixtureReplay, parameterFixtureReplayInstruction, type FixtureEvidence } from './pipeline/parameterFixtureExperiments';
 import { readOllamaGenerationResponse } from './llm/ollamaGenerationResponse';
 import { COMPACT_WRITER_VERSION, buildWriterRevisionContext } from './prompts/compactWriterContext';
-import { AnalysisStageError, classifyExecutionFailure, modelRequestHttpStatus } from './utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure, isModelContentFormatError, modelRequestHttpStatus } from './utils/executionFailureCategory';
 import { RepairResponseError, REPAIR_REASON_LABELS, repairReasonCode, formatRepairRouting } from './pipeline/repairDiagnostics';
 import { deadlineAtFromTimeoutSeconds, GENERATION_RETRY_MAX_ATTEMPTS, remainingDeadlineMs, retryTransientProviderRequest } from './llm/connectionTimeout';
 import { boundedRoleStageDeadline, createRequestProgress, createRequestQueueTiming, createTransportAttemptTiming, type RequestTimingEvent, type TransportAttemptTiming } from './llm/requestTiming';
@@ -4075,7 +4075,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             }
                         } catch (err: any) {
                             throwIfExecutionCancelled();
-                            if (currentStopPolicy() && err instanceof AnalysisStageError && err.category === 'model-format') {
+                            if (currentStopPolicy() && isModelContentFormatError(err)) {
                                 recordRejected('', retry, 'response-format', 'response-format');
                                 continue;
                             }
@@ -4119,7 +4119,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                             seedPending ? generationRevisionCode : undefined, undefined, undefined,
                             generationRevisionCode === undefined ? undefined : { findingCount: 1, missingScenarioCount: 0 });
                     } catch (err: any) {
-                        if (currentStopPolicy() && err instanceof AnalysisStageError && err.category === 'model-format') {
+                        if (currentStopPolicy() && isModelContentFormatError(err)) {
                             recordRejected('', llmRetry, 'response-format', 'response-format');
                             // Output formatting recovery retains this prompt and any exact method-edit plan.
                             continue;
@@ -4138,8 +4138,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         composedBindingCode = generationBindingEdit
                             ? await applyBindingRevision(generationBindingEdit, rawCode, llmRetry) : undefined;
                     } catch (error) {
-                        if (!(error instanceof AnalysisStageError) || error.category !== 'model-format'
-                            || !currentStopPolicy()) { throw error; }
+                        if (!isModelContentFormatError(error) || !currentStopPolicy()) { throw error; }
                         const reason = error.diagnostic && typeof error.diagnostic === 'object'
                             ? (error.diagnostic as { reasonCode?: unknown }).reasonCode : undefined;
                         generationBindingEdit!.prompt += '\nFORMAT REPAIR: '

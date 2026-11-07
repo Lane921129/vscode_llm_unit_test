@@ -8,7 +8,7 @@ import { ExecutionBaseline, verifyExecutionEvidence } from './executionEvidence'
 import { validateTestCandidate, CandidatePipelineHooks } from './testCandidatePipeline';
 import { generatedUnittestArguments } from '../utils/pythonTestEnvironment';
 import { ProcessTimeoutError, runSpawn } from '../utils/processRunner';
-import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { AnalysisStageError, isModelContentFormatError } from '../utils/executionFailureCategory';
 import { throwIfExecutionCancelled } from './executionContext';
 import { pythonToolPath } from './pythonTools';
 import { currentImportFixtures } from './importFixtures';
@@ -53,7 +53,7 @@ export async function runExecutionVerification(options: ExecutionVerificationOpt
         currentStopPolicy()?.beginAttempt();
         try { initial = await options.generate(); break; }
         catch (error) {
-            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            if (!isModelContentFormatError(error) || !currentStopPolicy()) { throw error; }
             currentStopPolicy()!.reject('writer-response-format');
             hooks.event('writer', 'format-rejected', { reasonCode: 'writer-response-format', previousTestUnchanged: true });
         }

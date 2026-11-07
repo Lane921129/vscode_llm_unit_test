@@ -71,7 +71,7 @@ test('full and execution repair the current Checker candidate locally; rejected 
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) {
             response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real target with source-supported inputs and verify its returned boolean."}}';
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             reviews++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             const block = request.prompt.match(/<TEST_FILE>\n([\s\S]*?)\n<\/TEST_FILE>/);

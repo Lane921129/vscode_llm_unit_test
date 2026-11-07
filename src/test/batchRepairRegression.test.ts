@@ -137,7 +137,7 @@ test('same repair failure with changed unittest timing and stack line numbers co
     }
 });
 
-test('repeated Writer candidates retain the latest blocking finding and do not run or review twice', async () => {
+test('legacy repeated Writer candidates retain the latest blocking finding and do not run or review twice', async () => {
     const inputs: string[] = [];
     let executions = 0;
     let reviews = 0;
@@ -146,7 +146,8 @@ test('repeated Writer candidates retain the latest blocking finding and do not r
         review: async () => { reviews++; return { issues: [{ id: 'B1', severity: 'blocking', evidence: 'self.assertTrue', reason: 'wrong observation', action: 'keep the observed boolean identity' }] }; },
         revise: async (_, failure) => { inputs.push(failure); return code; }
     })), /keep the observed boolean identity/);
-    assert.equal(inputs.length, 2);
+    // Without a TargetStopPolicy, both baselines stop at the first repeated Writer candidate.
+    assert.equal(inputs.length, 1);
     inputs.forEach(input => assert.match(input, /keep the observed boolean identity/));
     assert.equal(executions, 1);
     assert.equal(reviews, 1);

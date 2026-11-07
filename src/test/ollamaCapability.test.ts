@@ -13,7 +13,7 @@ test('Ollama structured probe is small, deterministic, and domain neutral', () =
         prompt: '\nReturn exactly one JSON object with a boolean field named "ok" set to true. Do not include any other text.',
         stream: true,
         format: 'json',
-        options: { temperature: 0, num_ctx: 8192 }
+        options: { temperature: 0, num_ctx: 8192, num_predict: 1024 }
     });
 });
 
@@ -24,7 +24,7 @@ test('every local probe carries the same explicit context and complete prompt en
             buildOllamaRoleQualificationProbe('neutral-model', 'Complete reviewer role instructions.', 'json', numCtx),
             buildOllamaRoleQualificationProbe('neutral-model', 'Complete repair role instructions.', 'text', numCtx)];
         for (const request of probes) {
-            assert.deepStrictEqual(request.options, { temperature: 0, num_ctx: numCtx });
+            assert.deepStrictEqual(request.options, { temperature: 0, num_ctx: numCtx, num_predict: 1024 });
             assert.equal(request.system, ' ');
             assert.ok(request.prompt.startsWith('\n'));
             assert.equal('raw' in request, false);

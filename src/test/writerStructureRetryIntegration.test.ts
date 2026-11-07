@@ -61,7 +61,7 @@ test('a short expansion fragment keeps the full long baseline and the original o
         seedPending: false, contextWindow: 8192, inputBudget: originalInput, revisionCurrentCode: undefined });
     assert.equal(budget.inputBudget, originalInput);
     assert.equal(budget.reservedOutputTokens, 2458);
-    assert.equal(budget.requestOutputTokens, undefined);
+    assert.equal(budget.requestOutputTokens, budget.reservedOutputTokens);
     assert.ok(promptFits('', request, budget.inputBudget));
 });
 
@@ -97,7 +97,7 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
         const body = JSON.parse(String(options?.body));
         const request = readOllamaRoleRequest(body);
         const role = request.roleInstructions.includes('dependency_behaviors') ? 'analyst'
-            : request.roleInstructions.includes('You are the test Reviewer') ? 'reviewer'
+            : request.isReviewer ? 'reviewer'
                 : request.roleInstructions.includes('Analyst after successful') ? 'quality' : 'writer';
         requests.push({ role, prompt: request.prompt, options: body.options });
         const response = role === 'analyst' ? JSON.stringify({ dependency_behaviors: [],
@@ -119,7 +119,7 @@ test('formal Writer structure retries retain the rejected file, evidence scope a
         const run = handlers.get('llm-unit-test.runCaptureAndTest')!;
         const params = { envType: 'local', modelName: 'neutral-writer-retry', filePath: source, funcName: '_read',
             validationMode: 'full', promptStrategy: 'tier1', maxLoops: 1, timeoutSeconds: 45,
-            mutationEngine: 'builtin', mutpyTimeout: 20 };
+            mutationEngine: 'builtin', mutpyTimeout: 20, stopPolicy: { failureLimit: 2 } };
 
         await t.test('single-pass repair sends one complete prior candidate and its exact binding finding', async () => {
             requests.length = 0;

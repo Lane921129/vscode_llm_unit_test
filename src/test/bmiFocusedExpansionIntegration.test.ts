@@ -161,7 +161,7 @@ test('BMI keeps an executed seed, rejects wrong quality/review advice and verifi
         if (request.roleInstructions.includes('dependency_behaviors')) {
             wireRoles.push({ role: 'analyst', prompt: request.prompt });
             response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real target using only supplied observations for all assertions."}}';
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             reviews++; wireRoles.push({ role: 'reviewer', prompt: request.prompt });
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             if ((scenario === 'review-revision' || scenario === 'review-missing') && reviews === 2) {

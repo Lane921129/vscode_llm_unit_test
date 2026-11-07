@@ -50,7 +50,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
                 test_strategy: { approach: 'Exercise increment with the exact verified observed input and result.' } }),
                 done: true, done_reason: 'stop' }), { status: 200 });
         }
-        if (request.roleInstructions.includes('You are the test Reviewer')) {
+        if (request.isReviewer) {
             assert.notEqual(request.raw, true, 'Writer preference never changes Reviewer transport');
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             return Response.json({ response: reviewAccepted ? '{"findings":[]}' : 'invalid review', done: true, done_reason: 'stop' });
@@ -121,6 +121,8 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
                 reviewer: { state: truncated ? 'verified' : 'not-run', reason: 'fixed fixture' }, bugFixer: { state: 'not-run', reason: 'fixed fixture' } } });
         await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'neutral-output',
             filePath: source, funcName: 'increment', promptStrategy: 'boundary', validationMode: 'full',
+            // This fixture isolates the initial output stage from later target attempts.
+            stopPolicy: { failureLimit: truncated || repetition === 'persistent' ? 2 : 5 },
             maxLoops: 1, timeoutSeconds: 30, mutationEngine: 'builtin', outputPath: output });
         const artifacts = fs.readdirSync(output, { recursive: true }).map(String);
         const events = artifacts.filter(name => path.basename(name) === 'role_events.jsonl')
@@ -172,7 +174,7 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
             if (!reviewAccepted) {
                 assert.notEqual(knowledge.terminalStatus, 'passed');
                 assert.ok(!events.some(event => event.stage === 'mutation' && event.status === 'measured'));
-                assert.ok(requests.some(request => request.roleInstructions.includes('You are the test Reviewer')));
+                assert.ok(requests.some(request => request.isReviewer));
                 return;
             }
             assert.equal(knowledge.terminalStatus, 'passed', JSON.stringify(knowledge.lastFailure));

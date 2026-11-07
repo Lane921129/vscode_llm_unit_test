@@ -63,7 +63,7 @@ class ObservedStateCases(unittest.TestCase):
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         assert.equal(request.options.num_ctx, 8572, 'the fixture uses its observed runtime, not the advertised maximum');
         let response: string;
-        if (request.roleInstructions?.includes('You are the test Reviewer')) {
+        if (request.isReviewer) {
             roles.push('reviewer'); response = '{"findings":[]}';
         } else if (request.roleInstructions?.includes('Analyst after successful')) {
             roles.push('quality-analyst');

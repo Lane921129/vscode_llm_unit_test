@@ -3,8 +3,10 @@ import { test } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { verifyExecutionEvidence } from '../pipeline/executionEvidence';
+import { contextInputBudget } from '../prompts/promptBudget';
 
 test('BMI full-file entry discovers four functions and verifies real calls despite another project setup', async () => {
     const repo = path.resolve(__dirname, '../..');
@@ -13,11 +15,17 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
     const before = fs.readFileSync(file, 'utf8');
     const output = fs.mkdtempSync(path.join(os.tmpdir(), 'bmi-integration-'));
     const python = resolvePythonExecutable(undefined, repo);
+    const segments = spawnSync(python, ['-B', '-c', 'import ast,json,sys; source=sys.stdin.read(); '
+        + 'print(json.dumps({node.name:ast.get_source_segment(source,node) for node in ast.parse(source).body if isinstance(node,ast.FunctionDef)}))'],
+        { input: before, encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    assert.equal(segments.status, 0, segments.stderr);
+    const completeFunctions: Record<string, string> = JSON.parse(segments.stdout);
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>(), messages: any[] = [];
-    const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, validationMode: 'execution',
+    const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, validationMode: 'execution', runtimeContextTokens: 8192,
         importFixtureRoot: path.join(output, 'old-project'), importFixtures: [{ file: 'config.py', mkdir: true }] };
     const savedSettings = JSON.stringify(settings);
+    assert.equal(contextInputBudget('', 8192), 5734, 'the evaluation context has the approved baseline input budget');
     const assertions: Record<string, string> = {
         positive_number: 'self.assertEqual(positive_number(5), 5.0)',
         calculate_bmi: 'self.assertEqual(calculate_bmi(80, 200), 20.0)',
@@ -42,13 +50,14 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
     // preflight, validation and runner, not live-model generation quality.
     globalThis.fetch = async (_url, init) => {
         const request = JSON.parse(String(init?.body));
-        assert.equal(request.options.num_ctx, 4096, 'automatic requests use the resolved fallback context');
+        assert.equal(request.options.num_ctx, 8192, 'fixture uses the architecture evaluation capacity without changing product defaults');
         assert.doesNotMatch(request.prompt, /trace-value-v1|"trace_input"\s*:|"trace_args"\s*:/,
             'caller input trees must not duplicate source input hints in the Writer prompt');
         assert.match(request.prompt, /"caller_file":"tests\/test_bmi\.py"/,
             'caller source hints from the selected project must remain available');
         const binding = request.prompt.match(/Target import: from ([\w.]+) import (\w+)/);
         assert.ok(binding); assert.ok(assertions[binding[2]]);
+        assert.ok(request.prompt.includes(completeFunctions[binding[2]]), 'the complete target function must survive without truncation');
         calls++;
         const code = `import unittest\nfrom ${binding[1]} import ${binding[2]}\nclass Cases(unittest.TestCase):\n    def test_value(self):\n        ${assertions[binding[2]]}\n`;
         return new Response(JSON.stringify({ response: '```python\n' + code + '\n```', done: true }), { status: 200 });
@@ -71,11 +80,16 @@ test('BMI full-file entry discovers four functions and verifies real calls despi
             assert.equal(knowledge.terminalStatus, 'execution-passed', JSON.stringify(knowledge.lastFailure));
             assert.equal(knowledge.importFixtureId, undefined);
             assert.equal(verifyExecutionEvidence(directory, file, read('execution_baseline.json'), read('run_manifest.json')), true);
-            const requests = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split(/\r?\n/)
-                .map(line => JSON.parse(line)).filter(event => event.stage === 'model-request' && event.status === 'requested');
+            const events = fs.readFileSync(path.join(directory, 'role_events.jsonl'), 'utf8').trim().split(/\r?\n/)
+                .map(line => JSON.parse(line));
+            const requests = events.filter(event => event.stage === 'model-request' && event.status === 'requested');
             assert.ok(requests.length > 0);
-            assert.ok(requests.every(event => event.detail.inputBudget === 2867 && event.detail.contextWindow === 4096),
-                'automatic input budget must match the wire context rather than the old cached 2000-token default');
+            // The existing single-seed policy reserves 1536 output tokens, leaving 6656 on the wire.
+            assert.ok(requests.every(event => event.detail.inputBudget === 6656 && event.detail.contextWindow === 8192
+                && event.detail.reservedOutputTokens === 1536 && event.detail.requestOutputTokens === 1536),
+                'the paired seed budget must match the explicit evaluation context');
+            assert.ok(requests.every(event => event.detail.estimatedInputTokens <= event.detail.inputBudget));
+            assert.ok(!events.some(event => event.status === 'context-grown'), 'complete evidence fits 8192 without context growth');
         }
         assert.equal(JSON.stringify(settings), savedSettings);
         assert.equal(fs.readFileSync(file, 'utf8'), before);

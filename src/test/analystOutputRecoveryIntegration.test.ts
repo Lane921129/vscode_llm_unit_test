@@ -59,7 +59,7 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
             } else {
                 response = JSON.stringify({ test_strategy: { approach: 'Call increment with the observed input and assert its observed result.' } });
             }
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             assert.ok(['recover', 'missing-counts-10', 'missing-counts-45'].includes(scenario),
                 'only completed recovered analysis can reach review');
             response = '{"findings":[]}';
@@ -98,7 +98,10 @@ test('Analyst length recovery keeps complete evidence, separate output floors an
                 const output = path.join(directory, scenario), beforeWrites = writes;
                 await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName,
                     filePath: source, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full',
-                    maxLoops: 1, timeoutSeconds: 60, mutationEngine: 'builtin', outputPath: output });
+                    // Keep room for the first length failure plus its one
+                    // recovery, without adding later target attempts.
+                    stopPolicy: { failureLimit: 2 }, maxLoops: 1, timeoutSeconds: 60,
+                    mutationEngine: 'builtin', outputPath: output });
                 const files = fs.readdirSync(output, { recursive: true }).map(String);
                 const artifact = (name: string) => path.join(output, files.find(item => path.basename(item) === name)!);
                 const events = fs.readFileSync(artifact('role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));

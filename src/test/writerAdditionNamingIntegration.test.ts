@@ -46,7 +46,7 @@ test('ordinary Writer additions require the same executed baseline AST inventory
         if (metadata) { return metadata; }
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
-        if (request.roleInstructions.includes('You are the test Reviewer')) {
+        if (request.isReviewer) {
             reviewerRequests++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             response = '{"findings":[]}';
@@ -233,7 +233,7 @@ test('ordinary Writer additions require the same executed baseline AST inventory
                     assert.equal(corruptedInventory, true);
                     assert.equal(writerRequests.length, 1, 'the next Writer request cannot use a guessed empty inventory');
                     assert.equal(mutationRuns, 1, 'only the previously approved seed may undergo mutation');
-                    assert.equal(knowledge.failureCategory, 'validation');
+                    assert.equal(knowledge.failureCategory, 'tool');
                     assert.equal(knowledge.failureStage, 'writer-addition-context');
                     assert.equal(knowledge.diagnostic.reasonCode, 'writer-method-inventory-unavailable');
                     assert.equal(checkpoint.codeHash, evidenceHash(seedCode.trimEnd()));

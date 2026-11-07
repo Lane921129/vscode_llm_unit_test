@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-07 PR #1（三週改版）
+- 保留已批准的停止政策與 probe 綁定；修復 runner 證據干擾、迴圈 target 綁定、初始化回傳值使用及 provider envelope 誤重問，補足 fixture 與回歸。
+- Windows 原子改名只對 EPERM／EACCES／EBUSY 作最多五次總嘗試，四段退避共300ms、不延長原期限，記錄獨立 I/O journal 並原樣拋出最終錯誤；daemon 開啟的 writer-failure 10/10。
+- 保留 050f969 v1 golden，11/11 比對一致；完整 integration 逐項比對無新增失敗，基準既有失敗與兩版證據列 HANDOFF，不以重錄快照或 skip 掩蓋。
+- 決策改為單一 spec oracle、不做錯誤定位；Reviewer 的「已驗證」指引只限 v1／v2 品質審查，規格預測提示禁止函式本體、執行觀察與「已驗證」，以 oraclePromptBlindness 保護；實作依後續 PR 推進。
+
 ## 2026-10-30
 
 ### 可比較但不洩漏內容的模型能力觀測
