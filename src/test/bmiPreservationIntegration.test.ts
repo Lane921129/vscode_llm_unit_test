@@ -1,4 +1,4 @@
-import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
+import { captureFetchFixture, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import * as assert from 'node:assert/strict';
 import { testCodeBasis } from './reviewBasisFixture';
 import * as fs from 'node:fs';
@@ -71,7 +71,7 @@ class Cases(unittest.TestCase):
         } }
     };
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
-    globalThis.fetch = async (url, options) => {
+    const fetchFixture = captureFetchFixture(async (url, options) => {
         const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'fixture', metadataAvailable: false });
         if (metadata) { return metadata; }
         requests++;
@@ -79,7 +79,7 @@ class Cases(unittest.TestCase):
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         assert.equal(request.options.num_ctx, 8572, 'the fixture runtime allocation, not the model maximum, owns the input budget');
         let response: string;
-        if (request.roleInstructions?.includes('You are the test Reviewer')) {
+        if (request.isReviewer) {
             reviews++; reviewPrompts.push(request.prompt);
             assert.doesNotMatch(request.prompt, /self\.assertGreaterEqual\(status/,
                 'the weakened candidate must be rejected before review');
@@ -96,7 +96,8 @@ class Cases(unittest.TestCase):
             response = '```python\ndef test_zero_height(self):\n    self.assertIsNone(calculate_bmi(70, 0))\n```';
         } else if (request.roleInstructions?.includes('Analyst after successful')) {
             assert.fail('one measurement round must not request an unused quality plan');
-        } else if (request.roleInstructions?.includes('Revise the current tests')) {
+        } else if ((request.roleInstructions?.includes('Revise the current tests')
+            || request.roleInstructions?.startsWith('WRITER_ADDITION_V1 OUTPUT MODE'))) {
             revisions++; writerPrompts.push(request.prompt);
             const code = scenario === 'weakened' ? revisions === 1 ? weakened : complete
                 : revisions === 1 ? wrongException : complete;
@@ -112,7 +113,8 @@ class Cases(unittest.TestCase):
             response = '```python\n' + (writers === 1 ? seed : dropped) + '\n```';
         }
         return new Response(JSON.stringify({ response, done: true }), { status: 200 });
-    };
+    });
+    globalThis.fetch = fetchFixture.fetch;
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
@@ -129,6 +131,7 @@ class Cases(unittest.TestCase):
                 // Exercise the full 76-candidate set within the original stage
                 // deadline; preservation correctness does not depend on two workers.
                 timeoutSeconds: 60, mutpyTimeout: 30, mutationWorkers: 4, mutationEngine: 'builtin', validationMode: 'full' });
+            fetchFixture.assertNoFailure();
             const knowledgeFile = fs.readdirSync(output, { recursive: true }).map(String).find(name => path.basename(name) === 'function_knowledge.json');
             assert.ok(knowledgeFile, 'journal must exist');
             const runRoot = path.dirname(path.join(output, knowledgeFile));

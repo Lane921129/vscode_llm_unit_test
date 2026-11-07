@@ -98,7 +98,12 @@ test('initialization setup stops after one confirmed recheck and preserves the r
                 assert.equal(outcome.finalCheckReport, path.join(directory, session.checks.at(-1)!.directory, 'import_check.md'));
                 for (const row of outcome.rows.filter(row => row.status === 'blocked')) {
                     const original = finalCheck.rows.find((item: { file: string }) => item.file === row.file);
-                    assert.deepEqual(row.issue, original.issue); assert.deepEqual(row.diagnostic, original.diagnostic);
+                    const expectedIssue = original.issue && { ...original.issue };
+                    if (expectedIssue) {
+                        // The handoff keeps safe diagnostics, not resource proposals.
+                        delete expectedIssue.resource; delete expectedIssue.fixtureExample;
+                    }
+                    assert.deepEqual(row.issue, expectedIssue); assert.deepEqual(row.diagnostic, original.diagnostic);
                 }
             }
             return { directory, session, outcome };

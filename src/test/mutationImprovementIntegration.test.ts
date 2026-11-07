@@ -88,7 +88,7 @@ class Cases(unittest.TestCase):
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
-        else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+        else if (request.isReviewer) { response = '{"findings":[]}'; }
         else if (request.roleInstructions.includes('Analyst after successful')) {
             quality++;
             analystEvidence.push(request.prompt);

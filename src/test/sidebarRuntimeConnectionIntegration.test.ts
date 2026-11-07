@@ -92,7 +92,7 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             assert.equal(profile.testGenerationReady, true, 'the real fixed Python fixture must execute successfully');
             assert.deepEqual(Object.values(profile.roleQualification).map((role: any) => role.state), ['verified', 'verified', 'verified']);
             assert.equal(profile.contextLengthKnown, known);
-            assert.deepEqual(profile.qualificationRuntime, { version: 'ollama-context-v1', numCtx });
+            assert.deepEqual(profile.qualificationRuntime, { version: 'ollama-context-v1', numCtx, thinkingMode: 'provider-default' });
             assert.equal(profile.endpointKey, qualificationEndpointKey('local', 'http://127.0.0.1:11434'));
             assert.equal(qualificationAppliesToRequest(profile, { envType: 'local', modelName: 'neutral-model',
                 endpointKey: profile.endpointKey, runtimeContextTokens: numCtx }), true);
@@ -267,7 +267,7 @@ test('Sidebar connection binds actual role probes to one local runtime snapshot'
             await request();
             assert.equal(probes.length, 1);
             assert.equal(finalProfile().testGenerationReady, false);
-            assert.deepEqual(finalProfile().qualificationRuntime, { version: 'ollama-context-v1', numCtx: 8192 });
+            assert.deepEqual(finalProfile().qualificationRuntime, { version: 'ollama-context-v1', numCtx: 8192, thinkingMode: 'provider-default' });
             assert.ok(Object.values(finalProfile().roleQualification).every((role: any) => role.state !== 'verified'));
             assert.equal(information.length, 0);
             assert.ok(warnings.some(message => message.includes('角色資格測試未完成或未通過')));

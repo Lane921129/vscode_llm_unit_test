@@ -38,7 +38,7 @@ test('a measured object gap reaches fixture observation, AI addition, real re-ex
         if (request.roleInstructions.includes('dependency_behaviors')) {
             return response(JSON.stringify({ dependency_behaviors: [], test_strategy: { approach: 'Exercise the object attribute and handled read exception with explicit same-test fixtures.' } }));
         }
-        if (request.roleInstructions.includes('You are the test Reviewer')) {
+        if (request.isReviewer) {
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             reviewers++;
             return response('{"findings":[]}');

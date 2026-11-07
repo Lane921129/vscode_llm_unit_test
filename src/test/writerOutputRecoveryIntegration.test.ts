@@ -80,7 +80,7 @@ test('formal Writer length recovery resends complete evidence once with paired c
             response = '{"findings":[]}';
         } else if (request.roleInstructions.includes('dependency_behaviors')) {
             response = JSON.stringify({ test_strategy: { approach: 'Use controlled integer inputs and their verified observations.' } });
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             assert.ok(scenario === 'recover' || scenario === 'recover-after-slow-first',
                 'an incomplete Writer response cannot reach actual candidate review');
             response = '{"findings":[]}';
@@ -154,7 +154,7 @@ test('formal Writer length recovery resends complete evidence once with paired c
                     assert.ok(!JSON.stringify(event.detail.responseShape).includes(prefixMarker));
                 }
                 const writers = requests.filter(request => request.roleInstructions.length > 0
-                    && !request.roleInstructions.includes('dependency_behaviors') && !request.roleInstructions.includes('You are the test Reviewer'));
+                    && !request.roleInstructions.includes('dependency_behaviors') && !request.isReviewer);
                 const budgetOwners = requests.map(request => request.targetBudget);
                 assert.ok(budgetOwners[0]);
                 assert.ok(budgetOwners.every(budget => budget === budgetOwners[0]), 'the same target budget owns probes, retry, review and mutation');

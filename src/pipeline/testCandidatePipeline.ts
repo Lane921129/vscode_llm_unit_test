@@ -8,7 +8,7 @@ import { TargetCoverageAssessment } from '../mutation/targetCoverage';
 import { RepairDiagnostic, RepairResponseError, repairHash, repairReasonCode } from './repairDiagnostics';
 import { ROLE_CONTRACT_VERSIONS } from '../roles/roleContracts';
 import type { CandidateRejectionGate } from './rejectedCandidateStore';
-import { AnalysisStageError, classifyExecutionFailure } from '../utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure, isModelContentFormatError } from '../utils/executionFailureCategory';
 import { wholeCandidateNameException } from '../validation/unittestException';
 import { isMockInitializationFailure } from '../roles/bugFixer';
 import { writerMethodEditFormatGuidance } from '../validation/writerMethodEdits';
@@ -163,7 +163,7 @@ export async function validateTestCandidate(
             } catch (error) {
                 hooks.checkCancelled();
                 if (policy && (error instanceof RepairResponseError
-                    || error instanceof AnalysisStageError && error.category === 'model-format')) {
+                    || isModelContentFormatError(error))) {
                     const reasonCode = error instanceof AnalysisStageError && error.stage === 'writer-method-edit-scope'
                         && error.diagnostic && typeof error.diagnostic === 'object'
                         ? (error.diagnostic as { reasonCode?: unknown }).reasonCode : undefined;

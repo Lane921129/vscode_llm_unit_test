@@ -1,5 +1,21 @@
 import * as assert from 'node:assert/strict';
 
+/** Surface fixture assertion failures even when the real transport sanitizes caught errors. */
+export function captureFetchFixture(implementation: typeof fetch): { fetch: typeof fetch; assertNoFailure(): void } {
+    const failures: unknown[] = [];
+    return {
+        fetch: async (...args) => {
+            try { return await implementation(...args); }
+            catch (error) { failures.push(error); throw error; }
+        },
+        assertNoFailure: () => {
+            const first = failures.shift();
+            failures.length = 0;
+            if (first !== undefined) { throw first; }
+        }
+    };
+}
+
 /** Explicit metadata fixtures stay separate from generation replies and role counters. */
 export function ollamaRuntimeMetadataFixture(url: string | URL | Request, options: RequestInit | undefined,
     identity: { modelName: string; contextLength?: number; observedContextTokens?: number; metadataAvailable?: boolean }): Response | undefined {
@@ -34,6 +50,18 @@ export function readObservedSeedCaseForModelFixture(prompt: string, target: stri
     return value;
 }
 
+/** A fixed model reply follows the pre-existing single-call seed contract, using only supplied literals. */
+export function observedSeedReply(prompt: string, module: string, target: string): string | undefined {
+    const observed = readObservedSeedCaseForModelFixture(prompt, target);
+    if (!observed) { return undefined; }
+    const argumentsText = [...observed.args, ...Object.entries(observed.kwargs).map(([key, value]) => `${key}=${value}`)].join(', ');
+    const call = `${target}(${argumentsText})`;
+    return `import unittest\nfrom ${module} import ${target}\nclass Cases(unittest.TestCase):\n    def test_verified_input(self):\n`
+        + (observed.observedOutcome === 'returned'
+            ? `        self.assertEqual(${call}, ${observed.observedResult})\n`
+            : `        with self.assertRaises(${observed.exception!.qualname}):\n            ${call}\n`);
+}
+
 /** A mocked Writer reads the current bound packet, not accumulated global Trace examples. */
 export function readCurrentFocusCasesForModelFixture(prompt: string, target: string): Array<{ args: string[]; result: string }> {
     const packets = prompt.split('\n').flatMap(line => {
@@ -53,7 +81,7 @@ export function readCurrentFocusCasesForModelFixture(prompt: string, target: str
 }
 
 /** Decode the real wire prompt for fixture routing; never route on the ignored system field. */
-export function readOllamaRoleRequest(wire: any): any & { roleInstructions: string; prompt: string; transmittedPrompt: string } {
+export function readOllamaRoleRequest(wire: any): any & { roleInstructions: string; prompt: string; transmittedPrompt: string; isReviewer: boolean } {
     assert.equal(wire.system, wire.raw === true ? undefined : ' ',
         'raw completion omits system; normal transport suppresses the Modelfile fallback');
     assert.equal(typeof wire.prompt, 'string');
@@ -69,5 +97,6 @@ export function readOllamaRoleRequest(wire: any): any & { roleInstructions: stri
     const roleInstructions = decodedPrompt.slice(0, start.index - 1);
     const prompt = decodedPrompt.slice(start.index);
     assert.equal(roleInstructions + '\n' + prompt, decodedPrompt, 'the complete wire text must survive decoding');
-    return { ...wire, roleInstructions, prompt, transmittedPrompt: wire.prompt };
+    return { ...wire, roleInstructions, prompt, transmittedPrompt: wire.prompt,
+        isReviewer: /^REVIEW_REQUEST_V[78]\r?$/.test(start[0]) };
 }

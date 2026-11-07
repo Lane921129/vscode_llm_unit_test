@@ -133,7 +133,9 @@ test('seed call text preserves typed keyword order and floats, with payload stri
     for (const item of trace.cases!.slice(0, 3)) {
         const prompt = seedCaseFactsForPrompt({ identity, observations: { ...identity, value: trace },
             selectedCaseIds: [item.case_id], targetKind: 'sync-top-level-function' });
-        assert.equal(prompt.split('\n').length, 2, 'the call is contained in one JSON envelope');
+        assert.equal(prompt.split('\n')[0], 'WRITER_SEED_CASE_FACTS_V1');
+        assert.equal(prompt.split('\n').filter(line => line.startsWith('{')).length, 1,
+            'one JSON record precedes the literal display; payload text cannot create another record');
         const projected = JSON.parse(prompt.split('\n')[1]);
         calls.push(projected.targetCall);
         assert.equal(projected.sourceHash, identity.sourceHash); assert.equal(projected.runId, identity.runId);

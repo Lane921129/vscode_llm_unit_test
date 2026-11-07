@@ -89,11 +89,12 @@ test('formal requests bind context, qualification and whole-file settings to one
         assert.equal(stored[0].contextLengthKnown, true);
         assert.deepEqual(stored[0].qualificationRuntime, { version: 'ollama-context-v1', numCtx: 8192 });
         const params = { envType: 'local', modelName: 'neutral-context', filePath: source, funcName: 'first',
+            requireRoleQualification: true,
             promptStrategy: 'auto', validationMode: 'full', maxLoops: 1, timeoutSeconds: 30, mutationEngine: 'builtin' };
         const initial = path.join(directory, 'initial');
         await run({ ...params, funcName: '', outputPath: initial });
-        assert.equal(knowledge(initial).length, 1, 'whole-file entry stops after the first terminal transport failure');
-        assert.equal(requests.filter(row => row.role === 'writer').length, 1);
+        assert.equal(knowledge(initial).length, 2, 'approved batchFailureLimit=0 continues both targets with the frozen run settings');
+        assert.equal(requests.filter(row => row.role === 'writer').length, 2);
         assert.ok(requests.length >= 2 && requests.every(row => row.numCtx === 8192));
         const initialMetrics = events(initial).filter(row => row.stage === 'model-request' && row.status === 'requested');
         assert.ok(initialMetrics.length >= 2 && initialMetrics.every(row => row.detail.contextWindow === 8192
@@ -126,15 +127,19 @@ test('formal requests bind context, qualification and whole-file settings to one
                 && row.detail.inputBudget + row.detail.reservedOutputTokens === 16384));
         requests.length = 0;
 
-        for (const [value, known, reason] of [[32769, true, 'runtime-context-exceeds-model-limit'],
-            [8192, false, 'runtime-context-metadata-required'], [-1, true, 'invalid-runtime-context']] as const) {
+        // Explicit user context may exceed/omit metadata in both baselines; strict Auto still needs matching probes.
+        for (const [value, known, reason, stage] of [[32769, true, 'explicit-context-needs-matching-probes', 'role-qualification'],
+            [8192, false, 'explicit-context-needs-matching-probes-without-metadata', 'role-qualification'],
+            [-1, true, 'invalid-runtime-context', 'model-runtime']] as const) {
             metadataAvailable = known;
             setting = value; update(profile(16384, { contextLengthKnown: known }));
             const output = path.join(directory, reason);
+            const messageStart = messages.length;
             await run({ ...params, outputPath: output });
             assert.equal(requests.length, 0);
             assert.equal(fs.existsSync(output), false);
-            assert.ok(messages.some(row => row.text?.startsWith('[model-runtime]') && row.text.includes(reason)), reason);
+            assert.ok(messages.slice(messageStart).some(row => row.text?.startsWith('[' + stage + ']')
+                && (stage !== 'model-runtime' || row.text.includes(reason))), reason);
         }
         metadataAvailable = true;
 
@@ -157,7 +162,7 @@ test('formal requests bind context, qualification and whole-file settings to one
         changePreferenceDuringRequest = true;
         const savedSnapshot = path.join(directory, 'saved-snapshot');
         await run({ ...params, funcName: '', outputPath: savedSnapshot });
-        assert.equal(knowledge(savedSnapshot).length, 1);
+        assert.equal(knowledge(savedSnapshot).length, 2, 'the approved default continues both targets with the captured saved preference');
         assert.ok(requests.length >= 2 && requests.every(row => row.numCtx === 8192),
             'saved model choice wins over allocation and remains fixed for the whole-file run');
         requests.length = 0;

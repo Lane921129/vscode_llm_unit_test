@@ -111,6 +111,6 @@ test('Python binding validation still rejects target replacement and class-to-mo
         assert.equal(binding.valid, false, 'diagnostic changes never authorize patching or substituting the selected target');
         assert.match(binding.reason, fixture.className
             ? /Import class Owner from neutral; _read is a class member, not a module-level target\./
-            : /Do not mock or replace the selected target or its class\./);
+            : /Do not mock or replace the selected target or its class \(neutral\._read\)\./);
     }
 });

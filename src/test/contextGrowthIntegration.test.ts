@@ -5,7 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { observedSeedReply, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import { evidenceHash } from '../pipeline/analysisJournal';
 
 test('formal context growth requalifies the new wire capacity before execution, review and mutation', async t => {
@@ -26,9 +26,6 @@ test('formal context growth requalifies the new wire capacity before execution, 
     const probeCode = 'import unittest\nclass TestProbe(unittest.TestCase):\n'
         + '    def test_positive(self):\n        self.assertEqual(increment(1), 2)\n'
         + '    def test_negative(self):\n        self.assertEqual(increment(-1), 0)\n';
-    const targetCode = 'import unittest\nfrom sample import advance\nclass Cases(unittest.TestCase):\n'
-        + '    def test_integers(self):\n        self.assertEqual(advance(0), 1)\n'
-        + '        self.assertEqual(advance(1), 2)\n        self.assertEqual(advance(-1), 0)\n';
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
@@ -47,6 +44,8 @@ test('formal context growth requalifies the new wire capacity before execution, 
         return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
     };
     globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'neutral-growth', metadataAvailable: false });
+        if (metadata) { return metadata; }
         const wire = JSON.parse(String(options?.body));
         const qualificationProbe = wire.prompt.includes('A safe runtime already provides increment(value)')
             || wire.prompt.includes('Review this exact TEST_FILE');
@@ -64,10 +63,10 @@ test('formal context growth requalifies the new wire capacity before execution, 
             assert.ok(request.prompt.includes(evidenceMarker));
             assert.ok(request.prompt.includes('source note 89'), 'the last source evidence is retained');
             response = JSON.stringify({ test_strategy: { approach: 'Exercise advance with verified integer inputs.' } });
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             response = '{"findings":[]}';
         } else {
-            response = targetCode;
+            response = (observedSeedReply(request.prompt, 'sample', 'advance') ?? 'import unittest\nfrom sample import advance\nclass Cases(unittest.TestCase):\n    def test_integers(self):\n        self.assertEqual(advance(0), 1)\n');
         }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop' }), { status: 200 });
     };

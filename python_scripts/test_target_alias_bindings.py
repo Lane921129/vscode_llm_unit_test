@@ -55,6 +55,20 @@ class TargetAliasBindingsTests(unittest.TestCase):
         self.assertIn('target:7', result['reason'])
         self.assertIn('canonical import', result['reason'])
 
+    def test_loops_keep_stable_target_calls_but_never_create_or_restore_alias_proof(self):
+        direct = candidate('for text in ["a", "b"]:\n    with self.subTest(text=text):\n'
+                           '        result = DataCleaner.parse_address_line(text)\n'
+                           '        self.assertEqual(result, ("", "", ""))')
+        self.assertTrue(has_target_result_assertion(ast.parse(direct), CONTEXT))
+        for body in [
+            'for text in inputs:\n    target = DataCleaner.parse_address_line\n    result = target(text)\n    self.assertEqual(result, ("", "", ""))',
+            'target = DataCleaner.parse_address_line\nfor target in callbacks:\n    result = target("")\n    self.assertEqual(result, ("", "", ""))',
+            'target = DataCleaner.parse_address_line\nfor text in inputs:\n    target = other\n    result = target(text)\n    self.assertEqual(result, ("", "", ""))',
+            'target = DataCleaner.parse_address_line\nfor text in inputs:\n    target = other\nresult = target("")\nself.assertEqual(result, ("", "", ""))',
+        ]:
+            with self.subTest(body=body):
+                self.assertFalse(has_target_result_assertion(ast.parse(candidate(body)), CONTEXT))
+
     def test_alias_chains_are_proven_before_use_and_never_across_methods(self):
         code = candidate('first = DataCleaner.parse_address_line\nsecond = first\n'
                          'self.assertEqual(second(""), ("", "", ""))')

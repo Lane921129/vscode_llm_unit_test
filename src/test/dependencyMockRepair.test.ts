@@ -76,14 +76,15 @@ test('Writer and repair contracts explain source-consumed return objects without
     assert.ok(compact.includes(source), 'preserve the complete source rather than slicing for the new rule');
 });
 
-test('execution Writer retains complete neutral evidence within the existing 2000-token budget', () => {
+test('execution Writer retains complete neutral evidence within the explicit 2300-token fixture budget', () => {
     const neutralSource = 'def transform(value):\n'
         + '    # Retained context describes the selected neutral source.\n'.repeat(79)
         + '    return value + 1\n';
     const completeEvidence = 'Target import: from sample import transform\nTarget source (read-only):\n' + neutralSource;
     const prompt = getExecutionWriterPrompt(completeEvidence);
     assert.ok(prompt.includes(completeEvidence), 'preserve source/evidence without clipping');
-    assert.ok(promptFits(getExecutionWriterSystemPrompt(), prompt, 2000), 'mock guidance must not crowd out existing execution evidence');
+    // 050f969 adds mapping-key type and source-awaited async guidance (~204 estimated tokens vs 8fb075f).
+    assert.ok(promptFits(getExecutionWriterSystemPrompt(), prompt, 2300), 'mock guidance must not crowd out existing execution evidence');
     assert.match(getExecutionWriterSystemPrompt(), /EXECUTION_VERIFICATION_V1/);
     assert.match(getExecutionWriterSystemPrompt(), /For calculations without external operations, use the real target without mocks/);
     assert.match(getExecutionWriterSystemPrompt(), /hypotheses until executed/);

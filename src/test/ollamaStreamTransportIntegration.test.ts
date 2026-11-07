@@ -7,7 +7,7 @@ import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualifi
 import { SEMANTIC_PLAN_RESPONSE_SCHEMA } from '../roles/semanticAnalyzer';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
+import { observedSeedReply, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 
 test('formal Ollama streams preserve complete role contracts and distinguish partial or stalled HTTP 200 bodies', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'ollama-stream-integration-'));
@@ -28,12 +28,6 @@ test('formal Ollama streams preserve complete role contracts and distinguish par
         approach: '分析 verified integer inputs through increment and compare exact observed return values.',
         input_hints: [], assertion_style: 'assertEqual', mock_needed: false, key_rules: []
     } });
-    const code = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
-        + '    def test_verified_integers(self):\n'
-        + '        self.assertEqual(increment(0), 1)\n'
-        + '        self.assertEqual(increment(1), 2)\n'
-        + '        self.assertEqual(increment(2), 3)\n'
-        + '        self.assertEqual(increment(-1), 0)\n';
     let scenario: 'complete' | 'partial-eof' | 'stalled-body' | 'draining-queue' | 'http-error-cancel-stalls' = 'complete';
     let bodyAborts = 0;
     let nonSuccessBodyCancels = 0;
@@ -131,9 +125,9 @@ test('formal Ollama streams preserve complete role contracts and distinguish par
             }
             return streamResponse(plan);
         }
-        if (request.roleInstructions.includes('You are the test Reviewer')) { return streamResponse('{"findings":[]}'); }
+        if (request.isReviewer) { return streamResponse('{"findings":[]}'); }
         if (request.roleInstructions.includes('Analyst after successful')) { return streamResponse('{"tasks":[]}'); }
-        return streamResponse(code);
+        return streamResponse((observedSeedReply(request.prompt, 'sample', 'increment') ?? 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n    def test_integers(self):\n        self.assertEqual(increment(0), 1)\n'));
     };
     const run = async (timeoutSeconds = 30) => {
         requests.length = 0; requestBodies.length = 0; timerAllowances.length = 0; bodyAborts = 0;

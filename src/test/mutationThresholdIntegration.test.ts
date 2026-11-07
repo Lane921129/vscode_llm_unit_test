@@ -68,7 +68,7 @@ test('80 percent policy accepts real surviving mutants and verifies the same com
         assert.equal(request.options.num_ctx, 16384, 'the explicit fixture runtime is below the verified model maximum');
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
-        else if (request.roleInstructions.includes('You are the test Reviewer')) { response = '{"findings":[]}'; }
+        else if (request.isReviewer) { response = '{"findings":[]}'; }
         else if (request.roleInstructions.includes('Analyst after successful')) { response = '{"tasks":[]}'; }
         else if (request.roleInstructions.includes('Python unittest Bug Fixer')) { fixes++; response = '```python\npass\n```'; }
         else {

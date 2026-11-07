@@ -73,7 +73,7 @@ test('full workflow blocks mutation on invalid review and requires AI revision p
             'the fixture runtime allocation, not the model maximum, owns the input budget');
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
-        else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        else if (request.isReviewer) {
             reviews++;
             assert.match(request.prompt, /ISOLATED_EXECUTION_PASSED/);
             if (scenario === 'invalid') {

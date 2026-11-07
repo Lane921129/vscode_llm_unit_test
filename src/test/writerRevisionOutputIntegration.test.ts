@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualification';
 import { estimatePromptTokens } from '../prompts/promptBudget';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
+import { captureFetchFixture, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 import { BUG_FIXER_QUALIFICATION_PROMPT, REVIEWER_QUALIFICATION_PROMPT } from '../llm/roleQualification';
 import { evidenceHash } from '../pipeline/analysisJournal';
 
@@ -66,7 +66,7 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
     Module._load = function (name: string, ...args: any[]) {
         return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args);
     };
-    globalThis.fetch = async (url, options) => {
+    const fetchFixture = captureFetchFixture(async (url, options) => {
         const metadata = ollamaRuntimeMetadataFixture(url, options, { modelName: 'neutral-revision-output',
             contextLength: 16384, observedContextTokens: 8192 });
         if (metadata) { return metadata; }
@@ -118,7 +118,7 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                 response = '```python\n' + currentCorrected + '\n```';
                 reason = completion;
             }
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             reviews++;
             if (reviews === 1) {
                 assert.match(request.prompt, /self\.assertEqual\(increment\(1\), 2\)/);
@@ -138,7 +138,8 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
         return new Response(JSON.stringify({ response, done: true, done_reason: reason,
             ...(reason === 'length' ? { eval_count: 1536, eval_duration: 1_000_000_000,
                 prompt_eval_duration: 100_000_000, load_duration: 0, total_duration: 1_100_000_000 } : {}) }), { status: 200 });
-    };
+    });
+    globalThis.fetch = fetchFixture.fetch;
     try {
         require('../orchestrator').activate({ extension: { id: 'fixture', packageJSON: { version: '0.0.1' } }, extensionMode: 3,
             globalState: { get: () => undefined, update: async () => {} }, secrets: {}, subscriptions: [] });
@@ -160,6 +161,7 @@ test('formal full Writer revision preserves an oversized prior-policy envelope a
                     filePath: source, funcName: 'increment', promptStrategy: 'tier1', validationMode: 'full',
                     requireRoleQualification: completion === 'length',
                     maxLoops: 1, timeoutSeconds: 45, mutationEngine: 'builtin', mutpyTimeout: 20, outputPath: output });
+                fetchFixture.assertNoFailure();
                 const artifacts = fs.readdirSync(output, { recursive: true }).map(String);
                 const events = artifacts.filter(name => path.basename(name) === 'role_events.jsonl')
                     .flatMap(name => fs.readFileSync(path.join(output, name), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)));

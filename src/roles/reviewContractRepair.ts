@@ -6,7 +6,7 @@ import { parseTestReviewDetailed, projectRejectedReviewFindings, RejectedReviewF
     reviewContextDiagnostic, ReviewConstraints, ReviewRejectionCode, TestReview } from './testReviewer';
 import { reviewEvidenceBasisRepairHints } from './reviewEvidenceBasis';
 import { redactCredentialStrings } from '../pipeline/artifactSafety';
-import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { AnalysisStageError, isModelContentFormatError } from '../utils/executionFailureCategory';
 export type { ReviewConstraints } from './testReviewer';
 
 export interface ReviewContractEvent {
@@ -106,7 +106,7 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
         let raw: string;
         try { raw = await options.request(prompt, deadlineAt); }
         catch (error) {
-            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            if (!isModelContentFormatError(error) || !currentStopPolicy()) { throw error; }
             currentStopPolicy()!.reject('review-response-format');
             prompt = options.prompt + '\nReturn only the complete review JSON contract; omit commentary.';
             continue;

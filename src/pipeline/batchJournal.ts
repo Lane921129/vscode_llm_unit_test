@@ -1,6 +1,7 @@
 import { resultDataDirectory, resultArtifactPath } from './resultLayout';
 import { localize, t } from '../i18n/core';
 import * as fs from 'node:fs';
+import { renameAtomicSync } from '../utils/atomicRename';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -393,7 +394,7 @@ export class BatchJournal {
             statusCounts: counts, environmentIssues, rates, cost, modelCapabilitySummary: capabilitySummary, targets: this.targets };
         const temporary = path.join(this.directory, 'batch_manifest.pending.json');
         fs.writeFileSync(temporary, JSON.stringify(manifest, null, 2), 'utf8');
-        fs.renameSync(temporary, path.join(this.directory, 'batch_manifest.json'));
+        renameAtomicSync(temporary, path.join(this.directory, 'batch_manifest.json'));
         const safe = (value: string) => value.replace(/[|\r\n]/g, ' ');
         const report = [localize("# 批次執行摘要"), '', `## ${manifest.allTargetsPassed ? localize("完整通過")
             : manifest.allTargetsExecutionVerified ? localize("全部執行驗證通過；完整品質尚未驗證") : localize("未全部通過")}`, '', this.summary(), '',

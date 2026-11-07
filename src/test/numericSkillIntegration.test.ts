@@ -73,7 +73,7 @@ test('numeric observations guide a single-input AI seed revision which is review
         assert.equal(request.options.num_ctx, 16384, 'the explicit fixture runtime is below the verified model maximum');
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) { response = '{"dependency_behaviors":[],"test_strategy":{"approach":"Exercise the real selected target with controlled inputs and use only verified observations for assertions."}}'; }
-        else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        else if (request.isReviewer) {
             reviews++;
             assert.match(request.prompt, /HOST_VERIFIED_REVIEW_FACTS_V1/);
             assert.match(request.prompt, /"observationStatus":"verified"/);

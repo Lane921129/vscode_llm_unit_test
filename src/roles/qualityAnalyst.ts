@@ -1,7 +1,7 @@
 import { localize } from '../i18n/core';
 import { currentStopPolicy } from '../pipeline/stopPolicy';
 import { currentTargetBudget } from '../pipeline/targetBudget';
-import { AnalysisStageError } from '../utils/executionFailureCategory';
+import { AnalysisStageError, isModelContentFormatError } from '../utils/executionFailureCategory';
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { createHash } from 'crypto';
 import { TargetCoverageAssessment } from '../mutation/targetCoverage';
@@ -116,7 +116,7 @@ export async function requestFocusedQualityTask(input: {
         let raw: string;
         try { raw = await input.request(prompt + correction, input.deadlineAt); }
         catch (error) {
-            if (!(error instanceof AnalysisStageError) || error.category !== 'model-format' || !currentStopPolicy()) { throw error; }
+            if (!isModelContentFormatError(error) || !currentStopPolicy()) { throw error; }
             currentStopPolicy()!.reject('quality-response-format');
             continue;
         }

@@ -142,7 +142,7 @@ test('real batch preflight lets the loaded subset reach review and mutation whil
         assert.equal(faultTarget.terminalStatus, 'failed');
         const faultData = resultDataDirectory(path.join(faultDirectory[0], faultTarget.reportDirectory));
         const faultKnowledge = JSON.parse(fs.readFileSync(path.join(faultData, 'function_knowledge.json'), 'utf8'));
-        assert.equal(faultKnowledge.failureCategory, 'validation');
+        assert.equal(faultKnowledge.failureCategory, 'tool');
         assert.equal(faultKnowledge.failureStage, 'static-analysis');
         const faultEvents = fs.readFileSync(path.join(faultData, 'role_events.jsonl'), 'utf8').trim()
             .split(/\r?\n/).map(line => JSON.parse(line));

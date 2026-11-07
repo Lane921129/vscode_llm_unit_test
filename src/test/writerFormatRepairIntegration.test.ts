@@ -62,7 +62,7 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
         let response: string;
         if (request.roleInstructions.includes('dependency_behaviors')) {
             response = JSON.stringify({ test_strategy: { approach: 'Exercise the supplied observed input and verify its exact result.' } });
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             reviews++;
             response = scenario === 'reviewer-type' && reviews === 1 ? JSON.stringify({ findings: [{
                 category: 'assertion-quality', test_line: 'L5', basis: testCodeBasis(5), reason: 'The expected result is not a valid integer value.',

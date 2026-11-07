@@ -8,6 +8,7 @@ import { QualityProgress } from '../pipeline/analysisJournal';
 import { reviewWithContractRepair } from '../roles/reviewContractRepair';
 import { semanticWithContractRepair } from '../roles/semanticContractRepair';
 import { QualityAnalystSession } from '../roles/qualityAnalyst';
+import { retryTransientProviderRequest } from '../llm/connectionTimeout';
 
 function hooks(overrides: Partial<CandidatePipelineHooks> = {}): CandidatePipelineHooks {
     return { reviewRequired: false, checkCancelled() {}, event() {},
@@ -67,11 +68,14 @@ test('writer, revision format, execution and reviewer failures share an allowanc
 
 test('environment and validation tool errors do not charge model failures', async () => {
     for (const category of ['environment', 'tool'] as const) {
-        const policy = new TargetStopPolicy({ failureLimit: 1 });
-        await assert.rejects(runWithStopPolicy(policy, () => validateTestCandidate('initial', hooks({
-            execute: async () => { throw new AnalysisStageError(category, 'tool', 'blocked'); }
-        }))));
-        assert.equal(policy.failureCount, 0);
+        for (const stage of ['validate', 'execute', 'review'] as const) {
+            const policy = new TargetStopPolicy({ failureLimit: 1 });
+            const blocked = new AnalysisStageError(category, stage, 'blocked');
+            await assert.rejects(runWithStopPolicy(policy, () => validateTestCandidate('initial', hooks({
+                reviewRequired: true, [stage]: async () => { throw blocked; }
+            }))), error => error instanceof AnalysisStageError && error.category === category);
+            assert.equal(policy.failureCount, 0);
+        }
     }
 });
 
@@ -83,6 +87,26 @@ test('deadline takes precedence over remaining model failures', async () => {
         () => validateTestCandidate('initial', hooks({ validate: async () => { now = 10; return 'bad'; } })))),
     error => error instanceof AnalysisStageError && error.stage === 'target-budget');
     assert.equal(policy.failureCount, 0);
+});
+
+test('HTTP retries and exhausted HTTP transport do not charge the model failure allowance', async () => {
+    for (const statuses of [[503, 429, 200], [503, 503, 503]]) {
+        const policy = new TargetStopPolicy({ failureLimit: 1 });
+        let attempts = 0;
+        const operation = runWithStopPolicy(policy, () => validateTestCandidate('initial', hooks({
+            execute: async () => {
+                const response = await retryTransientProviderRequest(async () => ({ status: statuses[attempts++] }),
+                    { maxAttempts: 3, wait: async () => {}, random: () => 0 });
+                if (response.status !== 200) { throw new AnalysisStageError('model-api', 'model-request', 'HTTP 503'); }
+                return { ok: true, out: 'OK', qualityGaps: [] };
+            }
+        })));
+        if (statuses[2] === 200) { assert.equal((await operation).execution.ok, true); }
+        else { await assert.rejects(operation, error => error instanceof AnalysisStageError && error.category === 'model-api'); }
+        assert.equal(attempts, 3);
+        assert.equal(policy.failureCount, 0);
+        assert.equal(policy.remainingFailures, 1);
+    }
 });
 
 test('repeated candidates consume failures without repeated native execution', async () => {
@@ -118,5 +142,27 @@ test('Reviewer and both analysts use the target allowance beyond two invalid res
             error => error instanceof AnalysisStageError && error.stage === 'target-failure-policy');
         assert.equal(requests, 3);
         assert.equal(policy.failureCount, 3);
+    }
+});
+
+test('provider envelope failures propagate from each role without model retries or failure charges', async () => {
+    const operations = [
+        (request: () => Promise<string>) => reviewWithContractRepair({ tests: '', prompt: '', deadlineAt: Date.now() + 10000,
+            request, checkCancelled() {}, event() {} }),
+        (request: () => Promise<string>) => semanticWithContractRepair({ prompt: '', deadlineAt: Date.now() + 10000,
+            request, checkCurrent() {}, event() {} }),
+        (request: () => Promise<string>) => new QualityAnalystSession().request({
+            focus: { id: 'E0123456789abcdef', kind: 'coverage', evidence: 'line 4 missing' }, context: '',
+            deadlineAt: Date.now() + 10000, request, checkCancelled() {}, event() {} })
+    ];
+    for (const operation of operations) {
+        const policy = new TargetStopPolicy({ failureLimit: 5 });
+        const failure = new AnalysisStageError('model-format', 'model-response', 'Malformed provider envelope');
+        let requests = 0;
+        await assert.rejects(runWithStopPolicy(policy, () => operation(async () => { requests++; throw failure; })),
+            error => error === failure);
+        assert.equal(requests, 1);
+        assert.equal(policy.failureCount, 0);
+        assert.equal(policy.remainingFailures, 5);
     }
 });

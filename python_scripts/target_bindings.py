@@ -82,7 +82,7 @@ def target_references(tree, selected, initial_aliases=None):
             if name:
                 env[name] = ''
 
-        def statements(body):
+        def statements(body, allow_alias_binding=True):
             for stmt in body:
                 if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
                     expression(stmt.value)
@@ -91,31 +91,48 @@ def target_references(tree, selected, initial_aliases=None):
                     for dest in targets:
                         invalidate(dest)
                         name = dotted(dest)
-                        if name and stores[name] == 1 and value:
+                        if allow_alias_binding and name and stores[name] == 1 and value:
                             env[name] = value
                 elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
                     if isinstance(stmt, ast.ImportFrom) and stmt.level:
                         continue
                     for item in stmt.names:
                         name = item.asname or (item.name.split('.')[0] if isinstance(stmt, ast.Import) else item.name)
-                        env[name] = ((item.name if item.asname else name) if isinstance(stmt, ast.Import)
-                                     else (stmt.module or '') + '.' + item.name)
+                        env[name] = (((item.name if item.asname else name) if isinstance(stmt, ast.Import)
+                                      else (stmt.module or '') + '.' + item.name) if allow_alias_binding else '')
                 elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                     for item in stmt.items:
                         expression(item.context_expr)
                         if item.optional_vars:
                             invalidate(item.optional_vars)
-                    statements(stmt.body)
+                    statements(stmt.body, allow_alias_binding)
                 elif isinstance(stmt, ast.If):
                     expression(stmt.test)
                     before = env.copy()
-                    statements(stmt.body)
+                    statements(stmt.body, allow_alias_binding)
                     env.clear(); env.update(before)
-                    statements(stmt.orelse)
+                    statements(stmt.orelse, allow_alias_binding)
                     env.clear(); env.update(before)
                     for child in ast.walk(stmt):
                         if isinstance(child, (ast.Name, ast.Attribute)) and isinstance(child.ctx, (ast.Store, ast.Del)):
                             invalidate(child)
+                elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+                    expression(stmt.iter)
+                    before = env.copy()
+                    changed = [child for child in ast.walk(stmt)
+                               if isinstance(child, (ast.Name, ast.Attribute))
+                               and isinstance(child.ctx, (ast.Store, ast.Del))]
+                    for child in changed:
+                        invalidate(child)
+                    stable = env.copy()
+                    # Stable canonical imports and pre-loop bindings are still
+                    # calls to the target. Never infer a new alias in a loop.
+                    statements(stmt.body, False)
+                    env.clear(); env.update(stable)
+                    statements(stmt.orelse, False)
+                    env.clear(); env.update(before)
+                    for child in changed:
+                        invalidate(child)
                 elif isinstance(stmt, (ast.Expr, ast.Assert)):
                     expression(stmt)
                 else:

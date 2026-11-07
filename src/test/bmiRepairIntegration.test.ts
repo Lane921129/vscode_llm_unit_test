@@ -20,7 +20,10 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
     const python = resolvePythonExecutable(undefined, repo);
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;
     const handlers = new Map<string, (...args: any[]) => any>();
-    const settings: Record<string, unknown> = { pythonPath: python, projectPath: root, validationMode: 'execution' };
+    // This fixture verifies repair routing, not the unknown-capacity default.
+    // Match the architecture's 8192 evaluation fixture; product defaults stay unchanged.
+    const settings: Record<string, unknown> = { pythonPath: python, projectPath: root,
+        validationMode: 'execution', runtimeContextTokens: 8192 };
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         window: { registerWebviewViewProvider: (_: string, provider: any) => {
@@ -55,7 +58,7 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
     Module._load = function(name: string, ...args: any[]) { return name === 'vscode' ? vscode : originalLoad.call(this, name, ...args); };
     globalThis.fetch = async (_url, options) => {
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body))); requests.push(request);
-        assert.ok(!/You are the test Reviewer|SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.roleInstructions));
+        assert.ok(!request.isReviewer && !/SEMANTIC_ANALYZER|QUALITY_TASK/.test(request.roleInstructions));
         assert.ok(replies.length > 0, 'no unbounded extra request');
         return new Response(JSON.stringify({ response: fence(replies.shift()!), done: true }), { status: 200 });
     };
@@ -71,7 +74,9 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
             requests = []; replies = [initial, wrong, noChange, recovery];
             const outputPath = path.join(root, name);
             await handlers.get('llm-unit-test.runCaptureAndTest')!({ envType: 'local', modelName: 'fixture', filePath: file,
-                funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', maxLoops: 2, timeoutSeconds: 30 });
+                funcName: 'calculate_bmi', outputPath, promptStrategy: 'tier2', maxLoops: 2, timeoutSeconds: 30,
+                // Bound this four-response routing fixture, including failures.
+                stopPolicy: { failureLimit: 4 } });
             const report = fs.readdirSync(outputPath, { recursive: true }).map(String).find(p => path.basename(p) === 'function_knowledge.json')!;
             const directory = path.dirname(path.join(outputPath, report));
             const read = (name: string) => JSON.parse(fs.readFileSync(resultArtifactPath(directory, name), 'utf8'));
@@ -96,7 +101,12 @@ test('BMI no-op method repair hands off to Writer through real command, gates an
                 assert.equal(invocation.observed, true);
             } else {
                 assert.equal(knowledge.terminalStatus, 'failed', name);
-                if (name === 'dropped-case') { assert.match(knowledge.failure, /Previously passing tests/); }
+                if (name === 'dropped-case') {
+                    // The terminal stop policy wraps the rejection message;
+                    // its diagnostic must still prove the passing-case gate.
+                    assert.equal(knowledge.failureCategory, 'validation');
+                    assert.equal(knowledge.diagnostic.reasonCode, 'candidate-regression');
+                }
             }
         }
     } finally {

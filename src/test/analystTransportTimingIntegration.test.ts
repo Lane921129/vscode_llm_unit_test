@@ -7,7 +7,7 @@ import { QUALIFICATION_VERSION, TEST_GEN_MODE_PYTHON } from '../llm/modelQualifi
 import { SEMANTIC_PLAN_RESPONSE_SCHEMA } from '../roles/semanticAnalyzer';
 import { evidenceHash } from '../pipeline/analysisJournal';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
-import { readOllamaRoleRequest } from './ollamaRequestFixture';
+import { observedSeedReply, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 
 test('formal Analyst transport separates Python Writer qualification, correction, fallback and timing through guarded mutation', async t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'analyst-transport-integration-'));
@@ -29,12 +29,6 @@ test('formal Analyst transport separates Python Writer qualification, correction
         approach: 'Exercise increment with verified integer inputs and exact observed return values.',
         input_hints: [], assertion_style: 'assertEqual', mock_needed: false, key_rules: []
     } });
-    const code = 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n'
-        + '    def test_verified_integers(self):\n'
-        + '        self.assertEqual(increment(0), 1)\n'
-        + '        self.assertEqual(increment(1), 2)\n'
-        + '        self.assertEqual(increment(2), 3)\n'
-        + '        self.assertEqual(increment(-1), 0)\n';
     const vscode = {
         ExtensionMode: { Development: 2, Test: 3 }, Uri: { file: (fsPath: string) => ({ fsPath }) },
         workspace: { workspaceFolders: [{ uri: { fsPath: directory } }],
@@ -59,6 +53,8 @@ test('formal Analyst transport separates Python Writer qualification, correction
         return originalTimeout(callback, delay, ...args);
     }) as typeof setTimeout;
     globalThis.fetch = async (_url, options) => {
+        const metadata = ollamaRuntimeMetadataFixture(_url, options, { modelName: 'neutral-transport', metadataAvailable: false });
+        if (metadata) { return metadata; }
         const request = readOllamaRoleRequest(JSON.parse(String(options?.body)));
         requests.push(request);
         assert.equal(request.options.num_ctx, 8192);
@@ -75,12 +71,12 @@ test('formal Analyst transport separates Python Writer qualification, correction
                 return new Response(metadataMarker, { status: 200, headers: { 'Content-Type': 'application/json' } });
             }
             response = scenario === 'correction' && analystAttempts === 1 ? invalidReplyMarker : plan;
-        } else if (request.roleInstructions.includes('You are the test Reviewer')) {
+        } else if (request.isReviewer) {
             response = '{"findings":[]}';
         } else if (request.roleInstructions.includes('Analyst after successful')) {
             response = '{"tasks":[]}';
         } else {
-            response = code;
+            response = (observedSeedReply(request.prompt, 'sample', 'increment') ?? 'import unittest\nfrom sample import increment\nclass Cases(unittest.TestCase):\n    def test_integers(self):\n        self.assertEqual(increment(0), 1)\n');
         }
         return new Response(JSON.stringify({ response, done: true, done_reason: 'stop',
             load_duration: 10_000_000, prompt_eval_duration: 20_000_000,
@@ -112,7 +108,8 @@ test('formal Analyst transport separates Python Writer qualification, correction
         return { events, knowledge, artifact };
     };
     const assertMeasured = (result: Awaited<ReturnType<typeof run>>) => {
-        assert.equal(result.knowledge.terminalStatus, 'passed', JSON.stringify(result.knowledge.lastFailure));
+        assert.equal(result.knowledge.terminalStatus, 'passed', JSON.stringify({ lastFailure: result.knowledge.lastFailure,
+            diagnostic: result.knowledge.diagnostic, failures: result.events.filter(event => event.status === 'rejected' || event.status === 'failed') }));
         assert.equal(result.knowledge.reviewStatus, 'completed');
         assert.equal(result.knowledge.mutationStatus, 'complete');
         assert.equal(result.knowledge.mutationScore, 100);

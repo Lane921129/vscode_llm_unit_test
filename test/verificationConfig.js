@@ -6,6 +6,8 @@ const mochaTests = new Set(['core.test.ts', 'extension.test.ts']);
 
 // Explicit, reviewed low-cost contracts/parsers/mocked traffic. New Node files
 // default to integration; runtime duration never decides whether tests execute.
+// orchestratorGolden.test.ts intentionally stays in integration (and full):
+// its fixed role replies still drive real isolated Python and mutation workers.
 const fastNodeTests = new Set([
     'analysisTargetBudget', 'analystPlanContract', 'artifactSafety',
     'batchPreflightPartition', 'batchPreflightSnapshot', 'batchRuntimeQualification',

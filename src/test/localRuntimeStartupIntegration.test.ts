@@ -62,7 +62,7 @@ test('run startup refreshes stale capacity metadata before formal requests and p
         const response = request.roleInstructions.includes('dependency_behaviors')
             ? JSON.stringify({ test_strategy: { approach: 'Exercise the source-bound integer input and observed return.',
                 input_hints: [], assertion_style: 'assertEqual', mock_needed: false, key_rules: [] } })
-            : request.roleInstructions.includes('You are the test Reviewer') ? '{"findings":[]}' : code;
+            : request.isReviewer ? '{"findings":[]}' : code;
         return Response.json({ response, done: true, done_reason: 'stop' });
     };
     try {

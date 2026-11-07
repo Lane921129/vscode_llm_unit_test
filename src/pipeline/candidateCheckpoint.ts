@@ -1,5 +1,6 @@
 import { localize } from '../i18n/core';
 import * as fs from 'fs';
+import { renameAtomicSync } from '../utils/atomicRename';
 import * as path from 'path';
 import { evidenceHash } from './analysisJournal';
 import { ReviewStatus } from '../roles/reviewSession';
@@ -108,7 +109,7 @@ export class CandidateCheckpointStore {
         }
         const pending = path.join(this.directory, 'executable_baseline.pending.json');
         fs.writeFileSync(pending, JSON.stringify(snapshot, null, 2), 'utf8');
-        fs.renameSync(pending, path.join(this.directory, 'executable_baseline.json'));
+        renameAtomicSync(pending, path.join(this.directory, 'executable_baseline.json'));
         this.retained = snapshot;
         return snapshot;
     }
@@ -141,7 +142,7 @@ export class CandidateCheckpointStore {
             ...(qualityAssessment ? { qualityAssessment } : {}) });
         const pending = path.join(this.directory, 'quality_baseline.pending.json');
         fs.writeFileSync(pending, JSON.stringify(snapshot, null, 2), 'utf8');
-        fs.renameSync(pending, path.join(this.directory, 'quality_baseline.json'));
+        renameAtomicSync(pending, path.join(this.directory, 'quality_baseline.json'));
         this.bestQuality = snapshot;
         return snapshot;
     }
