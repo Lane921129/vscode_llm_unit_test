@@ -62,8 +62,8 @@
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
 | 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02a-target-selection`） | 2026-11-08 Antigravity |
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
-| 3 | 成功分層與批次失敗彙總 | **五項皆已驗證，待使用者驗收（未 push）** | `pr/03-tiered-success-failure-summary` | 2026-11-08 Claude Code |
-| 4 | 測試範圍預設排除備份與副本 | 未開始（選配；建議延後，待使用者確認） | | |
+| 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過** | `pr/03-tiered-success-failure-summary` | 2026-11-08 Claude Code |
+| 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
 | 5 | case-table-v1 結構與驗證 | 未開始 | | |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
@@ -92,7 +92,8 @@
   - 與 PR #1 比較：Node tests 1038→1053（PR #2a／#2／#3 新增測試）、Node skip 2→0、Python skip 6→4；跳過數減少，沒有新增跳過或取消。跳過減少的原因未追查。
   - 來源一致性：`log/pr3-codex-integration.source-after.json` 列出的 629 個原始檔，與目前工作區逐檔 SHA-256 零差異；`8f3d487..HEAD` 只差 `docs/HANDOFF.md`。所以這份結果代表目前 HEAD 的程式。
 - **第 5 項完成**：golden 11/11、五組快照零差異（Codex 19:07 紀錄，`log/pr3-codex-golden.log`），之後沒有程式變動，不重跑。沒有更新任何快照。
-- PR #3 可交使用者驗收；驗收前不 push。
+- 監督已在 repo 獨立核對同一批證據並與上述一致：`log/pr3-codex-integration.log`、`log/pr3-codex-integration.status.json`（npmExitCode=1、pythonExitCode=0、changedSources=[]）、`log/pr3-codex-integration-python.log`；golden `log/pr3-codex-golden.log`（11/11，`test/fixtures/golden/` 無修改）；fast `log/pr3-codex-fast.log`（結束碼 0）。
+- **使用者已於 2026-11-08 驗收 PR #3。**
 
 ### 2026-11-08 Codex（GPT-6）續接 PR #3
 
@@ -338,7 +339,10 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 3. 需要使用者決定
 
-PR #4 是選配，建議延後，下一步直接做 PR #5（待使用者確認）。本輪僅記錄建議，未開始其他 PR。Windows 原子改名有限重試已依 11/7 批准條件完成。
+目前沒有待決項目。
+
+- 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
+- Windows 原子改名有限重試已依 11/7 批准條件完成。
 
 ---
 
@@ -425,6 +429,7 @@ PR #4 是選配，建議延後，下一步直接做 PR #5（待使用者確認�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 23:00 | Claude Code | PR #3 驗收紀錄 | 監督核對結果一致；使用者驗收 PR #3；PR #4 延後（使用者決定） | 本筆 `docs(pr03): record full integration comparison` |
 | 2026-11-08 22:50 | Claude Code | PR #3 步驟 4、5／收尾 | 判讀背景 integration：Node 1053／1036 pass／17 fail（14 leaf，與既有清單完全相同，新增 0）、Python 842 OK；629 檔來源與 HEAD 零差異；golden 11/11 不重跑。未改程式，PR #3 待驗收 | 本筆 docs commit |
 | 2026-11-08 19:07 | Codex（GPT-6） | PR #3 步驟 4／背景驗證 | golden 11/11 零差異；完整 integration 已背景啟動（PID 14768），輸出寫 log；後續只看摘要與失敗名稱並逐案比對，不改已凍結程式 | `728a674`、`8f3d487`；本筆文件 checkpoint |
 | 2026-11-08 19:03 | Codex（GPT-6） | PR #3 步驟 3 | 正式命令驗證保留基線真突變／usable、html_escape 建議進 Writer 且失敗額度 0、量測失敗事件與報告；相關 45/45，fast 776/48 全過 | `8f3d487` |
