@@ -22,9 +22,16 @@ export function validReviewRequirements(requirements: ReviewRequirements, identi
             && !!item.statement.trim() && item.statement.length <= 600)
         && new Set(requirements.items.map(item => item.id)).size === requirements.items.length;
 }
-export type ReviewBasisRejection = 'missing-evidence-basis' | 'invalid-evidence-basis'
-    | 'evidence-reference-missing' | 'evidence-reference-unrelated' | 'evidence-fact-contradiction'
+export type ReviewBasisFormatRejection = 'missing-evidence-basis' | 'invalid-evidence-basis'
+    | 'evidence-reference-missing' | 'evidence-reference-unrelated';
+
+export type ReviewBasisRejection = ReviewBasisFormatRejection | 'evidence-fact-contradiction'
     | 'requirement-evidence-missing' | 'requirement-identity-mismatch';
+
+export function isReviewBasisFormatDiagnostic(code: string): code is ReviewBasisFormatRejection {
+    return code === 'missing-evidence-basis' || code === 'invalid-evidence-basis'
+        || code === 'evidence-reference-missing' || code === 'evidence-reference-unrelated';
+}
 
 /** One provider-neutral shape; transport validation never proves the judgment. */
 export const REVIEW_EVIDENCE_BASIS_SCHEMA = {
@@ -120,8 +127,8 @@ export function reviewEvidenceBasisDiagnostic(basis: ReviewEvidenceBasis, line: 
     if (!context.facts) { return 'evidence-reference-missing'; }
     const record = reviewFactRecords(context.facts).get(basis.ref);
     if (!record || !Object.hasOwn(record.fields, basis.field)) { return 'evidence-reference-missing'; }
-    if (!factAppliesToLine(basis.ref, record, line)) { return 'evidence-reference-unrelated'; }
     if (record.fields[basis.field] !== basis.value) { return 'evidence-fact-contradiction'; }
+    if (!factAppliesToLine(basis.ref, record, line)) { return 'evidence-reference-unrelated'; }
     if (basis.kind === 'evidence-gap' && (!['observationStatus', 'expectedOrigin'].includes(basis.field) || basis.value !== 'unknown')) {
         return 'invalid-evidence-basis';
     }

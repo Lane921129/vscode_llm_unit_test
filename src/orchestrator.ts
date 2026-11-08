@@ -1928,6 +1928,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
     let mutationScore = 0;
     let qualityToolsSatisfied = false;
     let bestMutation: MutationRun | undefined;
+    const mutationAttemptedHashes = new Set<string>();
     // Rollback 保底：記錄歷史最高分的測試檔，防止後輪 LLM 改壞舊測試
     let bestScore = -1;
     let bestCode = '';
@@ -4515,6 +4516,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                         }
                     }, (status, detail) => recordRole('reviewer', status, detail));
                     if (assessment?.issues.length) {
+                        if (!methodInventories.has(evidenceHash(code))) {
+                            await inventoryExecutedBaseline?.(code);
+                        }
                         const methods = methodInventories.get(evidenceHash(code));
                         if (!methods?.length) {
                             throw new AnalysisStageError('tool', 'candidate-inventory-tool', 'Review revision requires the current method inventory.');
@@ -4903,6 +4907,7 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 workers: selectedMutation.workers, stageTimeoutSeconds: mutationTimeoutSeconds });
             log(localize('[{0}] 正在隔離執行完整突變集合；本階段預算 {1} 秒，並行數 {2}。',
                 engine, mutationTimeoutSeconds, selectedMutation.workers));
+            mutationAttemptedHashes.add(measuredCandidate.codeHash);
             const mutationExecution = await runSpawn(pythonExecutable,
                 mutationArguments(selectedMutation, params.filePath, testPath, targetFuncName || '',
                     astContext?.class_name || '', mutationTimeoutSeconds),
@@ -5168,6 +5173,67 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
             const message = error instanceof Error ? error.message : String(error);
             const stack = error instanceof Error && error.stack ? error.stack : '';
             const executable = checkpoints.executable;
+            if (executable && (!bestCode || executable.codeHash !== evidenceHash(bestCode))
+                && !mutationAttemptedHashes.has(executable.codeHash)
+                && mutationSelection && !isExecutionCancelled() && evidenceStillCurrent()
+                && executable.coverage?.assessment?.targetExecuted !== false) {
+                mutationAttemptedHashes.add(executable.codeHash);
+                try {
+                    preserveCandidate(testPath);
+                    fs.writeFileSync(testPath, executable.code, 'utf8');
+                    const selectedMutation = mutationSelection;
+                    const engine = selectedMutation.actual;
+                    const mutationTimeoutSeconds = normalizeExecutionSettings(params).mutpyTimeout;
+                    const mutationContext: MutationContext = { sourcePath: params.filePath,
+                        sourceHash: journal.sourceHash, testHash: executable.codeHash,
+                        targetScope: { kind: params.funcName ? 'function' : 'module', qualifiedName: params.funcName || 'module' },
+                        stageTimeoutSeconds: mutationTimeoutSeconds };
+                    recordRole('mutation', 'started', { engine, operatorSetVersion: selectedMutation.operatorSetVersion,
+                        workers: selectedMutation.workers, stageTimeoutSeconds: mutationTimeoutSeconds });
+                    const mutationExecution = await runSpawn(pythonExecutable,
+                        mutationArguments(selectedMutation, params.filePath, testPath, targetFuncName || '',
+                            astContext?.class_name || '', mutationTimeoutSeconds),
+                        { cwd: testDir, env: testExecutionEnv, timeout: (mutationTimeoutSeconds + 5) * 1000 });
+                    if (!isExecutionCancelled() && mutationExecution.code === 0 && evidenceStillCurrent()) {
+                        const retainedMutationRun = parseIsolatedMutationRun(mutationExecution.stdout, mutationContext, engine);
+                        fs.writeFileSync(path.join(loopDir, `loop${currentLoop}_mutation.json`), JSON.stringify(retainedMutationRun, null, 2), 'utf8');
+                        if ((retainedMutationRun.operatorSetVersion === null || retainedMutationRun.operatorSetVersion === selectedMutation.operatorSetVersion)
+                            && ['complete', 'no-candidates'].includes(retainedMutationRun.status)) {
+                            const noCandidates = retainedMutationRun.status === 'no-candidates';
+                            const measuredScore = measuredMutationScore(retainedMutationRun) ?? 0;
+                            const retainedSurvivors = retainedMutationRun.mutants.filter(mutant => mutant.status === 'SURVIVED')
+                                .map(mutant => `- id ${mutant.id}, line ${mutant.line}, column ${mutant.column}, position ${mutant.position}, kind ${mutant.kind}: mutation from ${mutant.from} to ${mutant.to}`)
+                                .join('\n');
+                            const survivorIds = retainedSurvivors.split('\n').filter(Boolean);
+                            recordRole('mutation', 'measured', { code: executable.code,
+                                score: noCandidates ? null : measuredScore, survivors: survivorIds,
+                                qualityGaps: executable.qualityGaps, engine: retainedMutationRun.engine,
+                                operatorSetVersion: retainedMutationRun.operatorSetVersion,
+                                workers: retainedMutationRun.workers, elapsedMs: retainedMutationRun.elapsedMs });
+                            const qualitySnapshot = checkpoints.saveQuality(executable, retainedMutationRun);
+                            bestScore = measuredScore;
+                            bestCode = qualitySnapshot.code;
+                            bestSurvivors = retainedSurvivors;
+                            bestExecution = executable.execution;
+                            bestScenarios = [...executable.scenarios];
+                            bestMeasuredGaps = [...executable.measuredQualityGaps];
+                            bestGaps = [...executable.qualityGaps];
+                            bestReviewWarnings = [...executable.reviewWarnings];
+                            bestReviewStatus = executable.reviewStatus;
+                            bestReviewApproval = reviewApproval;
+                            bestCoverage = executable.coverage;
+                            bestTier = executable.tier;
+                            bestMutation = retainedMutationRun;
+                            recordRole('baseline', 'accepted', { codeHash: evidenceHash(bestCode), score: bestScore,
+                                survivors: survivorIds, qualityGaps: bestGaps });
+                        } else {
+                            journal.knowledge({ latestMutation: retainedMutationRun });
+                        }
+                    }
+                } catch {
+                    // Best-effort mutation measurement for retained executable baseline; preserve original failure context.
+                }
+            }
             const retainedBaseline = Boolean(bestCode || executable);
             const evidenceValid = evidenceStillCurrent();
             const retainedScore = bestMutation && evidenceValid ? measuredMutationScore(bestMutation) : null;
@@ -5200,7 +5266,28 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 qualityGaps = [...bestGaps];
                 reviewWarnings = [...bestReviewWarnings];
                 reviewStatus = bestReviewStatus;
-                journal.knowledge({ reviewApproval: bestReviewApproval });
+                const noCandidates = bestMutation?.status === 'no-candidates';
+                journal.knowledge({
+                    ...(checkpoints.quality ? {
+                        acceptedTest: checkpoints.quality.testFile,
+                        acceptedCodeHash: checkpoints.quality.codeHash,
+                        resolvedTier: bestTier ?? checkpoints.quality.tier,
+                        mutationStatus: checkpoints.quality.mutationStatus,
+                        mutationScore: noCandidates ? null : bestScore,
+                        mutation: bestMutation,
+                        qualityAssessment: checkpoints.quality.qualityAssessment,
+                        generationMode: checkpoints.quality.generationMode,
+                        qualityBaseline: { path: 'quality_baseline.json', codeHash: checkpoints.quality.codeHash }
+                    } : {}),
+                    scenarios: bestScenarios,
+                    execution: bestExecution,
+                    coverage: bestCoverage,
+                    survivors: bestSurvivors.split('\n').filter(Boolean),
+                    qualityGaps,
+                    reviewWarnings,
+                    reviewStatus,
+                    reviewApproval: bestReviewApproval
+                });
             } else if (executable) {
                 preserveCandidate(testPath);
                 fs.writeFileSync(testPath, executable.code, 'utf8');
@@ -5230,6 +5317,9 @@ async function executeSingleFileAnalysisWithBudget(params: AnalysisParams, log: 
                 const unavailableReason = !evidenceValid ? localize("來源已變更，舊證據失效")
                     : bestMutation?.status === 'no-candidates' ? localize("沒有可用候選") : localize("尚未完成有效測量");
                 finalReportMarkdown += localize("- **突變分數**: N/A（{0}）\n", unavailableReason)
+                    + localize("- **保留測試**: {0}\n- **Reviewer status**: {1}\n\n", (checkpoints.quality || executable)!.testFile, reviewStatus);
+            } else if (retainedBaseline && typeof retainedScore === 'number') {
+                finalReportMarkdown += localize("- **突變分數**: {0}%\n", retainedScore)
                     + localize("- **保留測試**: {0}\n- **Reviewer status**: {1}\n\n", (checkpoints.quality || executable)!.testFile, reviewStatus);
             }
             finalReportMarkdown += localize("**錯誤訊息**: {0}\n\n", message);

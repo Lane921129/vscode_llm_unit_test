@@ -62,8 +62,8 @@
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
 | 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02a-target-selection`） | 2026-11-08 Antigravity |
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
-| 3 | 成功分層與批次失敗彙總 | 未開始（**下一步**） | | |
-| 4 | 測試範圍預設排除備份與副本 | 未開始 | | |
+| 3 | 成功分層與批次失敗彙總 | **已完成實作與驗證，待使用者驗收** | `pr/03-tiered-success-failure-summary` | 2026-11-08 Antigravity |
+| 4 | 測試範圍預設排除備份與副本 | 未開始（**下一 PR**） | | |
 | 5 | case-table-v1 結構與驗證 | 未開始 | | |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
@@ -77,9 +77,26 @@
 
 ---
 
-## 2. PR #2 完成紀錄與下一步
+## 2. PR #3 完成紀錄與下一步
 
 詳細說明：`eval/README.md`、`docs/模型篩選結果_2026_11_08.md`。本節為最新續接狀態；第 6 節保留歷史。
+
+### 2026-11-08 PR #3 完成（成功分層與批次失敗彙總）
+
+- **已實作**：
+  1. **終態分層（Tiered Terminal Status）**：於 `src/pipeline/resultPresentation.ts` 新增 `OutcomeTier`、`isUsableOutcomeEvidence` 與 `classifyOutcomeTier`，將目標結果明確分為 `quality-passed`、`usable`（隔離環境通過、確實呼叫真實目標 `targetExecuted === true`、且完成突變量測取得數值突變分數）、`failed`、`environment-blocked`、`tool-blocked`，並擴充 `presentOutcome` 呈現文字。
+  2. **保留的可執行基線一律跑突變測試**：於 `src/orchestrator.ts` 記錄已量測突變的候選雜湊（`mutationAttemptedHashes`）；當目標因審查阻擋、失敗上限等原因進入收尾 `catch` 分支時，若 `checkpoints.executable` 存在且尚未完成突變量測，立即對該保留基線執行隔離突變測試、寫入 `quality_baseline.json`（`checkpoints.saveQuality`）並更新 `function_knowledge.json` 與 `final_report.md` 的突變分數與保留基線欄位；Reviewer 僅決定能否升為 `quality-passed`。
+  3. **Reviewer `basis` 引用格式不合轉為建議且不扣失敗額度**：於 `src/roles/reviewEvidenceBasis.ts`、`src/roles/testReviewer.ts`、`src/roles/reviewContractRepair.ts`、`src/pipeline/testCandidatePipeline.ts` 實作：當 Reviewer 回覆僅有 `basis` 引用格式問題（`missing-evidence-basis`、`invalid-evidence-basis`、`evidence-reference-missing`、`evidence-reference-unrelated`）且無任何事實／執行結果矛盾時，不再於 `reviewWithContractRepair` 反覆退回重試，亦不呼叫 `policy.reject(...)` 扣除目標失敗額度，改轉為 `quality` 建議傳遞給 Writer 修訂；與實際執行結果或來源事實矛盾的主張（`evidence-fact-contradiction`、`observed-outcome-contradiction`、`target-self-mock` 等）照舊攔截。
+  4. **修正工具受阻（`Review revision requires the current method inventory.`）**：於 `src/orchestrator.ts` 的 `review(code)` 建立審查修訂範圍前，若 `methodInventories` 尚未記錄目前候選的 AST 方法清冊（例如由 Bug Fixer 或算術修復產生的候選），自動呼叫 `await inventoryExecutedBaseline?.(code)` 補齊方法清冊。
+  5. **批次輸出 `batch_failure_summary.json`／`batch_failure_summary.md`**：於 `src/pipeline/batchJournal.ts` 新增 `BatchFailureSummary`，統計五類終態分層（`quality-passed`、`usable`、`failed`、`environment-blocked`、`tool-blocked`，合計必等於 `expectedTargets`）、`byStageAndReason`（依 `stage × reasonCode` 計數並附目標清單）、`roleUsability`（各角色回覆可用率）與 `specMismatchCount`（預設 `0`，供後續 PR #8 接續）。
+- **回歸與驗收測試**：
+  - 由 `gpt_oss20b/bottle_utils_9e53c6fc/html_escape_6d4c4a8f/` 的真實 Reviewer 回覆建立去本機路徑的倉庫內 fixture `test/fixtures/eval_screening/gpt_oss20b/bottle_utils_9e53c6fc/html_escape_6d4c4a8f/reviewer_response_fixture.json`，於 `src/test/reviewContractRepair.test.ts` 驗證「補上特殊字元情境」（`Test only covers empty string; missing scenario for non-empty string with special characters.`）的建議直接傳給 Writer 且 `policy.failureCount === 0`。
+  - `npm run check-types` 與 `npm run lint`：0 錯誤。
+  - `npm run test:fast`：退出碼 0，Node 776/776、Webview 語法、Python 48/48 全數通過。
+  - `npm run test:golden`：退出碼 0，11/11 全數通過（五組 golden 快照零差異，無須重錄）。
+  - `python python_scripts/secret_scan.py`：通過。
+
+**接續入口：PR #3 已於分支 `pr/03-tiered-success-failure-summary` 完成實作與驗證，等待使用者驗收。驗收通過後可合併至 `lane_edition` 並 push，接著進入 PR #4「測試範圍預設排除備份與副本」。**
 
 ### 2026-11-08 PR #2 完成（模型篩選工具與評估集）
 
@@ -287,6 +304,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由 Codex 處理）
 
+- 2026-11-08（PR #3）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #3 新增與修改的受管理檔案執行 `aoci_maintain`：`src/roles/reviewEvidenceBasis.ts`、`src/roles/testReviewer.ts`、`src/roles/reviewContractRepair.ts`、`src/pipeline/testCandidatePipeline.ts`、`src/orchestrator.ts`、`src/pipeline/resultPresentation.ts`、`src/pipeline/batchJournal.ts`、`src/test/reviewContractRepair.test.ts`、`src/test/resultPresentation.test.ts`、`src/test/batchJournal.test.ts`、`test/fixtures/eval_screening/gpt_oss20b/bottle_utils_9e53c6fc/html_escape_6d4c4a8f/reviewer_response_fixture.json`。
 - 2026-11-08（PR #2）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2 新增與修改的受管理檔案執行 `aoci_maintain`：`eval/eval-set-v1.json`、`eval/README.md`、`eval/eval_screening/LICENSES.md`、`eval/eval_screening/README.md`、`python_scripts/eval_aggregate.py`、`python_scripts/test_eval_aggregate.py`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`、`src/test/targetList.test.ts`。
 - 2026-11-08（PR #2a）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2a 新增與修改的受管理檔案執行 `aoci_maintain`：`src/pipeline/targetList.ts`、`src/pipeline/batchScope.ts`、`src/pipeline/batchJournal.ts`、`src/orchestrator.ts`、`src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/targetList.test.ts`、`eval/eval_screening/*`。
 - 2026-11-04：PR #1 收尾時 `aoci_maintain` 受阻，原因是 1,210 筆 observe 變化待覆核，以及 8 個人工審查項目。完成第 2 節步驟 3 後再試一次。
@@ -364,6 +382,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 17:58 | Antigravity | PR #3 成功分層與批次失敗彙總 | 完成終態分層（`quality-passed`／`usable`／`failed`）、保留基線一律跑突變測試、Reviewer `basis` 格式問題轉 Writer 建議且不扣額度（含 `html_escape` 回歸 fixture）、修復 `candidate-inventory-tool` 缺方法清冊與輸出 `batch_failure_summary.json`／`.md`；`test:fast`（776/776、48/48）與 `test:golden`（11/11 零差異）全過 | 見 PR 分支 `pr/03-tiered-success-failure-summary` 最新 commit |
 | 2026-11-08 16:34 | Antigravity | PR #2 模型篩選工具與評估集 | 建立 `eval/eval-set-v1.json`、`eval/eval_screening/LICENSES.md`、`eval/README.md`、`python_scripts/eval_aggregate.py` 與倉庫內精簡 fixture 測試；實際 `model_test` 驗證一致，`test:related`（25/25、29/29）與 `test:fast`（774/774、48/48）全過 | 見 PR 分支 `pr/02-model-screening` 最新 commit |
 | 2026-11-08 16:05 | Antigravity | PR #2a 驗收／合併主線 | 使用者驗收通過；`--no-ff` 合併 `pr/02a-target-selection` 至 `lane_edition` 並 push 至 `origin/lane_edition`，HANDOFF 標記完成 | 本次 merge commit（保留 `6b280ce`／`749973e`／`aa0143f`） |
 | 2026-11-08 16:00 | Antigravity | PR #2a 驗收前四項修正與重驗 | `eval/eval_screening` 納入倉庫並移除絕對路徑；明確目標缺漏記錄 `target-missing` 並顯示於 `batch_summary`／`batch_manifest`；補齊 `throwIfExecutionCancelled()` 與抽離 `resolveExplicitBatchTargets`；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過 | `aa0143f` |

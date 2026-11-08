@@ -115,7 +115,7 @@ export async function validateTestCandidate(
             exceptionType, previousTestHash: repairHash(code) });
         return true;
     };
-    for (let attempt = 0; policy ? policy.remainingFailures > 0 : attempt <= revisionLimit; attempt++) {
+    for (let attempt = 0; policy ? (policy.remainingFailures > 0 && attempt <= Math.max(revisionLimit, policy.settings.failureLimit * 3)) : attempt <= revisionLimit; attempt++) {
         hooks.checkCancelled();
         policy?.beginAttempt();
         currentTargetBudget()?.consumeCandidateAttempt();
@@ -313,8 +313,12 @@ export async function validateTestCandidate(
             }
             if (review?.issues.length) {
                 unresolvedReview = true;
-                await reject(code, attempt, 'review',
-                    review.issues.some(issue => issue.severity === 'blocking') ? 'review-blocking' : 'review-quality');
+                const reviewReasonCode = review.issues.some(issue => issue.severity === 'blocking') ? 'review-blocking' : 'review-quality';
+                if (review.basisFormatDiagnostics?.length) {
+                    await hooks.rejectedCandidate?.(code, attempt, 'review', reviewReasonCode);
+                } else {
+                    await reject(code, attempt, 'review', reviewReasonCode);
+                }
                 lastFailure = JSON.stringify(review.issues);
                 role = 'writer';
                 if (writerRecoveryAttempt && !policy) { break; }

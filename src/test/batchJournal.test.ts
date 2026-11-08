@@ -237,3 +237,144 @@ test('batch revalidates AI review approval for the retained candidate and preser
         }).allTargetsPassed, true, 'legacy evidence without workflow fields retains its existing validation');
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('batch_failure_summary.json and .md separate quality-passed from usable, count stage x reasonCode and role usability, and sum to expectedTargets', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-failure-summary-'));
+    try {
+        const sourcePath = path.join(root, 'sample.py');
+        const sourceText = 'def f_pass(x):\n    return x + 1\ndef f_usable(x):\n    return x * 2\ndef f_fail(x):\n    return x - 1\n';
+        fs.writeFileSync(sourcePath, sourceText);
+        const sourceHash = evidenceHash(sourceText);
+        const policy = createStrictQualityPolicy();
+
+        const batchDir = path.join(root, 'batch_out');
+        fs.mkdirSync(batchDir, { recursive: true });
+        const batch = new BatchJournal(batchDir, root, { model: 'local/gpt-oss:20b', buildTimestamp: 'fixture', python: 'python' });
+        batch.discover(sourcePath, ['f_pass', 'f_usable', 'f_fail', 'f_env']);
+        batch.blockPreflightTargets([{
+            id: 3,
+            file: 'sample.py',
+            target: 'f_env',
+            stage: 'module-import',
+            reason: 'module-blocked',
+            environment: { kind: 'missing-dependency', issue: 'requests', advice: 'pip install requests' }
+        }]);
+        batch.start();
+
+        // Target 0: quality-passed
+        const passDir = path.join(batchDir, 't0');
+        fs.mkdirSync(passDir, { recursive: true });
+        const passTest = 'import unittest\nclass T(unittest.TestCase):\n    def test_ok(self):\n        self.assertEqual(2, 2)\n';
+        const passCodeHash = evidenceHash(passTest);
+        const vectors = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../contracts/quality-policy-cases-v1.json'), 'utf8'));
+        const passEvidence = structuredClone(vectors.cases.find((item: any) => item.name === 'strict-full-success').evidence);
+        Object.assign(passEvidence.mutation, { sourcePath, sourceHash, testHash: passCodeHash,
+            targetScope: { kind: 'function', qualifiedName: 'f_pass' } });
+        passEvidence.coverage.assessment.invocationEvidence.testHash = passCodeHash;
+        const passJournal = new AnalysisJournal(passDir, sourceText, 'f_pass', 'local/gpt-oss:20b', policy);
+        const passStore = new CandidateCheckpointStore(passDir, sourceHash, 'f_pass', {
+            policy, sourcePath, targetScope: { kind: 'function', qualifiedName: 'f_pass' }
+        });
+        const passExec = passStore.saveExecutable({ code: passTest, execution: 'Ran 1 test\nOK',
+            coverage: { coverageText: '100%', missingLines: '', assessment: passEvidence.coverage.assessment },
+            scenarios: [], qualityGaps: [], measuredQualityGaps: [], reviewWarnings: [], reviewStatus: 'completed',
+            tier: 1, generationMode: 'llm-evidence-bound', dependencyEvidenceVersion: SOURCE_VERSIONS_VERSION,
+            dependencyVersions: [{ file: sourcePath, hash: sourceHash }] });
+        const passQual = passStore.saveQuality(passExec, passEvidence.mutation);
+        passJournal.knowledge({ ...passQual, terminalStatus: 'passed', acceptedTest: passQual.testFile,
+            acceptedCodeHash: passCodeHash, resolvedTier: 1, workflowVersion: AI_WORKFLOW_VERSION,
+            reviewApproval: { workflowVersion: AI_WORKFLOW_VERSION, runId: passJournal.runId, sourceHash, target: 'f_pass', testHash: passCodeHash } });
+        passJournal.record(1, 'model-request', 'requested', { role: 'writer' });
+        passJournal.record(1, 'model-request', 'completed', { role: 'writer' });
+        passJournal.record(1, 'model-request', 'requested', { role: 'reviewer' });
+        passJournal.record(1, 'model-request', 'completed', { role: 'reviewer' });
+        fs.writeFileSync(path.join(passDir, 'final_report.md'), '# Passed');
+        batch.begin(0); batch.attach(0, passDir); batch.refresh(0);
+
+        // Target 1: usable (retained executable baseline with mutation measurement, stopped at reviewer)
+        const usableDir = path.join(batchDir, 't1');
+        fs.mkdirSync(usableDir, { recursive: true });
+        const usableJournal = new AnalysisJournal(usableDir, sourceText, 'f_usable', 'local/gpt-oss:20b', policy);
+        usableJournal.knowledge({
+            target: 'f_usable',
+            terminalStatus: 'review-blocked',
+            failureStage: 'reviewer',
+            failureCategory: 'validation',
+            diagnostic: { reasonCode: 'review-unavailable' },
+            acceptedTest: 'exec_usable.py',
+            acceptedCodeHash: passCodeHash,
+            execution: 'Ran 1 test in 0.002s\n\nOK',
+            coverage: { targetExecuted: true, assessment: { targetExecuted: true } },
+            mutationStatus: 'complete',
+            mutationScore: 80,
+            retainedScore: 80,
+            reviewStatus: 'incomplete'
+        });
+        usableJournal.record(1, 'model-request', 'requested', { role: 'writer' });
+        usableJournal.record(1, 'model-request', 'completed', { role: 'writer' });
+        usableJournal.record(1, 'model-request', 'requested', { role: 'reviewer' });
+        usableJournal.record(1, 'model-request', 'error', { role: 'reviewer', reasonCode: 'output-token-limit' });
+        fs.writeFileSync(path.join(usableDir, 'final_report.md'), '# Usable Retained');
+        batch.begin(1); batch.attach(1, usableDir); batch.refresh(1);
+
+        // Target 2: failed (no executable baseline)
+        const failDir = path.join(batchDir, 't2');
+        fs.mkdirSync(failDir, { recursive: true });
+        const failJournal = new AnalysisJournal(failDir, sourceText, 'f_fail', 'local/gpt-oss:20b', policy);
+        failJournal.knowledge({
+            target: 'f_fail',
+            terminalStatus: 'failed',
+            failureStage: 'writer',
+            failureCategory: 'model-format',
+            diagnostic: { reasonCode: 'response-not-extracted-python' },
+            mutationScore: null
+        });
+        failJournal.record(1, 'model-request', 'requested', { role: 'writer' });
+        failJournal.record(1, 'model-request', 'error', { role: 'writer', reasonCode: 'response-not-extracted-python' });
+        fs.writeFileSync(path.join(failDir, 'final_report.md'), '# Failed');
+        batch.begin(2); batch.attach(2, failDir); batch.refresh(2);
+
+        batch.finish('completed');
+
+        const summaryJson = JSON.parse(fs.readFileSync(path.join(batchDir, 'batch_failure_summary.json'), 'utf8'));
+        const summaryMd = fs.readFileSync(path.join(batchDir, 'batch_failure_summary.md'), 'utf8');
+
+        assert.equal(summaryJson.schemaVersion, 'batch-failure-summary-v1');
+        assert.equal(summaryJson.expectedTargets, 4);
+        assert.equal(summaryJson.totalCount, 4);
+        assert.equal(summaryJson.specMismatchCount, 0);
+        assert.deepEqual(summaryJson.tierCounts, {
+            'quality-passed': 1,
+            usable: 1,
+            failed: 1,
+            'environment-blocked': 1,
+            'tool-blocked': 0
+        });
+        const tierSum = Object.values(summaryJson.tierCounts as Record<string, number>).reduce((a, b) => a + b, 0);
+        assert.equal(tierSum, summaryJson.expectedTargets, 'tierCounts must sum to expectedTargets');
+        const stageReasonSum = (summaryJson.byStageAndReason as Array<{ count: number }>).reduce((a, b) => a + b.count, 0);
+        assert.equal(summaryJson.tierCounts['quality-passed'] + stageReasonSum, summaryJson.expectedTargets,
+            'quality-passed + stageReason counts must equal expectedTargets');
+        assert.deepEqual(summaryJson.roleUsability.writer, {
+            requested: 3,
+            completed: 2,
+            error: 1,
+            contractRejected: 0,
+            usableResponses: 2,
+            usableRate: 0.6667
+        });
+        assert.deepEqual(summaryJson.roleUsability.reviewer, {
+            requested: 2,
+            completed: 1,
+            error: 1,
+            contractRejected: 0,
+            usableResponses: 1,
+            usableRate: 0.5
+        });
+        assert.match(summaryMd, /quality-passed \| 1/);
+        assert.match(summaryMd, /usable \| 1/);
+        assert.match(summaryMd, /reviewer \| review-unavailable \| 1 \| 1 \| 0 \| 0/);
+        assert.match(summaryMd, /writer \| response-not-extracted-python \| 1 \| 0 \| 1 \| 0/);
+        assert.match(summaryMd, /module-import \| module-blocked \| 1 \| 0 \| 0 \| 1/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
