@@ -72,7 +72,7 @@
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
 | 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
-| 5 | case-table-v1 結構與驗證 | **實作完成（`c7e17fe`）；待使用者在 Windows 跑 `test:fast`／`test:python` 後驗收** | `pr/05-case-table` | 2026-11-08 Claude Code |
+| 5 | case-table-v1 結構與驗證 | **第二版完成（`0dcec49`，依審查決定補強）；待使用者在 Windows 跑 `test:fast`／`test:python` 後驗收** | `pr/05-case-table` | 2026-11-08 Claude Code |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | 未開始 | | |
@@ -99,7 +99,29 @@
 - [x] 1. `caseTable.ts` 型別、`caseRowParser.ts` 逐行解析、`caseRowValidation.ts`（驗證器請求與結果套用）＋ `src/test/caseTable.test.ts`（13 tests）
 - [x] 2. `case_row_validator.py` ＋ `test_case_row_validator.py`（13 tests）
 - [x] 3. 加進 fast（`caseTable`）與 `test:python` 清單；`verificationRunner.test.ts` 的 Python 模組數 57→58、末尾清單補上新模組（與 PR #2 同樣做法）；CHANGELOG 4 行。commit `c7e17fe`
-- [ ] 4. **使用者在 Windows 原生執行** `npm run test:fast` 與 `npm run test:python`，貼摘要（通過／失敗數）；全過後交監督驗收。PR #5 完成後不自行開始 PR #6
+- [x] 3b. 依第 0 節「PR #5 案例表設計決策」補強（commit `0dcec49`）：args 單元素包裝、`decorated`、`mocks` 安全切段、`case_table.json` 讀寫（`caseTableStore.ts`）、狀態轉移純函式 `transitionCaseRow`。
+- [ ] 4. **待使用者在 Windows 原生執行**（不可視為已通過）：`npm run test:fast` 與 `npm run test:python`，貼摘要（通過／失敗數）。預期 Node fast 比 PR #3 的 776 多出本 PR 的 `caseTable.test.ts`（19 tests），`test:python` 多 1 個模組（19 tests）。全過後交監督驗收。PR #5 完成後不自行開始 PR #6
+
+#### 第二版（`0dcec49`）內容
+
+- `case_row_validator.py`：`args` 解析出來不是 tuple 時包成 `(value,)` 再綁定；成功時回傳 `normalizedArgs`（`repr` 產生，例如 `"(70,)"`、`"([1, 2],)"`）與 `normalizations: ["args-wrapped-single"]`；包裝後仍綁不上就照舊拒為 `signature-mismatch`，且不回傳 `normalizedArgs`。報告新增 `decorated`（布林，永遠存在）。**解讀**：`staticmethod`、`classmethod` 不算，因為驗證器已依它們調整 self／cls；其他任何裝飾器都算 `decorated: true`。裝飾器名稱不寫入報告。
+- `applyCaseRowValidation` 改為回傳 `{ rows, decorated }`；套用 `normalizedArgs` 到 `call.args` 並把 `normalizations` 存在列上。報告缺 `decorated`、`normalizedArgs` 與 `normalizations` 不成對、或對 needs-setup 列回傳 `normalizedArgs` 時，視為工具錯誤並拋錯。
+- `parseCaseMocks`：只在字串字面值（單／雙引號，含 `\` 跳脫）與括號之外的 `;` 切段；引號或括號不成對時拒為 `invalid-mocks`。`->` 本來就只在相依名稱後第一次出現處切開，值裡的 `->` 不受影響。
+- `caseTableStore.ts`：`writeCaseTable(directory, table)` 先驗證，再寫 `case_table.pending.json` 並 `renameAtomicSync` 成 `case_table.json`；`readCaseTable(directory)` 驗證 `version`、`target`、每一列的每個欄位（含未知欄位、重複 id、列舉值），錯誤拋 `CaseTableFormatError`（`code: 'case-table-invalid'`，`field` 指出位置，如 `rows[0].status`）。檔案不存在時保留原本的 `ENOENT`。
+- `transitionCaseRow(row, next, reason?)`：只允許 `proposed→invalid|captured|capture-failed`、`captured→test-generated`、`test-generated→test-passed|test-failed`；其他拋 `case-row-transition-invalid`。轉到失敗狀態（invalid、capture-failed、test-failed）必須給原因碼，否則拋 `case-row-transition-reason-required`；轉到其他狀態會清掉舊的 `reason`。
+
+#### 第二版驗證（Linux VM，**不是正式結果**）
+
+| 驗證 | 結果 | 證據 |
+| --- | --- | --- |
+| check-types | 結束碼 0 | `log/pr5-v2-check-types.log` |
+| lint | 結束碼 0，0 warning | `log/pr5-v2-lint.log` |
+| test:related（Node：caseTable、verificationRunner、atomicRename） | 39/39 通過（caseTable 19） | `log/pr5-v2-related-node.log` |
+| Python 新模組（VM Python 3.10，`PYTHONPATH=python_scripts`） | 19/19 通過 | `log/pr5-v2-python-vm.log` |
+| secret scan（tracked files） | 通過 | `log/pr5-v2-secret-scan.log` |
+| golden／integration | 未跑：本 PR 不碰 v1，`test/fixtures/golden/` 無修改 | – |
+
+**待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`（見第 4 步）。VM 的 Python 是 3.10、Windows `.venv` 是 3.13，新驗證器已避開版本差異（stub 用 `ast.unparse` 產生原始碼），但仍需 Windows 實跑確認。
 
 #### 實作內容
 
@@ -120,7 +142,7 @@
 | secret scan（tracked files） | 通過 | `log/pr5-secret-scan.log` |
 | golden | 未跑：本 PR 不碰 v1，`test/fixtures/golden/` 無修改 | – |
 
-#### 設計選擇（請監督確認是否需要改）
+#### 第一版設計選擇（已由監督決定，見第 0 節；以下保留歷史）
 
 1. `kwargs`、`mocks`、`requirement` 缺少或為 null 時視為空（kwargs 補 `{}`）；`scenario`、`category`、`args` 必填。
 2. `args` 必須是 tuple 字面值：`"(70)"` 會被拒為 `args-not-tuple`，不會自動補成 `(70,)`。
@@ -400,6 +422,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-08（Claude Code／PR #5 第二版）：再加上新檔 `src/pipeline/caseTable/caseTableStore.ts`；第一版清單中的檔案本輪也有修改。
 - 2026-11-08（Claude Code／PR #5）：沒有 AOCI MCP，未呼叫。新增／修改的受管理檔：`src/pipeline/caseTable/caseTable.ts`、`caseRowParser.ts`、`caseRowValidation.ts`、`src/test/caseTable.test.ts`、`python_scripts/case_row_validator.py`、`python_scripts/test_case_row_validator.py`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`。
 - 2026-11-08（Claude Code／PR #3 收尾）：沒有 AOCI MCP，未呼叫。本輪只改 `docs/HANDOFF.md`，受管理檔清單同下方 Codex 那一筆，不需新增。
 - 2026-11-08（Codex／PR #3 續接）：本次工具清單沒有 AOCI MCP，依使用者指示跳過；請具 AOCI 能力的後續 agent 在穩定狀態維護一次。除原 PR #3 清單外，納入 `src/pipeline/targetReport.ts`、`src/test/tieredSuccessIntegration.test.ts` 與本輪三個既有整合測試更新。未修改 `.aoci/` 或 `.codex/`，未假稱已完成維護。
@@ -482,6 +505,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 00:30 | Claude Code | PR #5 第二版（審查決定） | 第 0 節寫入六項決策；args 單元素包裝、decorated、mocks 安全切段、case_table.json 讀寫、狀態轉移。VM：check-types／lint 0、related 39/39、Python 19/19；Windows fast／python 待使用者執行 | `0dcec49`＋本筆 docs |
 | 2026-11-08 23:55 | Claude Code | PR #5 步驟 1～3 | 案例表型別、逐行解析、驗證器與單元測試（Node 13、Python 13）；check-types／lint 0、related 29/29；VM 版 fast 只有 6 個環境失敗。待使用者在 Windows 跑 fast／python | `c7e17fe`＋本筆 docs |
 | 2026-11-08 23:10 | Claude Code | PR #3 合併／PR #5 開始 | 本機 `--no-ff` 合併 PR #3 到 `lane_edition`（`474e4e5`）；VM 連不到 GitHub，push 待使用者在 Windows 執行；開 `pr/05-case-table` | 本筆 docs commit |
 | 2026-11-08 23:00 | Claude Code | PR #3 驗收紀錄 | 監督核對結果一致；使用者驗收 PR #3；PR #4 延後（使用者決定） | 本筆 `docs(pr03): record full integration comparison` |
