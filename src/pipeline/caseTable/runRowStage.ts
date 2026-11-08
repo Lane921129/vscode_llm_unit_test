@@ -36,6 +36,13 @@ export interface RowStageResult {
     testFile?: string;
     mutation?: MutationMeasurement;
     passingMethods: number;
+    /** Model-written setup per row id (needed again for test_spec_mismatch.py). */
+    setups: Map<string, string>;
+}
+
+export function rowTestContext(runtime: RowRuntime, facts: CaseTableFacts): RowTestContext {
+    return { moduleName: path.basename(runtime.sourceFile, '.py'), target: runtime.target,
+        methodKind: facts.methodKind, isAsync: facts.isAsync, dependencies: facts.dependencies };
 }
 
 export function observedExpectation(row: CaseRow, capture: CaptureReport): { row: CaseRow; expectation: RowExpectation } {
@@ -49,10 +56,10 @@ export function observedExpectation(row: CaseRow, capture: CaptureReport): { row
 export async function runRowStage(options: RowStageOptions): Promise<RowStageResult> {
     const { runtime, facts } = options;
     fs.mkdirSync(runtime.artifacts, { recursive: true });
-    const context: RowTestContext = { moduleName: path.basename(runtime.sourceFile, '.py'), target: runtime.target,
-        methodKind: facts.methodKind, isAsync: facts.isAsync, dependencies: facts.dependencies };
+    const context = rowTestContext(runtime, facts);
     const rows = [...options.rows];
     const passing = new Map<string, string>();
+    const setups = new Map<string, string>();
     for (let index = 0; index < rows.length; index++) {
         let row = rows[index];
         if (row.status !== 'proposed') { continue; }
@@ -64,6 +71,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
             setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user)) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
+            setups.set(row.id, setup);
         }
         const capture = await captureRow(runtime, needsSetup(row.call)
             ? { id: row.id, setup, mocks: row.mocks }
@@ -99,15 +107,15 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
             rows[index] = transitionCaseRow(row, 'test-failed', run.passed ? 'target-not-called' : 'test-failed');
         }
     }
-    if (!passing.size) { return { rows, terminal: 'failed', reasonCode: 'no-passing-row-tests', passingMethods: 0 }; }
+    if (!passing.size) { return { rows, terminal: 'failed', reasonCode: 'no-passing-row-tests', passingMethods: 0, setups }; }
     const merged = buildCaseTableTestFile(context, rows.filter(row => passing.has(row.id)).map(row => passing.get(row.id)!));
     const mergedRun = await runTestFile(runtime, path.basename(CASE_TABLE_TEST_FILE, '.py'), merged);
     if (!(mergedRun.passed && mergedRun.targetObserved)) {
-        return { rows, terminal: 'failed', reasonCode: 'merged-test-failed', testFile: mergedRun.testFile, passingMethods: passing.size };
+        return { rows, terminal: 'failed', reasonCode: 'merged-test-failed', testFile: mergedRun.testFile, passingMethods: passing.size, setups };
     }
     const mutation = await measureMutation(runtime, mergedRun.testFile, { ...options.mutation, className: facts.className ?? '' });
     options.log(`[v2] ${passing.size} passing row tests; mutation score ${mutation.score ?? 'unavailable'}.`);
     return mutation.score === null
-        ? { rows, terminal: 'failed', reasonCode: 'mutation-unmeasured', testFile: mergedRun.testFile, mutation, passingMethods: passing.size }
-        : { rows, terminal: 'usable', reasonCode: 'usable', testFile: mergedRun.testFile, mutation, passingMethods: passing.size };
+        ? { rows, terminal: 'failed', reasonCode: 'mutation-unmeasured', testFile: mergedRun.testFile, mutation, passingMethods: passing.size, setups }
+        : { rows, terminal: 'usable', reasonCode: 'usable', testFile: mergedRun.testFile, mutation, passingMethods: passing.size, setups };
 }

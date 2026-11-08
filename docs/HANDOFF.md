@@ -86,7 +86,7 @@
 | 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；VM 驗證通過，Windows 驗證待執行** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；VM 驗證通過（含 v2 golden 錄製），Windows 驗證待執行** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
-| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | 未開始 | | |
+| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **實作完成；VM 驗證通過，Windows 驗證待執行** | `pr/08-spec-oracle`（疊在 pr/07 上） | 2026-11-09 Claude Code |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
@@ -138,6 +138,19 @@
 - **限制**：模組以檔名 stem import（目標資料夾與專案根加入 import path），套件內相對 import 的模組目前會 capture 失敗；實例方法每列都需要一次 Writer setup。
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr7-check-types.log`）、lint 0／0 warning（`log/pr7-lint.log`）、related 62/62（`log/pr7-related-node.log`）、Python 四個新模組 33/33（`log/pr7-python-vm.log`）。v2 golden：在 VM（Python 3.10）錄製（`log/pr7-v2-golden-record-vm.log`）後再比對 2/2（`log/pr7-v2-golden-compare-vm.log`）：BMI usable，5 列中 4 列通過、1 列 invalid，builtin 突變 63/96＝65.6；資料庫 usable，3 列通過、1 列未 mock 而 `capture-failed`（isolation-blocked），突變 27/34＝79.4。v1 golden 檔案未改動。
 - **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異；v2 在 Windows Python 3.13 上比對。若 v2 有差異，**先回報差異，不要直接重錄**，因為快照是在 VM 的 3.10 上錄的）。
+
+### PR #8 `pr/08-spec-oracle`（2026-11-09 Claude Code）
+
+- **新增**：`src/pipeline/caseTable/specSources.ts`、`src/roles/specOracle.ts`、`src/pipeline/caseTable/oracleDecision.ts`、`src/pipeline/caseTable/specMismatchReport.ts`、`python_scripts/case_oracle_compare.py`；測試 `src/test/specPromptBlindness.test.ts`（fast，2）、`src/test/caseSpecOracleIntegration.test.ts`（integration，3）、`python_scripts/test_case_oracle_compare.py`（4）；Python 模組數 61→62。
+- **修改**：`runCaseTablePipeline.ts`：`specOracle=auto` 且有規格來源時，把 `createSpecDecider` 當作 row stage 的 `decideExpected`；寫出 `spec_mismatch.json/md`、`test_spec_mismatch.py`；`v2_result.json`／`final_report.md` 加入規格統計；另外寫 `function_knowledge.json`、`run_manifest.json`、`role_events.jsonl`，讓批次彙總讀得到 v2 目標。`runRowStage.ts` 回傳每列 setup。`batchJournal.ts`：`specMismatchCount` 改為累加各目標 `function_knowledge.json` 的值（v1 目標沒有這個欄位，仍是 0）。`pythonTools.ts` 新增 `caseOracleCompare`。
+- **設計判斷（請監督確認）**：
+  1. 「有規格」＝有 docstring 或需求檔；只有型別註記不算（型別無法決定值）。README 尚未納入。
+  2. basis 驗證只比對 docstring 與需求描述（去掉 `docstring:`、`R2:` 之類的標籤、空白正規化、至少 6 個字元）；型別註記與函式名稱都算弱依據。3 次預測的 basis **全部**驗證通過才算 `spec-mismatch`，否則 `needs-review`。
+  3. 任何一次預測（含一次修正）仍無法解析，或 3 次不一致 → `prediction-unstable`；實際結果不是字面值 → 維持 `observed-unconfirmed`，不列規格不符。
+  4. 規格不符的列狀態停在 `captured`（不產生正式測試）。`test_spec_mismatch.py` 的例外若不是常見內建例外，會用 `Exception` 加類別名稱檢查。
+  5. 「側欄顯示規格不符數」目前透過側欄的執行紀錄（log）顯示一行統計；結果卡片的 UI 整合留到之後。
+- **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr8-check-types.log`）、lint 0／0 warning（`log/pr8-lint.log`）、related 70 個中 69 個通過（`log/pr8-related-node.log`）；唯一失敗是 v1 的 `batchJournalIntegration`「real batch command…」，原因是 VM 的 Python 沒有 `coverage`（`coverage-preflight`／environment），與本 PR 無關，須在 Windows 重跑確認。規格整合測試 3/3（`log/pr8-spec-integration-vm.log`）、Python 五個 v2 模組全過（`log/pr8-python-vm.log`）、v2 golden＋row stage 4/4（`log/pr8-v2-golden-and-rows-vm.log`；v2 golden 用 `specOracle: 'off'`，所以不受影響）。v1 golden 檔案未改。
+- **待使用者在 Windows 執行**（PR #6～#8 一起）：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異，v2 必須通過）；時間足夠時背景跑 `npm run test:integration`，逐案比對第 5 節既有的 14 個失敗。
 
 ## 2-old. PR #5 進度與下一步
 
@@ -478,6 +491,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Claude Code／PR #8）：新增 `src/pipeline/caseTable/{specSources,oracleDecision,specMismatchReport}.ts`、`src/roles/specOracle.ts`、`python_scripts/{case_oracle_compare,test_case_oracle_compare}.py`、`src/test/{specPromptBlindness,caseSpecOracleIntegration}.test.ts`；修改 `runCaseTablePipeline.ts`、`runRowStage.ts`、`batchJournal.ts`、`pythonTools.ts`、`test/verificationConfig.js`、`verificationRunner.test.ts`、`docs/v2_提示詞_待審.md`。
 - 2026-11-09（Claude Code／PR #7）：新增 `python_scripts/{case_capture_runner,case_row_assertions,test_case_capture_runner,test_case_row_assertions}.py`、`src/pipeline/caseTable/{rowToTest,rowExecution,runRowStage}.ts`、`src/test/{caseRowTests,caseRowStageIntegration,caseTableGolden}.test.ts`、`test/fixtures/golden/v2/*.json`；修改 `runCaseTablePipeline.ts`、`unittestWriter.ts`、`bugFixer.ts`、`pythonTools.ts`、`orchestrator.ts`、`test/run_golden_tests.js`、`test/verificationConfig.js`、`verificationRunner.test.ts`。
 - 2026-11-09（Claude Code／PR #6）：沒有 AOCI MCP。新增：`python_scripts/case_table_facts.py`、`python_scripts/test_case_table_facts.py`、`src/pipeline/caseTable/{runCaseTablePipeline,caseTableFacts,requirements}.ts`、`src/test/caseScenarioPrompt.test.ts`、`src/test/caseTablePipelineIntegration.test.ts`、`docs/v2_提示詞_待審.md`。修改：`src/orchestrator.ts`、`src/roles/semanticAnalyzer.ts`、`src/pipeline/pythonTools.ts`、`src/pipeline/caseTable/caseRowParser.ts`、`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/{en,zh-tw,messages}.ts`、`package.json`、`package.nls*.json`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`。
 - 2026-11-08（Claude Code／PR #5 第二版）：再加上新檔 `src/pipeline/caseTable/caseTableStore.ts`；第一版清單中的檔案本輪也有修改。
@@ -564,6 +578,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 04:30 | Claude Code | PR #8 完成 | 規格來源、Analyst-規格（k=3）、分級、規格不符報告與測試檔、批次累加；VM：check-types／lint 0、related 69/70（唯一失敗是 VM 缺 coverage）、規格整合 3/3、Python 全過、v2 golden 2/2。Windows 待執行；不開始 PR #9 | 本筆 |
 | 2026-11-09 03:00 | Claude Code | PR #7 完成 | capture、程式產生測試、逐方法執行、單列修正、突變、v2 golden（VM 錄製）；VM：check-types／lint 0、related 62/62、Python 33/33、v2 golden 2/2。Windows 待執行 | 本筆 |
 | 2026-11-09 01:30 | Claude Code | PR #6 完成 | 設定分流、Analyst-情境、facts、需求檔、側欄；VM：check-types／lint 0、webview 通過、related 71/71、Python 24/24。Windows fast／python／golden 待執行 | 本筆 |
 | 2026-11-08 23:40 | Claude Code | PR #5 第 4 步（記錄 Windows 結果） | 使用者 Windows `test:fast` 通過：Node 796/796、Python fast 48/48；`test:python` 指令誤貼未執行，仍待使用者 | 本筆 |

@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-09 PR #8（v2 規格預測）
+- 新增 `specSources.ts`（docstring、型別註記、需求檔）與 `specOracle.ts`（Analyst-規格提示詞，只含簽名、docstring、型別註記、需求與該列輸入；不含函式本體與任何執行結果），每列獨立預測 3 次，格式錯誤只重問一次。
+- `oracleDecision.ts` 依架構 1.3 分級，`case_oracle_compare.py` 依 3.3 比對（浮點 isclose、例外依類別與 MRO）；basis 必須真的出現在 docstring 或需求才算規格不符，否則列為需人工確認。
+- 規格不符的列不進正式測試，改以規格值寫入 `test_spec_mismatch.py`（不跑突變），並輸出 `spec_mismatch.md／json`；批次 `specMismatchCount` 由各目標累加；`specOracle=off` 或沒有 docstring／需求時完全不呼叫規格預測。
+
 ## 2026-11-09 PR #7（v2 逐列 capture、程式產生測試與突變）
 - 新增 `case_capture_runner.py`：每列一個行程，在 `guarded_runtime` 隔離內依 facts 在目標模組查找位置 patch（區域呼叫鏈以 MagicMock 設定），記錄回傳值或例外；未 mock 而碰到外部資源只讓該列 `capture-failed`。
 - `rowToTest.ts` 由程式寫出每列一個測試方法（預期值暫為 observed）；只有 needs-setup 或實例方法才請 Writer 寫 3～10 行 setup；`rowExecution.ts` 逐方法用既有 runner 執行，通過者合併後以既有突變引擎量測，終態 usable／failed。
