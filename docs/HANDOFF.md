@@ -84,11 +84,11 @@
 ### 2026-11-08 PR #2a 完成（側欄目標選擇改善）
 
 - **已實作**：
-  - `src/pipeline/targetList.ts`：實作 R1 不分大小寫字母排序（`Class.method` 以完整名稱排序，同名函式以檔案相對路徑決勝）、R2 目標清單累加／去重／單項移除／清空、R4 `eval-screening-v1` JSON 匯出入與檔案／函式存在性檢查（明確列出並略過缺漏項目，不靜默忽略）、R5 依正規化專案根保存與還原目標清單狀態（`targetListStateKey`）。
+  - `src/pipeline/targetList.ts`：實作 R1 不分大小寫字母排序（`Class.method` 以完整名稱排序，同名函式以檔案相對路徑決勝）、R2 目標清單累加／去重／單項移除／清空、R4 `eval-screening-v1` JSON 匯出入與檔案／函式存在性檢查（明確列出並略過缺漏項目，不靜默忽略）、R5 依正規化專案根保存與還原目標清單狀態（`targetListStateKey`），以及 `createExplicitTargetBatchScope` 與 `resolveExplicitBatchTargets`（逐檔案與逐目標皆執行 `throwIfExecutionCancelled()`）。
   - `src/pipeline/batchScope.ts`：新增 `buildBatchScopeTargetCandidates` 與 `resolveBatchScopeTargets`，支援 R3 批次範圍預覽已選檔案的函式彙整與排序。
-  - `src/pipeline/batchJournal.ts`、`src/orchestrator.ts`：`runBatchAnalysis` 支援明確 `targets` 清單並依目標清單順序逐一探索與執行，沿用既有 `BatchJournal`、`batch_manifest.json`、報告、隔離與停止政策。
+  - `src/pipeline/batchJournal.ts`、`src/orchestrator.ts`：`runBatchAnalysis` 支援明確 `targets` 清單並依目標清單順序逐一探索與執行，沿用既有 `BatchJournal`、`batch_manifest.json`、報告、隔離與停止政策；若明確目標清單含有不存在的檔案或函式，不靜默跳過，改以 `batch.discoveryFailed(file, 'target-missing', target)` 記錄，並於 `batch_manifest.json`、`batch_summary.md`、`batch_workflow.md` 與 `failure_report.md` 顯示缺少的目標。
   - `src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`：實作側欄檔案／函式排序（R1）、函式勾選清單與全選／全不選／加入目標清單、目標清單區塊（總數、單項移除、清空、匯出／匯入 JSON）（R2／R4）、批次範圍預覽連動測試目標區並隱藏單檔選擇控制項（R3），以及專案根目標清單狀態保存（R5）。
-  - `src/test/targetList.test.ts`：新增 7 項完整測試，涵蓋 R1～R5、Webview 互動、2 檔 3 函式明確目標清單順序批次整合測試，以及匯入 `D:/read/專題/test/eval_screening/targets.json`（驗證得到 26 個目標、0 個不存在項目）。
+  - `eval/eval_screening/`、`src/test/targetList.test.ts`：將篩選評估集（7 個 `.py`、`targets.json`、`README.md`，不含 `__pycache__`）納入倉庫 `eval/eval_screening/`，移除本機絕對路徑依賴；測試涵蓋 R1～R5、Webview 互動、2 檔 3 函式明確目標清單順序批次整合測試、含 1 個不存在函式的批次整合測試（驗證其餘目標照常執行且 `batch_manifest.json` 與 `batch_summary.md` 列出 `target-missing`），以及匯入 `eval/eval_screening/targets.json`（驗證得到 26 個目標、0 個不存在項目）。
 - **回歸通過**（日誌保存於 `log/pr2a-*.log`）：
   - `npm run test:webview`：通過（Webview script 語法與結構驗證）。
   - `npm run test:related -- --node targetList --node batchScope --node batchJournal --node webviewContent --node sidebarPreferences --node sidebarDashboardReplay`：38/38 通過（`log/pr2a-related.log`）。
@@ -96,7 +96,7 @@
   - `npm run test:golden`：退出碼 0，11/11 通過，5 個 golden 快照零修改（`log/pr2a-golden.log`）。
 - **尚需實驗室實測**：VS Code 實機擴充套件視窗操作與實驗室模型批次驗收。
 
-**接續入口（2026-11-08 更新）：PR #2a 已在分支 `pr/02a-target-selection` 完成並通過驗證；下一個步驟為 PR #2「模型篩選工具與評估集」（見架構文件第 6 節與第 9 節 PR #2）。** 篩選用評估資料夾位於 `D:/read/專題/test/eval_screening/`（26 個函式，清單在 `targets.json`），PR #2 建立 `eval/eval-set-v1.json` 時以它為準。
+**接續入口（2026-11-08 更新）：PR #2a 已在分支 `pr/02a-target-selection` 完成並通過驗證；下一個步驟為 PR #2「模型篩選工具與評估集」（見架構文件第 6 節與第 9 節 PR #2）。** 篩選用評估資料夾已納入倉庫 `eval/eval_screening/`（26 個函式，清單在 `eval/eval_screening/targets.json`），PR #2 建立 `eval/eval-set-v1.json` 時以它為準。
 
 ### 2026-11-07 PR #1 使用者驗收通過與主線合併
 
@@ -271,7 +271,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由 Codex 處理）
 
-- 2026-11-08（PR #2a）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2a 新增與修改的受管理檔案執行 `aoci_maintain`：`src/pipeline/targetList.ts`、`src/pipeline/batchScope.ts`、`src/pipeline/batchJournal.ts`、`src/orchestrator.ts`、`src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/targetList.test.ts`。
+- 2026-11-08（PR #2a）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2a 新增與修改的受管理檔案執行 `aoci_maintain`：`src/pipeline/targetList.ts`、`src/pipeline/batchScope.ts`、`src/pipeline/batchJournal.ts`、`src/orchestrator.ts`、`src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/targetList.test.ts`、`eval/eval_screening/*`。
 - 2026-11-04：PR #1 收尾時 `aoci_maintain` 受阻，原因是 1,210 筆 observe 變化待覆核，以及 8 個人工審查項目。完成第 2 節步驟 3 後再試一次。
 
 ---
@@ -347,7 +347,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-08 15:45 | Antigravity | PR #2a 實作與驗證 | 完成 R1～R5 側欄目標選擇改善；匯入 `eval_screening/targets.json` 得 26 目標、0 缺漏；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過；下一步指向 PR #2 | 本次 PR #2a commit（分支 `pr/02a-target-selection`） |
+| 2026-11-08 16:00 | Antigravity | PR #2a 驗收前四項修正與重驗 | `eval/eval_screening` 納入倉庫並移除絕對路徑；明確目標缺漏記錄 `target-missing` 並顯示於 `batch_summary`／`batch_manifest`；補齊 `throwIfExecutionCancelled()` 與抽離 `resolveExplicitBatchTargets`；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過 | 本次修正 commit（分支 `pr/02a-target-selection`） |
+| 2026-11-08 15:45 | Antigravity | PR #2a 實作與驗證 | 完成 R1～R5 側欄目標選擇改善；匯入 `eval_screening/targets.json` 得 26 目標、0 缺漏；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過；下一步指向 PR #2 | `749973e` |
 | 2026-11-08 15:15 | Claude（規劃） | PR #3 追加 Reviewer 格式退回改為建議 | 使用者核准；架構文件第 9 節同步 | `6b280ce` |
 | 2026-11-08 15:05 | Claude（規劃） | 分析實驗室模型篩選結果 | 主力 gpt-oss:20b、備援 ministral-3:14b；PR #3 追加兩項 | `6b280ce` |
 | 2026-11-07 14:30 | Claude（規劃） | 新增 PR #2a 規格；建立 eval_screening（26 函式） | 使用者回報側欄排序、多選、批次連動問題 | `6b280ce` |

@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { existingRealPath } from '../utils/fileIdentity';
 import { extractFunctionsWithAst } from '../utils/utils';
-import { canonicalScopeRoot, deduplicateTargets } from './batchScope';
+import { BatchScopeSelection, batchScopeFiles, canonicalScopeRoot, createBatchScopeSelection, deduplicateTargets } from './batchScope';
 
 export const TARGET_LIST_VERSION = 'eval-screening-v1';
 
@@ -340,4 +340,94 @@ export async function saveTargetListState(
     };
     await state.update(key, payload);
     return deduplicated;
+}
+
+export function createExplicitTargetBatchScope(
+    batchPath: string,
+    discoveredFiles: readonly string[],
+    targets: readonly TargetListItem[],
+    checkCancelled?: () => void
+): BatchScopeSelection | undefined {
+    const existingTargetPaths: string[] = [];
+    for (const item of targets) {
+        checkCancelled?.();
+        const candidate = path.resolve(batchPath, item.file);
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            existingTargetPaths.push(candidate);
+        }
+    }
+    const selectedRelative = batchScopeFiles(batchPath, existingTargetPaths);
+    if (selectedRelative.length === 0) {
+        return undefined;
+    }
+    const inventory = batchScopeFiles(batchPath, [...discoveredFiles, ...existingTargetPaths]);
+    return createBatchScopeSelection(batchPath, inventory, selectedRelative);
+}
+
+export interface ResolveExplicitBatchTargetsOptions {
+    batchPath: string;
+    files: readonly string[];
+    targets: readonly TargetListItem[];
+    pythonExecutable?: string;
+    hasDummyMarker?: (funcName: string) => boolean;
+    checkCancelled?: () => void;
+    onAstFailure?: (file: string) => void;
+    onMissingTarget?: (file: string, target: string) => void;
+}
+
+export interface ResolvedExplicitBatchTargets {
+    resolvedTargets: Array<{ file: string; rel: string; target: string }>;
+    importTargets: Array<{ file: string; target: string }>;
+}
+
+export async function resolveExplicitBatchTargets(
+    options: ResolveExplicitBatchTargetsOptions
+): Promise<ResolvedExplicitBatchTargets> {
+    const fileIdentity = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value).replace(/\\/g, '/');
+    const realRoot = existingRealPath(options.batchPath);
+    const discoveredFiles = new Map<string, { file: string; rel: string; available: Set<string> }>();
+    const astFailedFiles = new Set<string>();
+    const importTargets: Array<{ file: string; target: string }> = [];
+    const isDummy = options.hasDummyMarker ?? (() => false);
+
+    for (const file of options.files) {
+        options.checkCancelled?.();
+        const rel = path.relative(realRoot, existingRealPath(file)).replace(/\\/g, '/');
+        let funcs;
+        try {
+            funcs = await extractFunctionsWithAst(file, options.pythonExecutable, true);
+        } catch {
+            options.checkCancelled?.();
+            astFailedFiles.add(fileIdentity(rel));
+            options.onAstFailure?.(file);
+            continue;
+        }
+        options.checkCancelled?.();
+        const unique = deduplicateTargets(funcs);
+        const available = new Set([...unique.targets.map(func => func.fullName), ...unique.ambiguousTargets]);
+        discoveredFiles.set(fileIdentity(rel), { file, rel, available });
+        const selectedNames = new Set(options.targets.filter(item => fileIdentity(item.file) === fileIdentity(rel)).map(item => item.target));
+        const importTarget = funcs.find(func => selectedNames.has(func.fullName) && !isDummy(func.fullName))
+            ?? funcs.find(func => !isDummy(func.fullName));
+        if (importTarget) {
+            importTargets.push({ file, target: importTarget.fullName });
+        }
+    }
+
+    const resolvedTargets: Array<{ file: string; rel: string; target: string }> = [];
+    for (const item of options.targets) {
+        options.checkCancelled?.();
+        const key = fileIdentity(item.file);
+        if (astFailedFiles.has(key)) {
+            continue;
+        }
+        const entry = discoveredFiles.get(key);
+        if (!entry || !entry.available.has(item.target)) {
+            options.onMissingTarget?.(entry?.file ?? path.resolve(options.batchPath, item.file), item.target);
+            continue;
+        }
+        resolvedTargets.push({ file: entry.file, rel: entry.rel, target: item.target });
+    }
+
+    return { resolvedTargets, importTargets };
 }

@@ -198,13 +198,9 @@ test('R4 JSON export/import round-trip preserves targets and reports nonexistent
 });
 
 test('R4 importing eval_screening/targets.json produces exactly 26 valid targets and 0 missing items', async () => {
-    const candidateDirs = [
-        'D:/read/專題/test/eval_screening',
-        'D:/read/專題/test/data/eval_screening'
-    ];
-    const evalDir = candidateDirs.find(dir => fs.existsSync(path.join(dir, 'targets.json')));
-    assert.ok(evalDir, 'eval_screening directory with targets.json must exist');
+    const evalDir = path.resolve(__dirname, '../../eval/eval_screening');
     const targetsJsonPath = path.join(evalDir, 'targets.json');
+    assert.ok(fs.existsSync(targetsJsonPath), 'eval/eval_screening/targets.json must exist in repository');
     const raw = fs.readFileSync(targetsJsonPath, 'utf8');
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const result = await importTargetListFromJson(evalDir, raw, defaultFunctionInventoryResolver(python));
@@ -539,17 +535,68 @@ test('batch execution with explicit target list (2 files, 3 functions) runs only
         const manifest = JSON.parse(fs.readFileSync(path.join(output, directories[0], 'batch_manifest.json'), 'utf8'));
         assert.equal(manifest.expectedTargets, 3);
         assert.equal(manifest.finishedTargets, 3);
+        assert.deepEqual(manifest.discoveryFailures, []);
         assert.deepEqual(
             manifest.targets.map((item: any) => ({ file: item.file, target: item.target })),
             explicitTargets
         );
         assert.ok(manifest.targets.every((item: any) => item.terminalStatus === 'execution-passed'));
+
+        // Integration test: explicit target list containing 1 nonexistent function executes remaining targets and records target-missing in manifest and batch_summary.md
+        const outputWithMissing = path.join(root, 'results_missing');
+        executedOrder.length = 0;
+        const targetsWithMissing = [
+            { file: 'second_mod.py', target: 'second_b' },
+            { file: 'second_mod.py', target: 'missing_func' },
+            { file: 'first_mod.py', target: 'first_only' }
+        ];
+        await handlers.get('llm-unit-test.runBatchAnalysis')!({
+            envType: 'local',
+            modelName: 'fixture',
+            batchPath: root,
+            targets: targetsWithMissing,
+            promptStrategy: 'tier2',
+            validationMode: 'execution',
+            requireRoleQualification: false,
+            maxLoops: 1,
+            timeoutSeconds: 30,
+            outputPath: outputWithMissing
+        });
+
+        assert.deepEqual(executedOrder, [
+            'second_mod.py:second_b',
+            'first_mod.py:first_only'
+        ]);
+        const missingDirs = fs.readdirSync(outputWithMissing).filter(name => fs.existsSync(path.join(outputWithMissing, name, 'batch_manifest.json')));
+        assert.equal(missingDirs.length, 1);
+        const missingBatchDir = path.join(outputWithMissing, missingDirs[0]);
+        const missingManifest = JSON.parse(fs.readFileSync(path.join(missingBatchDir, 'batch_manifest.json'), 'utf8'));
+        assert.equal(missingManifest.expectedTargets, 2);
+        assert.equal(missingManifest.finishedTargets, 2);
+        assert.equal(missingManifest.status, 'incomplete');
+        assert.equal(missingManifest.complete, false);
+        assert.deepEqual(missingManifest.discoveryFailures, [
+            { file: 'second_mod.py', stage: 'target-missing', target: 'missing_func' }
+        ]);
+        assert.deepEqual(
+            missingManifest.targets.map((item: any) => ({ file: item.file, target: item.target })),
+            [
+                { file: 'second_mod.py', target: 'second_b' },
+                { file: 'first_mod.py', target: 'first_only' }
+            ]
+        );
+        assert.ok(missingManifest.targets.every((item: any) => item.terminalStatus === 'execution-passed'));
+        const batchSummaryMd = fs.readFileSync(path.join(missingBatchDir, 'batch_summary.md'), 'utf8');
+        assert.match(batchSummaryMd, /second_mod\.py :: missing_func/);
+        assert.match(batchSummaryMd, /target-missing/);
     } finally {
         globalThis.fetch = originalFetch;
         Module._load = originalLoad;
         fs.rmSync(root, { recursive: true, force: true });
     }
-});test('SidebarProvider handles target list persistence, batchScope linkage, JSON export, and eval_screening JSON import', async () => {
+});
+
+test('SidebarProvider handles target list persistence, batchScope linkage, JSON export, and eval_screening JSON import', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidebar-target-list-'));
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module'), originalLoad = Module._load;
@@ -670,10 +717,10 @@ test('batch execution with explicit target list (2 files, 3 functions) runs only
         assert.equal(importMissingMsg.missing.length, 2);
         assert.ok(warnings.some(w => w.includes('mod_a.py:missing_fn') && w.includes('missing.py:nope')));
 
-        // 5. Import D:/read/專題/test/eval_screening/targets.json via SidebarProvider
-        const evalDir = 'D:/read/專題/test/eval_screening';
+        // 5. Import eval/eval_screening/targets.json via SidebarProvider
+        const evalDir = path.resolve(__dirname, '../../eval/eval_screening');
         const evalTargetsPath = path.join(evalDir, 'targets.json');
-        assert.ok(fs.existsSync(evalTargetsPath), 'D:/read/專題/test/eval_screening/targets.json must exist');
+        assert.ok(fs.existsSync(evalTargetsPath), 'eval/eval_screening/targets.json must exist in repository');
         await view.receive({
             command: 'importTargetList',
             projectRoot: evalDir,

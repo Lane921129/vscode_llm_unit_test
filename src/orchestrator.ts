@@ -66,8 +66,8 @@ import { focusedSeedOutputFloor, isTestFocus, resolveTestFocus, testFocusInstruc
 import { mayFallbackTier, selectCandidateRepairRole } from './tier/tierFailurePolicy';
 import { ReportIdentity, writeTargetReports, renderMutationBaselineTiming } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
-import { batchScopeFiles, createBatchScopeSelection, deduplicateTargets } from './pipeline/batchScope';
-import { deduplicateTargetList, TargetListItem } from './pipeline/targetList';
+import { deduplicateTargets } from './pipeline/batchScope';
+import { createExplicitTargetBatchScope, deduplicateTargetList, resolveExplicitBatchTargets, TargetListItem } from './pipeline/targetList';
 import { prepareQualityExperiments, buildQualityExperimentEvidencePrompt, assessQualityCandidateNovelty } from './pipeline/qualityExperiments';
 import { QualityImprovementSession, PendingQualityFocus } from './pipeline/qualityImprovementSession';
 import { containsCredential } from './pipeline/artifactSafety';
@@ -728,49 +728,40 @@ export function activate(context: vscode.ExtensionContext) {
                     const explicitTargets = Array.isArray(runParams.targets) ? deduplicateTargetList(runParams.targets) : [];
                     let scope;
                     if (explicitTargets.length > 0) {
-                        const targetPaths = explicitTargets.map(item => path.resolve(runParams.batchPath, item.file));
-                        const inventory = batchScopeFiles(runParams.batchPath, [...files, ...targetPaths.filter(candidate => fs.existsSync(candidate))]);
-                        const selectedRelative = batchScopeFiles(runParams.batchPath, targetPaths);
-                        scope = createBatchScopeSelection(runParams.batchPath, inventory, selectedRelative);
+                        scope = createExplicitTargetBatchScope(runParams.batchPath, files, explicitTargets, throwIfExecutionCancelled);
                     } else {
                         scope = await sidebarProvider.previewBatchScope(runParams.batchPath, files);
                         throwIfExecutionCancelled();
                         if (!scope) { outcome = 'cancelled'; return; }
                     }
-                    batch.selectScope(scope);
-                    const continuity = captureBatchSetupScope(scope, runParams.pythonExecutable);
-                    files = scope.selectedFiles.map(file => path.join(scope.root, file));
-                    initializeBatchRuntimeQualification(scope.root, files, runParams.pythonExecutable);
+                    if (scope) { batch.selectScope(scope); }
+                    const continuity = scope ? captureBatchSetupScope(scope, runParams.pythonExecutable) : undefined;
+                    files = scope ? scope.selectedFiles.map(file => path.join(scope.root, file)) : [];
+                    if (scope) {
+                        initializeBatchRuntimeQualification(scope.root, files, runParams.pythonExecutable);
+                    }
                     const tasks: Array<() => Promise<void>> = [];
                     const taskSources: BatchPreflightTarget[] = [];
                     const importTargets: ImportCheckTarget[] = [];
                     if (explicitTargets.length > 0) {
-                        const fileIdentity = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value).replace(/\\/g, '/');
-                        const discoveredFiles = new Map<string, { file: string; rel: string; available: Set<string> }>();
-                        for (const file of files) {
-                            throwIfExecutionCancelled();
-                            let funcs;
-                            try { funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable, true); }
-                            catch {
-                                throwIfExecutionCancelled();
+                        const resolved = await resolveExplicitBatchTargets({
+                            batchPath: runParams.batchPath,
+                            files,
+                            targets: explicitTargets,
+                            pythonExecutable: runParams.pythonExecutable,
+                            hasDummyMarker: hasDummyFunctionNameMarker,
+                            checkCancelled: throwIfExecutionCancelled,
+                            onAstFailure: file => {
                                 batch.discoveryFailed(file, 'ast-discovery');
                                 log(localize("[系統] 無法解析 {0}，批次摘要將保留掃描未完成狀態。", path.relative(runParams.batchPath, file)));
-                                continue;
+                            },
+                            onMissingTarget: (file, target) => {
+                                batch.discoveryFailed(file, 'target-missing', target);
+                                log(localize("[系統] 找不到指定目標 {0}::{1}，批次摘要將保留掃描未完成狀態。", path.relative(runParams.batchPath, file), target));
                             }
-                            const unique = deduplicateTargets(funcs);
-                            const available = new Set([...unique.targets.map(func => func.fullName), ...unique.ambiguousTargets]);
-                            const rel = path.relative(existingRealPath(scope.root), existingRealPath(file)).replace(/\\/g, '/');
-                            discoveredFiles.set(fileIdentity(rel), { file, rel, available });
-                            const selectedNames = new Set(explicitTargets.filter(item => fileIdentity(item.file) === fileIdentity(rel)).map(item => item.target));
-                            const importTarget = funcs.find(func => selectedNames.has(func.fullName) && !hasDummyFunctionNameMarker(func.fullName))
-                                ?? funcs.find(func => !hasDummyFunctionNameMarker(func.fullName));
-                            if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
-                        }
-                        for (const item of explicitTargets) {
-                            const entry = discoveredFiles.get(fileIdentity(item.file));
-                            if (!entry || !entry.available.has(item.target)) { continue; }
-                            const { file, rel } = entry;
-                            const target = item.target;
+                        });
+                        importTargets.push(...resolved.importTargets);
+                        for (const { file, rel, target } of resolved.resolvedTargets) {
                             batch.discover(file, [target]);
                             const id = tasks.length;
                             taskSources.push({ id, file: rel, target });
@@ -804,7 +795,7 @@ export function activate(context: vscode.ExtensionContext) {
                             if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
                             for (const target of targets) {
                                 const id = tasks.length;
-                                taskSources.push({ id, file: path.relative(existingRealPath(scope.root), existingRealPath(file)).replace(/\\/g, '/'), target });
+                                taskSources.push({ id, file: path.relative(existingRealPath(scope?.root || runParams.batchPath), existingRealPath(file)).replace(/\\/g, '/'), target });
                                 tasks.push(async () => {
                                     throwIfExecutionCancelled();
                                     batch.begin(id);
@@ -884,7 +875,7 @@ export function activate(context: vscode.ExtensionContext) {
                                 return;
                             }
                             try {
-                                continuity.verify(setup, importTargets, configuredPythonForResource(runParams.batchPath, runParams.batchPath), { allowBlocked: true });
+                                continuity?.verify(setup, importTargets, configuredPythonForResource(runParams.batchPath, runParams.batchPath), { allowBlocked: true });
                                 if ((readPlan().plan?.id || null) !== setup.fixtureId) {
                                     throw new Error(localize('初始化設定在預檢期間改變，批次已停止；請重新開始。'));
                                 }
@@ -903,7 +894,7 @@ export function activate(context: vscode.ExtensionContext) {
                             batch.preflightEvidence({ phase: 'decision', status: setup.status === 'ready' ? 'resumed' : 'resumed-partially', fixtureId: setup.fixtureId });
                         }
                     }
-                    continuity.verifySources(configuredPythonForResource(runParams.batchPath, runParams.batchPath));
+                    continuity?.verifySources(configuredPythonForResource(runParams.batchPath, runParams.batchPath));
                     if (importCheck.initializationSources) { verifyInitializationSources(importCheck.root, importCheck.initializationSources); }
                     if ((readPlan().plan?.id || null) !== finalFixtureId) {
                         throw new Error(localize('初始化設定在預檢期間改變，批次已停止；請重新開始。'));
