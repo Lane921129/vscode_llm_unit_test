@@ -1,6 +1,8 @@
 import { localize } from '../i18n/core';
 import { formatModelRequestTiming } from './modelRequestTimingPresentation';
 import { formatPromptCapacity } from './promptCapacityPresentation';
+export type OutcomeTier = 'quality-passed' | 'usable' | 'failed' | 'environment-blocked' | 'tool-blocked';
+
 export interface OutcomeEvidence {
     terminalStatus?: unknown;
     failureCategory?: unknown;
@@ -13,16 +15,94 @@ export interface OutcomeEvidence {
     failureLimit?: unknown;
     stopReason?: unknown;
     effectiveSettings?: unknown;
+    acceptedTest?: unknown;
+    acceptedCodeHash?: unknown;
+    execution?: unknown;
+    scenarios?: unknown;
+    coverage?: {
+        targetExecuted?: unknown;
+        assessment?: { targetExecuted?: unknown };
+    } | null;
+    mutationStatus?: unknown;
+    mutationScore?: unknown;
+    retainedScore?: unknown;
+    mutation?: { status?: unknown; scoreAvailable?: unknown } | null;
 }
 export interface OutcomePresentation { state: string; label: string; kind: 'passed' | 'executed' | 'failed' | 'pending' | 'skipped' }
+
+const USABLE_ELIGIBLE_STATUSES = new Set([
+    'usable',
+    'retained-after-failure',
+    'review-blocked',
+    'round-limit',
+    'stagnated',
+    'quality-incomplete',
+    'execution-passed-review-incomplete'
+]);
+
+/**
+ * Checks whether an outcome represents a usable retained test baseline:
+ * 1) At least one test method executed and passed in the isolated environment,
+ * 2) The test genuinely called the real target (targetExecuted === true),
+ * 3) Mutation measurement completed and produced a numeric mutation score.
+ */
+export function isUsableOutcomeEvidence(value: OutcomeEvidence): boolean {
+    if (value.evidenceValid === false) { return false; }
+    if (value.failureCategory === 'environment' || value.failureCategory === 'tool') { return false; }
+    const status = typeof value.terminalStatus === 'string' ? value.terminalStatus : '';
+    if (!USABLE_ELIGIBLE_STATUSES.has(status)) { return false; }
+    const hasDetailFields = value.execution !== undefined || value.scenarios !== undefined
+        || value.coverage !== undefined || value.mutationStatus !== undefined
+        || value.mutationScore !== undefined || value.retainedScore !== undefined || value.mutation !== undefined;
+    if (!hasDetailFields) {
+        return status === 'usable';
+    }
+    const executedInIsolation = (typeof value.execution === 'string' && value.execution.trim().length > 0)
+        || (Array.isArray(value.scenarios) && value.scenarios.length > 0)
+        || (typeof value.acceptedTest === 'string' && value.acceptedTest.trim().length > 0)
+        || value.executionVerified === true;
+    const targetExecuted = value.coverage?.targetExecuted === true
+        || value.coverage?.assessment?.targetExecuted === true;
+    const mutationCompleted = value.mutationStatus === 'complete'
+        || value.mutation?.status === 'complete'
+        || (value.mutationStatus === undefined && value.mutation === undefined && typeof value.retainedScore === 'number');
+    const hasNumericMutationScore = (typeof value.mutationScore === 'number' && Number.isFinite(value.mutationScore))
+        || (typeof value.retainedScore === 'number' && Number.isFinite(value.retainedScore));
+    return executedInIsolation && targetExecuted && mutationCompleted && hasNumericMutationScore;
+}
+
+/** Classifies target outcome into PR #3 tiers: quality-passed, usable, failed, environment-blocked, tool-blocked. */
+export function classifyOutcomeTier(value: OutcomeEvidence): OutcomeTier {
+    if (value.evidenceValid === false) { return 'failed'; }
+    if (value.failureCategory === 'environment' || value.terminalStatus === 'environment-blocked') {
+        return 'environment-blocked';
+    }
+    if (value.failureCategory === 'tool' || value.terminalStatus === 'tool-blocked') {
+        return 'tool-blocked';
+    }
+    const state = typeof value.terminalStatus === 'string' ? value.terminalStatus : 'incomplete';
+    if ((state === 'passed' || state === 'quality-passed')
+        && value.validationMode !== 'execution'
+        && (value.qualityAssessment?.fullyPassed === true || (state === 'quality-passed' && value.qualityAssessment === undefined))) {
+        return 'quality-passed';
+    }
+    if (isUsableOutcomeEvidence(value)) {
+        return 'usable';
+    }
+    return 'failed';
+}
 
 /** Scores and intermediate stage successes never certify the final outcome. */
 export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
     const state = typeof value.terminalStatus === 'string' ? value.terminalStatus : 'incomplete';
     if (value.evidenceValid === false) { return { state, label: localize("未通過：來源已變更，舊證據失效"), kind: 'failed' }; }
-    if (value.failureCategory === 'environment') { return { state, label: localize("未通過：匯入／環境受阻"), kind: 'failed' }; }
-    if (value.failureCategory === 'tool') { return { state, label: localize('未通過：驗證工具受阻'), kind: 'failed' }; }
-    if (state === 'passed' && value.validationMode !== 'execution' && value.qualityAssessment?.fullyPassed === true) {
+    if (value.failureCategory === 'environment' || state === 'environment-blocked') {
+        return { state, label: localize("未通過：匯入／環境受阻"), kind: 'failed' };
+    }
+    if (value.failureCategory === 'tool' || state === 'tool-blocked') {
+        return { state, label: localize('未通過：驗證工具受阻'), kind: 'failed' };
+    }
+    if ((state === 'passed' || state === 'quality-passed') && value.validationMode !== 'execution' && value.qualityAssessment?.fullyPassed === true) {
         return { state, label: localize("完整通過"), kind: 'passed' };
     }
     if (state === 'execution-passed' && value.validationMode === 'execution' && value.executionVerified === true) {
@@ -31,6 +111,7 @@ export function presentOutcome(value: OutcomeEvidence): OutcomePresentation {
     const labels: Record<string, [string, OutcomePresentation['kind']]> = {
         running: [localize("執行中，尚未判定"), 'pending'],
         failed: [localize("未通過：執行或驗證失敗"), 'failed'],
+        usable: [localize("未通過：後續失敗，已保留先前測試"), 'executed'],
         'retained-after-failure': [localize("未通過：後續失敗，已保留先前測試"), 'failed'],
         'execution-passed-review-incomplete': [localize("未完成：執行達標，審查未完成"), 'pending'],
         'review-blocked': [localize("未通過：最新候選審查未批准"), 'pending'],

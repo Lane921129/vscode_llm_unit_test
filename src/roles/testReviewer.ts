@@ -4,7 +4,7 @@ import { ReviewFactIdentity, ReviewFacts, reviewAssertionObservationStatus, revi
 import { traceValuePythonLiteral } from '../pipeline/probeInputs';
 import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { redactCredentialStrings } from '../pipeline/artifactSafety';
-import { isReviewEvidenceBasis, ReviewBasisRejection, ReviewEvidenceBasis, ReviewRequirements,
+import { isReviewBasisFormatDiagnostic, isReviewEvidenceBasis, ReviewBasisRejection, ReviewEvidenceBasis, ReviewRequirements,
     reviewEvidenceBasisDiagnostic, reviewFactId, validReviewRequirements } from './reviewEvidenceBasis';
 
 export const REVIEW_FINDING_LIMIT = 5;
@@ -31,6 +31,8 @@ export interface ReviewIssue {
 
 export interface TestReview {
     issues: ReviewIssue[];
+    /** Present when findings only had basis reference format issues and were downgraded to Writer suggestions. */
+    basisFormatDiagnostics?: ReviewRejectionCode[];
 }
 
 /** Non-authoritative evidence about a rejected assessment, never a usable review. */
@@ -304,9 +306,9 @@ function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRej
         if (!actionable(finding.reason)) { reject('non-actionable-reason'); return false; }
         if (!actionable(finding.action)) { reject('non-actionable-action'); return false; }
         if (finding.action.trim() === finding.reason.trim()) { reject('duplicate-reason-action'); return false; }
-        if (requireCurrent && finding.basis === undefined) { reject('missing-evidence-basis'); return false; }
+        if (requireCurrent && finding.basis === undefined) { reject('missing-evidence-basis'); }
         if (finding.basis !== undefined && (!isReviewEvidenceBasis(finding.basis) || finding.test_line === undefined)) {
-            reject('invalid-evidence-basis'); return false;
+            reject('invalid-evidence-basis');
         }
         issues.push({
             id: `${severity === 'blocking' ? 'B' : 'Q'}${index + 1}`,
@@ -315,7 +317,7 @@ function normalizeReview(value: unknown, tests: string, reject: (code: ReviewRej
             reason: finding.reason,
             action: finding.action,
             ...(typeof finding.test_line === 'string' ? { testLine: Number(finding.test_line.slice(1)) } : {}),
-            ...(isReviewEvidenceBasis(finding.basis) ? { basis: finding.basis } : {})
+            ...(isReviewEvidenceBasis(finding.basis) && finding.test_line !== undefined ? { basis: finding.basis } : {})
         });
         return true;
     };
@@ -406,7 +408,7 @@ export function reviewContextDiagnostic(tests: string, constraints?: ReviewConst
 
 /** Codes only: diagnostics never echo source, credentials or provider content. */
 export function parseTestReviewDetailed(raw: string, tests: string, requireCurrent = false,
-    constraints?: ReviewConstraints): { review?: TestReview; diagnostics: ReviewRejectionCode[] } {
+    constraints?: ReviewConstraints): { review?: TestReview; suggestedReview?: TestReview; diagnostics: ReviewRejectionCode[] } {
     const diagnostics: ReviewRejectionCode[] = [];
     const reject = (code: ReviewRejectionCode): undefined => {
         if (!diagnostics.includes(code)) { diagnostics.push(code); }
@@ -416,9 +418,15 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
     if (contextFailure) { return { diagnostics: [contextFailure] }; }
     const candidates = jsonObjects(raw);
     if (requireCurrent && candidates.length > 1) { reject('invalid-envelope'); return { diagnostics }; }
+    let suggestedReview: TestReview | undefined;
     for (const candidate of candidates) {
+        const candidateDiagnostics: ReviewRejectionCode[] = [];
+        const rejectCandidate = (code: ReviewRejectionCode): undefined => {
+            if (!candidateDiagnostics.includes(code)) { candidateDiagnostics.push(code); }
+            return reject(code);
+        };
         try {
-            const review = normalizeReview(JSON.parse(candidate), tests, reject, requireCurrent);
+            const review = normalizeReview(JSON.parse(candidate), tests, rejectCandidate, requireCurrent);
             if (review) {
                 const violations = constraints ? reviewConstraintDiagnostics(review, constraints) : review.issues.flatMap(issue => {
                     if (!issue.basis) { return []; }
@@ -426,15 +434,30 @@ export function parseTestReviewDetailed(raw: string, tests: string, requireCurre
                         : reviewEvidenceBasisDiagnostic(issue.basis, issue.testLine, {});
                     return diagnostic ? [diagnostic] : [];
                 });
-                if (violations.length) { violations.forEach(reject); continue; }
-                return { review, diagnostics: [] };
+                if (violations.length) { violations.forEach(rejectCandidate); }
+                if (!candidateDiagnostics.length) {
+                    return { review, diagnostics: [] };
+                }
+                if (review.issues.length > 0 && candidateDiagnostics.every(isReviewBasisFormatDiagnostic)) {
+                    suggestedReview = {
+                        issues: review.issues.map((issue, index) => ({
+                            ...issue,
+                            id: `Q${index + 1}`,
+                            severity: 'quality',
+                            ...(issue.testLine !== undefined
+                                ? { basis: { kind: 'test-code', ref: `L${issue.testLine}`, field: 'judgment', value: 'unverified' } }
+                                : {})
+                        })),
+                        basisFormatDiagnostics: [...candidateDiagnostics]
+                    };
+                }
             }
         } catch {
-            reject('invalid-json');
+            rejectCandidate('invalid-json');
         }
     }
     if (!diagnostics.length) { reject('invalid-json'); }
-    return { diagnostics };
+    return { diagnostics, ...(suggestedReview && diagnostics.every(isReviewBasisFormatDiagnostic) ? { suggestedReview } : {}) };
 }
 
 /** Never truncate a source/test fragment into misleading partial evidence. */

@@ -13,11 +13,126 @@ import { verifyExecutionEvidence } from './executionEvidence';
 import { VerificationMode } from './verificationMode';
 import { SOURCE_VERSIONS_VERSION, validSourceVersions, sourceVersionsCurrent } from './sourceVersions';
 import { conciseReason, isReportExcluded, reportCell, reportLink, summarizeTarget, TargetReportSummary } from './targetReport';
+import { classifyOutcomeTier, OutcomeTier } from './resultPresentation';
 import { BatchScopeSelection, canonicalScopeRoot, createBatchScopeSelection } from './batchScope';
 import { AI_WORKFLOW_VERSION, requireReviewApproval } from './aiWorkflow';
 import type { BatchPreflightBlockedTarget } from './batchPreflightPartition';
 import { measuredOutputRateMilli, mergeModelCapabilitySummaries, ModelCapabilitySummary, summarizeModelCapability } from '../llm/modelCapabilitySummary';
 import { normalizeStopPolicy, StopPolicySettings } from './stopPolicy';
+
+export interface RoleUsabilitySummary {
+    requested: number;
+    completed: number;
+    error: number;
+    contractRejected: number;
+    usableResponses: number;
+    usableRate: number | null;
+}
+
+export interface StageReasonSummary {
+    stage: string;
+    reasonCode: string;
+    count: number;
+    usableCount: number;
+    failedCount: number;
+    blockedCount: number;
+}
+
+export interface BatchFailureSummary {
+    schemaVersion: 'batch-failure-summary-v1';
+    batchId: string;
+    model: string;
+    validationMode: VerificationMode;
+    expectedTargets: number;
+    finishedTargets: number;
+    totalCount: number;
+    specMismatchCount: number;
+    tierCounts: Record<OutcomeTier, number>;
+    byStageAndReason: StageReasonSummary[];
+    roleUsability: Record<string, RoleUsabilitySummary>;
+    targets: Array<{
+        id: number;
+        file: string;
+        target: string;
+        tier: OutcomeTier;
+        terminalStatus: string;
+        stage: string | null;
+        reasonCode: string | null;
+        mutationScore: number | null;
+    }>;
+}
+
+interface TargetFailureDetail {
+    tier: OutcomeTier;
+    stage: string | null;
+    reasonCode: string | null;
+    mutationScore: number | null;
+    roleStats: Record<string, { requested: number; completed: number; error: number; contractRejected: number }>;
+}
+
+function summarizeRoleEvents(events: readonly any[]): Record<string, { requested: number; completed: number; error: number; contractRejected: number }> {
+    const stats: Record<string, { requested: number; completed: number; error: number; contractRejected: number }> = {};
+    const ensure = (role: string) => (stats[role] ||= { requested: 0, completed: 0, error: 0, contractRejected: 0 });
+    for (const event of events) {
+        if (!event || typeof event !== 'object') { continue; }
+        const stage = typeof event.stage === 'string' ? event.stage : '';
+        const status = typeof event.status === 'string' ? event.status : '';
+        const detail = event.detail && typeof event.detail === 'object' ? event.detail as Record<string, unknown> : {};
+        if (stage === 'model-request') {
+            const role = typeof detail.role === 'string' && detail.role ? detail.role : 'unknown';
+            if (status === 'requested') { ensure(role).requested++; }
+            else if (status === 'completed') { ensure(role).completed++; }
+            else if (status === 'error') { ensure(role).error++; }
+            else if (status === 'output-format-retry') { ensure(role).contractRejected++; }
+        } else if (['reviewer', 'analyst-planning', 'analyst-quality'].includes(stage) && status === 'invalid-response') {
+            ensure(stage).contractRejected++;
+        } else if (stage === 'bug-fixer' && status === 'format-rejected') {
+            ensure('bug-fixer').contractRejected++;
+        }
+    }
+    return stats;
+}
+
+function extractFailureStageAndReason(knowledge: any, events: readonly any[]): { stage: string; reasonCode: string } {
+    const diagnostic = knowledge?.diagnostic && typeof knowledge.diagnostic === 'object'
+        ? knowledge.diagnostic as Record<string, unknown> : {};
+    const diagReason = typeof diagnostic.reasonCode === 'string' && diagnostic.reasonCode ? diagnostic.reasonCode
+        : Array.isArray(diagnostic.diagnostics) && typeof diagnostic.diagnostics[0] === 'string' ? diagnostic.diagnostics[0]
+        : Array.isArray(diagnostic.reasons) && typeof diagnostic.reasons[0] === 'string' ? diagnostic.reasons[0]
+        : undefined;
+    let eventStage: string | undefined;
+    let eventReason: string | undefined;
+    for (let index = events.length - 1; index >= 0; index--) {
+        const event = events[index];
+        if (!event || typeof event !== 'object') { continue; }
+        const status = typeof event.status === 'string' ? event.status : '';
+        if (!['error', 'failed', 'rejected', 'invalid-response', 'unavailable', 'scope-rejected', 'format-rejected', 'tool-failed'].includes(status)) {
+            continue;
+        }
+        const detail = event.detail && typeof event.detail === 'object' ? event.detail as Record<string, unknown> : {};
+        const candidateReason = typeof detail.reasonCode === 'string' && detail.reasonCode ? detail.reasonCode
+            : Array.isArray(detail.diagnostics) && typeof detail.diagnostics[0] === 'string' ? detail.diagnostics[0]
+            : typeof detail.withheldReason === 'string' && detail.withheldReason ? detail.withheldReason
+            : undefined;
+        if (candidateReason) {
+            eventReason = candidateReason;
+            eventStage = typeof detail.role === 'string' && event.stage === 'model-request' ? detail.role
+                : typeof event.stage === 'string' ? event.stage : undefined;
+            break;
+        }
+    }
+    const terminalStatus = typeof knowledge?.terminalStatus === 'string' ? knowledge.terminalStatus : 'unknown';
+    const stage = (typeof knowledge?.failureStage === 'string' && knowledge.failureStage)
+        || eventStage
+        || (terminalStatus === 'stagnated' ? 'analyst-quality'
+            : terminalStatus === 'execution-passed-review-incomplete' || terminalStatus === 'review-blocked' ? 'reviewer'
+            : terminalStatus === 'quality-incomplete' ? 'quality-policy'
+            : 'pipeline');
+    const stopReason = typeof knowledge?.stopReason === 'string' && knowledge.stopReason !== 'none'
+        ? knowledge.stopReason : undefined;
+    const reasonCode = diagReason || eventReason || stopReason || terminalStatus;
+    return { stage, reasonCode };
+}
 
 interface BatchTarget {
     id: number; file: string; target: string;
@@ -110,6 +225,7 @@ export class BatchJournal {
     private readonly discoveryFailures: Array<{ file: string; stage: string; target?: string }> = [];
     private readonly files: string[] = [];
     private readonly reportSummaries = new Map<number, TargetReportSummary>();
+    private readonly targetFailureDetails = new Map<number, TargetFailureDetail>();
     private scope?: BatchScopeSelection;
     /** Stable batch-level stage when work stops before an individual target owns a report. */
     private terminalFailureStage?: string;
@@ -236,7 +352,7 @@ export class BatchJournal {
                 if ((manifest.validationMode ?? 'full') !== (this.identity.validationMode ?? 'full')
                     || (knowledge.validationMode ?? 'full') !== (manifest.validationMode ?? 'full')) { throw Error('mode-mismatch'); }
                 if (!hasFinal && !isReportExcluded(knowledge.terminalStatus)) { throw Error('missing-report'); }
-                if (knowledge.terminalStatus === 'passed') {
+                if (knowledge.terminalStatus === 'passed' || knowledge.terminalStatus === 'quality-passed') {
                     if (manifest.validationMode === 'execution' || knowledge.validationMode === 'execution') { throw Error('mode-mismatch'); }
                     const hasQualityContract = [manifest, knowledge].some(artifact =>
                         ['qualityContractVersion', 'qualityPolicy', 'qualityAssessment'].some(key => Object.hasOwn(artifact, key)));
@@ -286,6 +402,20 @@ export class BatchJournal {
                     && event.detail?.version === 'model-request-timing-v1' && event.detail?.kind === 'transport');
                 target.transportAttempts = transports.length || undefined;
                 target.capabilitySummary = summarizeModelCapability(transports.map(event => event.detail));
+                const tier = classifyOutcomeTier(knowledge);
+                const failureInfo = tier === 'quality-passed' ? { stage: null, reasonCode: null }
+                    : extractFailureStageAndReason(knowledge, events);
+                const mutationScore = typeof knowledge.mutationScore === 'number' && Number.isFinite(knowledge.mutationScore)
+                    ? knowledge.mutationScore
+                    : typeof knowledge.retainedScore === 'number' && Number.isFinite(knowledge.retainedScore)
+                        ? knowledge.retainedScore : null;
+                this.targetFailureDetails.set(id, {
+                    tier,
+                    stage: failureInfo.stage,
+                    reasonCode: failureInfo.reasonCode,
+                    mutationScore,
+                    roleStats: summarizeRoleEvents(events)
+                });
                 this.reportSummaries.set(id, summarizeTarget(directory, knowledge, {
                     schemaVersion: 'target-report-v1', sourcePath: path.resolve(this.sourceRoot, target.file),
                     sourceFile: target.file, target: target.target, modelIdentity: this.identity.model, requestedTier: ''
@@ -294,6 +424,7 @@ export class BatchJournal {
             target.state = 'finished';
         } catch (error) {
             this.reportSummaries.delete(id);
+            this.targetFailureDetails.delete(id);
             const changed = error instanceof Error && error.message === 'source-changed';
             target.state = changed ? 'finished' : 'running';
             target.terminalStatus = changed ? 'source-changed' : 'incomplete-report';
@@ -311,7 +442,7 @@ export class BatchJournal {
     finish(status: 'completed' | 'cancelled' | 'failed' | 'environment-blocked'): void {
         // Earlier targets may have changed while later targets were running.
         for (const target of this.targets) {
-            if (['passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
+            if (['passed', 'quality-passed', 'execution-passed'].includes(target.terminalStatus || '')) { this.refresh(target.id); }
         }
         const unfinished = this.discoveryFailures.length || this.targets.some(target => target.state !== 'finished');
         const targetFailures = this.targets.some(target => !['environment', 'tool'].includes(target.category || '')
@@ -467,5 +598,168 @@ export class BatchJournal {
                         : `- ${reportCell(t.file)} :: ${reportCell(t.target)}：${localize('尚無流程報告；未計入通過。')}`;
                 }), ''].join('\n'), 'utf8');
         }
+        this.writeFailureSummary(mode, safe);
+    }
+
+    private writeFailureSummary(mode: VerificationMode, safe: (value: string) => string): void {
+        const tierCounts: Record<OutcomeTier, number> = {
+            'quality-passed': 0,
+            usable: 0,
+            failed: 0,
+            'environment-blocked': 0,
+            'tool-blocked': 0
+        };
+        const stageReasonMap = new Map<string, StageReasonSummary>();
+        const mergedRoleStats: Record<string, { requested: number; completed: number; error: number; contractRejected: number }> = {};
+        const summaryTargets: BatchFailureSummary['targets'] = [];
+
+        for (const target of this.targets) {
+            const detail = this.targetFailureDetails.get(target.id);
+            let tier: OutcomeTier;
+            let stage: string | null = null;
+            let reasonCode: string | null = null;
+            const mutationScore = detail?.mutationScore ?? null;
+
+            if (detail) {
+                tier = detail.tier;
+                stage = detail.stage;
+                reasonCode = detail.reasonCode;
+                for (const [role, counts] of Object.entries(detail.roleStats)) {
+                    const entry = (mergedRoleStats[role] ||= { requested: 0, completed: 0, error: 0, contractRejected: 0 });
+                    entry.requested += counts.requested;
+                    entry.completed += counts.completed;
+                    entry.error += counts.error;
+                    entry.contractRejected += counts.contractRejected;
+                }
+            } else if (target.terminalStatus === 'passed' || target.terminalStatus === 'quality-passed') {
+                tier = 'quality-passed';
+            } else if (target.terminalStatus === 'usable') {
+                tier = 'usable';
+                stage = target.stage || 'pipeline';
+                reasonCode = target.stopReason || 'usable-retained';
+            } else if (target.category === 'environment' || target.terminalStatus === 'environment-blocked') {
+                tier = 'environment-blocked';
+                stage = target.stage || 'environment';
+                reasonCode = target.preflightReason || target.environment?.kind || 'environment-blocked';
+            } else if (target.category === 'tool' || target.terminalStatus === 'tool-blocked') {
+                tier = 'tool-blocked';
+                stage = target.stage || 'tool';
+                reasonCode = 'tool-blocked';
+            } else {
+                tier = 'failed';
+                stage = target.stage || (target.state !== 'finished' ? target.state : 'pipeline');
+                reasonCode = target.stopReason || target.terminalStatus || target.state;
+            }
+
+            tierCounts[tier]++;
+            if (tier !== 'quality-passed') {
+                const resolvedStage = stage || 'pipeline';
+                const resolvedReason = reasonCode || target.terminalStatus || target.state;
+                stage = resolvedStage;
+                reasonCode = resolvedReason;
+                const key = `${resolvedStage}\u0000${resolvedReason}`;
+                const group = stageReasonMap.get(key) || {
+                    stage: resolvedStage,
+                    reasonCode: resolvedReason,
+                    count: 0,
+                    usableCount: 0,
+                    failedCount: 0,
+                    blockedCount: 0
+                };
+                group.count++;
+                if (tier === 'usable') { group.usableCount++; }
+                else if (tier === 'environment-blocked' || tier === 'tool-blocked') { group.blockedCount++; }
+                else { group.failedCount++; }
+                stageReasonMap.set(key, group);
+            }
+
+            summaryTargets.push({
+                id: target.id,
+                file: target.file,
+                target: target.target,
+                tier,
+                terminalStatus: target.terminalStatus || target.state,
+                stage,
+                reasonCode,
+                mutationScore
+            });
+        }
+
+        const byStageAndReason = [...stageReasonMap.values()].sort((a, b) =>
+            b.count - a.count || a.stage.localeCompare(b.stage) || a.reasonCode.localeCompare(b.reasonCode)
+        );
+        const roleUsability: Record<string, RoleUsabilitySummary> = {};
+        for (const role of Object.keys(mergedRoleStats).sort()) {
+            const item = mergedRoleStats[role];
+            const usableResponses = Math.max(0, item.completed - item.contractRejected);
+            roleUsability[role] = {
+                requested: item.requested,
+                completed: item.completed,
+                error: item.error,
+                contractRejected: item.contractRejected,
+                usableResponses,
+                usableRate: item.requested > 0 ? Number((usableResponses / item.requested).toFixed(4)) : null
+            };
+        }
+
+        const totalCount = Object.values(tierCounts).reduce((sum, count) => sum + count, 0);
+        const failureSummary: BatchFailureSummary = {
+            schemaVersion: 'batch-failure-summary-v1',
+            batchId: this.id,
+            model: this.identity.model,
+            validationMode: mode,
+            expectedTargets: this.targets.length,
+            finishedTargets: this.targets.filter(t => t.state === 'finished').length,
+            totalCount,
+            specMismatchCount: 0,
+            tierCounts,
+            byStageAndReason,
+            roleUsability,
+            targets: summaryTargets
+        };
+
+        const tempJson = path.join(this.directory, 'batch_failure_summary.pending.json');
+        fs.writeFileSync(tempJson, JSON.stringify(failureSummary, null, 2), 'utf8');
+        renameAtomicSync(tempJson, path.join(this.directory, 'batch_failure_summary.json'));
+
+        const mdLines = [
+            '# 批次失敗與分層結果彙總 (Batch Failure Summary)',
+            '',
+            `- 模型：${safe(this.identity.model)}`,
+            `- 目標總數（expectedTargets）：${failureSummary.expectedTargets}`,
+            `- 分層合計（totalCount）：${failureSummary.totalCount}`,
+            `- 規格不符總數（specMismatchCount）：${failureSummary.specMismatchCount}`,
+            '',
+            '## 終態分層統計 (Outcome Tiers)',
+            '',
+            '| 終態分層 (Tier) | 數量 |',
+            '| --- | ---: |',
+            `| quality-passed | ${tierCounts['quality-passed']} |`,
+            `| usable | ${tierCounts.usable} |`,
+            `| failed | ${tierCounts.failed} |`,
+            `| environment-blocked | ${tierCounts['environment-blocked']} |`,
+            `| tool-blocked | ${tierCounts['tool-blocked']} |`,
+            `| **合計 (Total)** | **${failureSummary.totalCount}** |`,
+            '',
+            '## 階段 × 原因碼計數 (Stage × Reason Code)',
+            '',
+            '| 階段 (Stage) | 原因碼 (Reason Code) | 數量 | usable | failed | blocked |',
+            '| --- | --- | ---: | ---: | ---: | ---: |',
+            ...(byStageAndReason.length
+                ? byStageAndReason.map(item =>
+                    `| ${safe(item.stage)} | ${safe(item.reasonCode)} | ${item.count} | ${item.usableCount} | ${item.failedCount} | ${item.blockedCount} |`)
+                : ['| — | — | 0 | 0 | 0 | 0 |']),
+            '',
+            '## 各角色回覆可用率 (Role Response Usability)',
+            '',
+            '| 角色 (Role) | 請求數 (Requested) | 完成數 (Completed) | 錯誤數 (Error) | 契約退回 (Rejected) | 可用回覆 (Usable) | 可用率 (Usable Rate) |',
+            '| --- | ---: | ---: | ---: | ---: | ---: | ---: |',
+            ...(Object.keys(roleUsability).length
+                ? Object.entries(roleUsability).map(([role, stats]) =>
+                    `| ${safe(role)} | ${stats.requested} | ${stats.completed} | ${stats.error} | ${stats.contractRejected} | ${stats.usableResponses} | ${stats.usableRate === null ? 'N/A' : (stats.usableRate * 100).toFixed(1) + '%'} |`)
+                : ['| — | 0 | 0 | 0 | 0 | 0 | N/A |']),
+            ''
+        ];
+        fs.writeFileSync(path.join(this.directory, 'batch_failure_summary.md'), mdLines.join('\n'), 'utf8');
     }
 }

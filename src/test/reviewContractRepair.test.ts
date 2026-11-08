@@ -1,8 +1,15 @@
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { test } from 'node:test';
 import { reviewWithContractRepair, ReviewContractEvent, ReviewContractRepairOptions } from '../roles/reviewContractRepair';
 import { ReviewSession } from '../roles/reviewSession';
 import { TargetBudget, runWithTargetBudget } from '../pipeline/targetBudget';
+import { TargetStopPolicy, runWithStopPolicy } from '../pipeline/stopPolicy';
+import { validateTestCandidate } from '../pipeline/testCandidatePipeline';
+import { evidenceHash } from '../pipeline/analysisJournal';
+import { ReviewFacts } from '../roles/reviewFacts';
+import { scalarProbeInput } from '../pipeline/probeInputs';
 import { AnalysisStageError } from '../utils/executionFailureCategory';
 import { testCodeBasis } from './reviewBasisFixture';
 
@@ -119,4 +126,280 @@ test('target self-mock proposals remain invalid even after correction', async ()
     assert.equal(await reviewWithContractRepair(options(async () => response, recorded)), undefined);
     assert.deepEqual(recorded.filter(event => event.status === 'invalid-response').map(event => event.detail.diagnostics),
         [['target-self-mock'], ['target-self-mock']]);
+});
+
+test('gpt_oss20b html_escape regression: basis reference format issues become Writer suggestions without deducting failure budget', async () => {
+    const fixturePath = path.resolve(__dirname, '../../test/fixtures/eval_screening/gpt_oss20b/bottle_utils_9e53c6fc/html_escape_6d4c4a8f/reviewer_response_fixture.json');
+    const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+    const identity = { runId: fixture.runId as string, sourceHash: fixture.sourceHash as string, target: fixture.target as string };
+    const seedFacts: ReviewFacts = {
+        schemaVersion: 'review-test-facts-v1',
+        ...identity,
+        module: fixture.module,
+        testHash: evidenceHash(fixture.seedCode),
+        executionVerified: true,
+        imports: [{ line: 1, binding: 'unittest', origin: 'unittest', harnessUseLines: [4] },
+            { line: 2, binding: 'html_escape', origin: 'bottle_utils.html_escape', targetUseLines: [6] }],
+        classes: [{ name: 'GeneratedSeedTests', line: 4, kind: 'unittest-harness' }],
+        methods: [{
+            name: 'test_seed',
+            line: 5,
+            endLine: 7,
+            calls: [{ line: 6, call: scalarProbeInput({ args: [''], kwargs: {} }).input, observationReturned: true }],
+            assertions: [{ line: 7, kind: 'assertEqual', targetResult: true, targetCallLine: 6,
+                expectedType: 'str',
+                expected: { schema_version: 'trace-value-v1', replayable: true, value: { type: 'str', value: '' } },
+                expectedOrigin: 'static-literal', observationVerified: true, observationStatus: 'verified' }],
+            exceptionGuards: [],
+            scalarBindings: [],
+            mockAssertions: []
+        }],
+        limitations: ''
+    };
+
+    const policy = new TargetStopPolicy({ failureLimit: 5 });
+    let reviewerCalls = 0;
+    let writerFeedbackReceived = '';
+    const recorded = events();
+
+    const candidateResult = await runWithStopPolicy(policy, async () =>
+        validateTestCandidate(fixture.seedCode, {
+            reviewRequired: true,
+            validate: async () => undefined,
+            execute: async code => ({
+                ok: true,
+                out: 'Ran 1 test in 0.001s\n\nOK',
+                qualityGaps: [],
+                coverage: {
+                    available: true,
+                    evidenceVersion: 'coverage-evidence-v1',
+                    scopeStatus: 'verified',
+                    executableTargetLines: [25],
+                    coverageText: '100.00%',
+                    missingLines: '',
+                    targetExecuted: true,
+                    missingTargetLines: [],
+                    targetFullyCovered: true,
+                    missingTargetBranches: [],
+                    targetBranchesCovered: true
+                }
+            }),
+            review: async code => {
+                reviewerCalls++;
+                if (reviewerCalls === 1) {
+                    return reviewWithContractRepair({
+                        tests: code,
+                        prompt: 'REVIEW_REQUEST_V8 html_escape seed',
+                        deadlineAt: 10_000,
+                        now: () => 100,
+                        constraints: { target: fixture.target, module: fixture.module, methodKind: 'module', identity, facts: seedFacts },
+                        request: async () => JSON.stringify(fixture.reviewerResponse),
+                        checkCancelled: () => {},
+                        event: (status, detail) => recorded.push({ status, detail })
+                    });
+                }
+                return { issues: [] };
+            },
+            revise: async (_code, feedback, role) => {
+                assert.equal(role, 'writer');
+                writerFeedbackReceived = feedback;
+                return fixture.writerRevisedCode;
+            },
+            event: () => {},
+            checkCancelled: () => {}
+        })
+    );
+
+    assert.equal(reviewerCalls, 2, 'Reviewer is not repeatedly retried on basis format mismatch; second call approves revised candidate');
+    assert.equal(policy.failureCount, 0, 'basis format fallback must not deduct target failure budget');
+    assert.equal(policy.remainingFailures, 5);
+    assert.equal(recorded.length, 1);
+    assert.equal(recorded[0].status, 'parsed');
+    assert.deepEqual(recorded[0].detail.diagnostics, ['evidence-reference-unrelated']);
+    assert.match(writerFeedbackReceived, /missing scenario for non-empty string with special characters/);
+    assert.equal(candidateResult.code, fixture.writerRevisedCode);
+    assert.equal(candidateResult.reviewStatus, 'completed');
+
+    for (const repeatedBasisFormat of [true, false]) {
+        let repeatedReviewerCalls = 0;
+        let repeatedWriterRevisions = 0;
+        const repeatedEvents: Array<{ stage: string; status: string; detail: unknown }> = [];
+        const repeatedResult = await runWithStopPolicy(new TargetStopPolicy({ failureLimit: 5 }), () =>
+            validateTestCandidate(fixture.seedCode, {
+                validate: async () => undefined,
+                execute: async () => ({
+                    ok: true,
+                    out: 'Ran 1 test in 0.001s\n\nOK',
+                    qualityGaps: []
+                }),
+                review: async code => {
+                    repeatedReviewerCalls++;
+                    const review = await reviewWithContractRepair({
+                        tests: code,
+                        prompt: 'REVIEW_REQUEST_V8 html_escape repeated basis issue',
+                        deadlineAt: 10_000,
+                        now: () => 100,
+                        constraints: { target: fixture.target, module: fixture.module, methodKind: 'module', identity,
+                            facts: { ...seedFacts, testHash: evidenceHash(code) } },
+                        request: async () => JSON.stringify(fixture.reviewerResponse),
+                        checkCancelled: () => {},
+                        event: () => {}
+                    });
+                    if (!repeatedBasisFormat && repeatedReviewerCalls > 1 && review) {
+                        delete review.basisFormatDiagnostics;
+                    }
+                    return review;
+                },
+                revise: async () => {
+                    repeatedWriterRevisions++;
+                    return fixture.writerRevisedCode;
+                },
+                event: (stage, status, detail) => repeatedEvents.push({ stage, status, detail }),
+                checkCancelled: () => {}
+            })
+        );
+        assert.equal(repeatedWriterRevisions, 1, 'basis format suggestion is handed to Writer at most once');
+        assert.equal(repeatedReviewerCalls, 2);
+        assert.equal(repeatedResult.code, fixture.writerRevisedCode);
+        assert.equal(repeatedResult.reviewStatus, 'incomplete');
+        assert.equal(repeatedResult.approvedCodeHash, undefined);
+        assert.ok(repeatedEvents.some(e => e.stage === 'reviewer' && e.status === 'suggestion-stopped'));
+    }
+
+    const unAdoptedPolicy = new TargetStopPolicy({ failureLimit: 5 });
+    let unAdoptedRevisions = 0;
+    const unAdoptedResult = await runWithStopPolicy(unAdoptedPolicy, () =>
+        validateTestCandidate(fixture.seedCode, {
+            validate: async () => undefined,
+            execute: async () => ({
+                ok: true,
+                out: 'Ran 1 test in 0.001s\n\nOK',
+                qualityGaps: []
+            }),
+            review: async code => reviewWithContractRepair({
+                tests: code,
+                prompt: 'REVIEW_REQUEST_V8 html_escape un-adopted suggestion',
+                deadlineAt: 10_000,
+                now: () => 100,
+                constraints: { target: fixture.target, module: fixture.module, methodKind: 'module', identity, facts: seedFacts },
+                request: async () => JSON.stringify(fixture.reviewerResponse),
+                checkCancelled: () => {},
+                event: () => {}
+            }),
+            revise: async code => {
+                unAdoptedRevisions++;
+                return code;
+            },
+            event: () => {},
+            checkCancelled: () => {}
+        })
+    );
+    assert.equal(unAdoptedRevisions, 1, 'stops immediately when Writer does not adopt the basis-format suggestion');
+    assert.equal(unAdoptedPolicy.failureCount, 0, 'un-adopted suggestion must not deduct target failure budget');
+    assert.equal(unAdoptedResult.code, fixture.seedCode, 'retains the passing baseline candidate');
+    assert.equal(unAdoptedResult.reviewStatus, 'incomplete');
+    assert.equal(unAdoptedResult.approvedCodeHash, undefined);
+});
+
+test('basis format variants convert to quality suggestions while fact and outcome contradictions remain blocked', async () => {
+    const identity = { runId: 'run-basis-check', sourceHash: 'a'.repeat(64), target: 'target' };
+    const facts: ReviewFacts = {
+        schemaVersion: 'review-test-facts-v1',
+        ...identity,
+        module: 'sample',
+        testHash: evidenceHash(tests),
+        executionVerified: true,
+        imports: [{ line: 1, binding: 'unittest', origin: 'unittest', harnessUseLines: [3] },
+            { line: 2, binding: 'target', origin: 'sample.target', targetUseLines: [5] }],
+        classes: [{ name: 'Cases', line: 3, kind: 'unittest-harness' }],
+        methods: [{
+            name: 'test_target',
+            line: 4,
+            endLine: 5,
+            calls: [{ line: 5, call: scalarProbeInput({ args: [1], kwargs: {} }).input, observationReturned: true }],
+            assertions: [{ line: 5, kind: 'assertEqual', targetResult: true, targetCallLine: 5,
+                expectedType: 'int',
+                expectedOrigin: 'static-literal', observationVerified: true, observationStatus: 'verified',
+                expected: { schema_version: 'trace-value-v1', replayable: true, value: { type: 'int', value: '2' } } }],
+            exceptionGuards: [],
+            scalarBindings: [],
+            mockAssertions: []
+        }],
+        limitations: ''
+    };
+    const constraints = { target: 'target', module: 'sample', methodKind: 'module' as const, identity, facts };
+
+    for (const basis of [
+        undefined,
+        { kind: 'test-code', ref: 'L4', field: 'judgment', value: 'unverified' },
+        { kind: 'host-fact', ref: 'A9.9', field: 'observationStatus', value: 'verified' },
+        { kind: 'host-fact', ref: 'I1', field: 'origin', value: 'unittest' }
+    ]) {
+        const policy = new TargetStopPolicy({ failureLimit: 3 });
+        let calls = 0;
+        const reply = JSON.stringify({
+            findings: [{
+                category: 'missing-scenario',
+                test_line: 'L5',
+                reason: 'Test only covers positive input; add negative input scenario.',
+                action: 'Add a negative input test case for target(-1).',
+                ...(basis === undefined ? {} : { basis })
+            }]
+        });
+        const review = await runWithStopPolicy(policy, () =>
+            reviewWithContractRepair({
+                tests,
+                prompt: 'TEST_FILE and complete evidence',
+                deadlineAt: 1_000,
+                now: () => 100,
+                constraints,
+                request: async () => { calls++; return reply; },
+                checkCancelled: () => {},
+                event: () => {}
+            })
+        );
+        assert.equal(calls, 1, 'basis format issues should not trigger Reviewer retry');
+        assert.equal(policy.failureCount, 0, 'basis format issues should not deduct failure budget');
+        assert.equal(review?.issues.length, 1);
+        assert.equal(review?.issues[0].severity, 'quality');
+        assert.deepEqual(review?.issues[0].basis, testCodeBasis(5));
+    }
+
+    for (const contradicted of [
+        {
+            category: 'assertion-quality',
+            test_line: 'L5',
+            reason: 'The observation status is contradicted.',
+            action: 'Add a separate negative case.',
+            basis: { kind: 'host-fact', ref: 'A1.1', field: 'observationStatus', value: 'contradicted' }
+        },
+        {
+            category: 'assertion-quality',
+            test_line: 'L5',
+            reason: 'Observed outcome differs from expected.',
+            action: 'Change the expected value to 99.',
+            basis: { kind: 'test-code', ref: 'L4', field: 'judgment', value: 'unverified' }
+        },
+        {
+            category: 'mock-isolation',
+            test_line: 'L5',
+            reason: 'Target should be isolated with a mock.',
+            action: 'Mock the target function with unittest.mock.patch.',
+            basis: { kind: 'host-fact', ref: 'A9.9', field: 'observationStatus', value: 'verified' }
+        }
+    ]) {
+        let calls = 0;
+        const review = await reviewWithContractRepair({
+            tests,
+            prompt: 'TEST_FILE and complete evidence',
+            deadlineAt: 1_000,
+            now: () => 100,
+            constraints,
+            request: async () => { calls++; return JSON.stringify({ findings: [contradicted] }); },
+            checkCancelled: () => {},
+            event: () => {}
+        });
+        assert.equal(review, undefined, 'contradictions must still be rejected even when combined with basis format issues');
+        assert.equal(calls, 2);
+    }
 });

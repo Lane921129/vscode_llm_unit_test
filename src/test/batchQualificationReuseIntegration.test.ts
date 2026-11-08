@@ -187,7 +187,8 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
                 'optional policy permits the actual review attempt');
             for (const item of result.targets) {
                 assert.ok(!item.events.some((event: any) => event.stage === 'reviewer' && event.status === 'approved'));
-                assert.ok(!item.events.some((event: any) => event.stage === 'mutation' && event.status === 'measured'));
+                assert.ok(item.events.some((event: any) => event.stage === 'mutation' && event.status === 'measured'),
+                    'retained executable baseline still measures mutation even when Reviewer rejects');
                 assert.notEqual(item.knowledge.terminalStatus, 'passed');
             }
         });

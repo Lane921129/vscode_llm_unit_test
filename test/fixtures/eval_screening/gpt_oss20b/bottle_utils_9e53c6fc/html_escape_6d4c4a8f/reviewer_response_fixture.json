@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "reviewer-basis-fallback-fixture-v1",
+  "runId": "45691891-371d-441c-97ed-af2cc09f4213",
+  "sourceHash": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+  "module": "bottle_utils",
+  "target": "html_escape",
+  "seedCode": "import unittest\nfrom bottle_utils import html_escape\n\nclass GeneratedSeedTests(unittest.TestCase):\n    def test_seed(self):\n        result = html_escape(\"\")\n        self.assertEqual(result, \"\")",
+  "reviewerResponse": {
+    "findings": [
+      {
+        "category": "missing-scenario",
+        "test_line": "L6",
+        "reason": "Test only covers empty string; missing scenario for non-empty string with special characters.",
+        "action": "Add a new test method or extend test_seed to include a non-empty string containing special characters (e.g., '&<>') and assert the expected escaped string.",
+        "basis": {
+          "kind": "evidence-gap",
+          "ref": "A1.1",
+          "field": "observationStatus",
+          "value": "verified"
+        }
+      }
+    ]
+  },
+  "writerRevisedCode": "import unittest\nfrom bottle_utils import html_escape\n\nclass GeneratedSeedTests(unittest.TestCase):\n    def test_seed(self):\n        result = html_escape(\"\")\n        self.assertEqual(result, \"\")\n\n    def test_special_characters(self):\n        result = html_escape(\"&<>\")\n        self.assertEqual(result, \"&amp;&lt;&gt;\")\n"
+}

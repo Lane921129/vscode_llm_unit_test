@@ -121,15 +121,16 @@ export async function reviewWithContractRepair(options: ReviewContractRepairOpti
         }
         checkContext(attempt);
         const parsed = parseTestReviewDetailed(raw, options.tests, true, options.constraints);
-        const rejectedFindings = parsed.review ? [] : projectRejectedReviewFindings(raw, options.tests, options.knownSecrets);
-        options.event(parsed.review ? 'parsed' : 'invalid-response', {
+        const effectiveReview = parsed.review ?? parsed.suggestedReview;
+        const rejectedFindings = effectiveReview ? [] : projectRejectedReviewFindings(raw, options.tests, options.knownSecrets);
+        options.event(effectiveReview ? 'parsed' : 'invalid-response', {
             contractVersion: ROLE_CONTRACT_VERSIONS.reviewer, attempt,
             responseHash: createHash('sha256').update(raw).digest('hex'), responseCharacters: raw.length,
-            diagnostics: parsed.diagnostics, ...(parsed.review
-                ? { result: redactCredentialStrings(parsed.review, options.knownSecrets) as TestReview }
+            diagnostics: parsed.diagnostics, ...(effectiveReview
+                ? { result: redactCredentialStrings(effectiveReview, options.knownSecrets) as TestReview }
                 : rejectedFindings.length ? { rejectedFindings } : {})
         });
-        if (parsed.review) { return parsed.review; }
+        if (effectiveReview) { return effectiveReview; }
         currentStopPolicy()?.reject('review-response-format');
         if (currentStopPolicy() || attempt === 0) {
             options.event('repair-requested', { contractVersion: ROLE_CONTRACT_VERSIONS.reviewer,

@@ -1,6 +1,6 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { presentOutcome, presentSummaryOutcome, stageLabel, withOutcomeHeader, describeStageEvent } from '../pipeline/resultPresentation';
+import { classifyOutcomeTier, isUsableOutcomeEvidence, presentOutcome, presentSummaryOutcome, stageLabel, withOutcomeHeader, describeStageEvent } from '../pipeline/resultPresentation';
 import { formatTierHistory, TierHistory } from '../pipeline/tierHistory';
 import { describeImportIssue } from '../environment/importDiagnostics';
 import * as fs from 'node:fs';
@@ -238,4 +238,48 @@ test('AI workflow progress keeps tool evidence separate from Writer tests and Re
             }
         }
     } finally { setLanguage(originalLanguage); }
+});
+
+test('PR #3 outcome tier classification separates quality-passed, usable, failed, environment-blocked and tool-blocked', () => {
+    assert.equal(classifyOutcomeTier({
+        terminalStatus: 'passed',
+        qualityAssessment: { fullyPassed: true }
+    }), 'quality-passed');
+    assert.equal(classifyOutcomeTier({
+        terminalStatus: 'quality-passed',
+        qualityAssessment: { fullyPassed: true }
+    }), 'quality-passed');
+
+    const usableRetained = {
+        terminalStatus: 'review-blocked',
+        acceptedTest: 'exec_seed.py',
+        execution: 'Ran 1 test in 0.001s\n\nOK',
+        coverage: { targetExecuted: true },
+        mutationStatus: 'complete',
+        mutationScore: 75
+    };
+    assert.equal(isUsableOutcomeEvidence(usableRetained), true);
+    assert.equal(classifyOutcomeTier(usableRetained), 'usable');
+
+    assert.equal(classifyOutcomeTier({
+        ...usableRetained,
+        coverage: { targetExecuted: false }
+    }), 'failed', 'must call the real target to be usable');
+    assert.equal(classifyOutcomeTier({
+        ...usableRetained,
+        mutationStatus: 'not-measured',
+        mutationScore: null
+    }), 'failed', 'must complete mutation measurement to be usable');
+    assert.equal(classifyOutcomeTier({
+        ...usableRetained,
+        evidenceValid: false
+    }), 'failed');
+    assert.equal(classifyOutcomeTier({
+        terminalStatus: 'failed',
+        failureCategory: 'environment'
+    }), 'environment-blocked');
+    assert.equal(classifyOutcomeTier({
+        terminalStatus: 'failed',
+        failureCategory: 'tool'
+    }), 'tool-blocked');
 });
