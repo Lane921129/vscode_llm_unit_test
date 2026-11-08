@@ -85,6 +85,31 @@ export async function validateTestCandidate(
     let toolRepairAttempts = 0;
     let unresolvedReview = false;
     let executionAttempted = Boolean(baseline);
+    let basisSuggestionHandedOff = false;
+    let pendingBasisSuggestionCandidate: { code: string; execution: CandidateExecution; warnings: string[] } | undefined;
+    const finalizeBasisSuggestionCandidate = async (
+        candidateState: { code: string; execution: CandidateExecution; warnings: string[] },
+        attempt: number,
+        reasonCode: string,
+        restoreExecutable: boolean
+    ) => {
+        if (restoreExecutable) {
+            await hooks.executable?.(candidateState.code, candidateState.execution);
+        }
+        hooks.event('reviewer', 'suggestion-stopped', {
+            attempt,
+            codeHash: repairHash(candidateState.code),
+            reasonCode
+        });
+        return {
+            code: candidateState.code,
+            execution: candidateState.execution,
+            reviewStatus: 'incomplete' as ReviewStatus,
+            approvedCodeHash: undefined,
+            qualityIssues: [...candidateState.execution.qualityGaps],
+            reviewWarnings: candidateState.warnings
+        };
+    };
     // One reserved handoff after a no-op or unusable method repair response.
     // It still consumes the enclosing target's candidate/request/time budgets.
     const recoverWithWriter = (attempt: number, reasonCode: 'repeated-candidate' | 'no-method-change' | 'response-format'): boolean => {
@@ -115,7 +140,7 @@ export async function validateTestCandidate(
             exceptionType, previousTestHash: repairHash(code) });
         return true;
     };
-    for (let attempt = 0; policy ? (policy.remainingFailures > 0 && attempt <= Math.max(revisionLimit, policy.settings.failureLimit * 3)) : attempt <= revisionLimit; attempt++) {
+    for (let attempt = 0; policy ? policy.remainingFailures > 0 : attempt <= revisionLimit; attempt++) {
         hooks.checkCancelled();
         policy?.beginAttempt();
         currentTargetBudget()?.consumeCandidateAttempt();
@@ -162,6 +187,11 @@ export async function validateTestCandidate(
                 candidate = arithmetic?.code ?? await hooks.revise(code, lastFailure, role, attempt, verifiedRepairEvidence);
             } catch (error) {
                 hooks.checkCancelled();
+                if (pendingBasisSuggestionCandidate && (error instanceof RepairResponseError
+                    || isModelContentFormatError(error)
+                    || (error instanceof AnalysisStageError && error.stage === 'writer-method-edit-scope' && error.category === 'validation'))) {
+                    return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, 'writer-suggestion-not-adopted', false);
+                }
                 if (policy && (error instanceof RepairResponseError
                     || isModelContentFormatError(error))) {
                     const reasonCode = error instanceof AnalysisStageError && error.stage === 'writer-method-edit-scope'
@@ -183,6 +213,9 @@ export async function validateTestCandidate(
             hooks.event(arithmetic ? 'source-expectation-repair' : role, 'candidate', {
                 attempt, code: candidate, ...(arithmetic ? { evidence: arithmetic.evidence } : {}) });
             if (!feedback.consider(candidate, lastFailure)) {
+                if (pendingBasisSuggestionCandidate) {
+                    return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, 'writer-repeated-candidate', false);
+                }
                 await reject(candidate, attempt, 'candidate-deduplication', 'repeated-candidate');
                 lastFailure = feedback.output;
                 hooks.event(role, 'repeated', { attempt, reason: lastFailure, category: 'validation', contractVersion: role === 'bug-fixer'
@@ -213,6 +246,9 @@ export async function validateTestCandidate(
                     throw new AnalysisStageError('tool', 'repair-scope', localize('修訂驗證工具無法完成；未繼續模型修復或降級 Tier。'),
                         { reasonCode: toolReason });
                 }
+                if (pendingBasisSuggestionCandidate) {
+                    return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, toolReason || 'writer-scope-rejected', false);
+                }
                 if (policy && !['candidate-syntax', 'no-method-change', 'edit-no-method-change', 'invalid-edit-python'].includes(toolReason || '')) {
                     throw new AnalysisStageError('validation', 'repair-scope', reason,
                         { reasonCode: toolReason || 'scope-rejected', previousTestUnchanged: true });
@@ -242,6 +278,9 @@ export async function validateTestCandidate(
         const invalidReason = typeof invalid === 'string' ? invalid : invalid?.reason;
         hooks.event('structure', invalid ? 'rejected' : 'passed', { attempt, reason: invalidReason });
         if (invalid) {
+            if (pendingBasisSuggestionCandidate) {
+                return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, 'writer-structure-rejected', true);
+            }
             executionRepairRole = undefined;
             unresolvedReview = false;
             await reject(code, attempt,
@@ -262,6 +301,9 @@ export async function validateTestCandidate(
             continue;
         }
         if (policy && !policy.firstExecution(repairHash(code))) {
+            if (pendingBasisSuggestionCandidate) {
+                return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, 'writer-repeated-execution', true);
+            }
             await reject(code, attempt, 'candidate-deduplication', 'repeated-candidate');
             lastFailure = 'Repeated candidate: this exact candidate was already executed. Change the rejected cause using existing evidence.';
             role = 'writer';
@@ -274,6 +316,9 @@ export async function validateTestCandidate(
         hooks.event('validation', execution.ok ? 'passed' : 'failed', { attempt, code, ...execution });
         const regression = feedback.record(execution.out, execution.testModule);
         if (!regression.accepted) {
+            if (pendingBasisSuggestionCandidate) {
+                return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, 'writer-regression', true);
+            }
             unresolvedReview = false;
             await reject(code, attempt, 'execution', 'candidate-regression');
             lastFailure = feedback.output;
@@ -282,8 +327,12 @@ export async function validateTestCandidate(
             if (writerRecoveryAttempt && !policy) { break; }
             continue;
         }
+        if (!execution.ok && pendingBasisSuggestionCandidate) {
+            return finalizeBasisSuggestionCandidate(pendingBasisSuggestionCandidate, attempt, 'writer-execution-failed', true);
+        }
         retainedCode = code;
         if (execution.ok) {
+            pendingBasisSuggestionCandidate = undefined;
             // Persist independently from review acceptance and later quality measurement.
             await hooks.executable?.(code, execution);
             let review: TestReview | undefined;
@@ -314,11 +363,30 @@ export async function validateTestCandidate(
             if (review?.issues.length) {
                 unresolvedReview = true;
                 const reviewReasonCode = review.issues.some(issue => issue.severity === 'blocking') ? 'review-blocking' : 'review-quality';
-                if (review.basisFormatDiagnostics?.length) {
-                    await hooks.rejectedCandidate?.(code, attempt, 'review', reviewReasonCode);
-                } else {
-                    await reject(code, attempt, 'review', reviewReasonCode);
+                const warnings = review.issues.map(issue =>
+                    `${issue.testLine ? `${issue.testLine}: ` : ''}${issue.reason}${issue.action ? ` (${issue.action})` : ''}`
+                );
+                if (basisSuggestionHandedOff) {
+                    if (!review.basisFormatDiagnostics?.length) {
+                        await reject(code, attempt, 'review', reviewReasonCode);
+                    }
+                    return finalizeBasisSuggestionCandidate({ code, execution, warnings }, attempt,
+                        review.basisFormatDiagnostics?.length ? 'repeated-basis-format-issue' : 'revision-not-approved', false);
                 }
+                if (review.basisFormatDiagnostics?.length) {
+                    const currentCandidateState = { code, execution, warnings };
+                    basisSuggestionHandedOff = true;
+                    pendingBasisSuggestionCandidate = currentCandidateState;
+                    hooks.event('reviewer', 'suggestion-handed-off', { attempt,
+                        codeHash: repairHash(code), reasonCode: 'basis-format-suggestion' });
+                    lastFailure = JSON.stringify(review.issues);
+                    role = 'writer';
+                    if ((writerRecoveryAttempt && !policy) || (!policy && attempt >= revisionLimit)) {
+                        return finalizeBasisSuggestionCandidate(currentCandidateState, attempt, 'revision-limit-reached', false);
+                    }
+                    continue;
+                }
+                await reject(code, attempt, 'review', reviewReasonCode);
                 lastFailure = JSON.stringify(review.issues);
                 role = 'writer';
                 if (writerRecoveryAttempt && !policy) { break; }

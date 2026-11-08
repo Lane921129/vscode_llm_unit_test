@@ -57,6 +57,10 @@ function readTest(directory: string, file: unknown, hash: unknown): { testFile: 
 export function summarizeTarget(directory: string, state: any, identity: ReportIdentity, sourceHash: string): TargetReportSummary {
     const outcome = presentOutcome(state);
     const unavailable = state.validationMode === 'execution' ? localize('未執行') : localize('尚未完成有效測量');
+    const mutationUnavailable = state.validationMode === 'execution' ? localize('未執行')
+        : typeof state.retainedMutationFailure?.reason === 'string' && state.retainedMutationFailure.reason.trim()
+            ? `${localize('尚未完成有效測量')}：${conciseReason(state.retainedMutationFailure.reason)}`
+            : localize('尚未完成有效測量');
     let reason = outcome.kind === 'passed' || outcome.kind === 'executed' ? localize('無')
         : state.failure || state.reason || outcome.label;
     if (!state.failure && !['passed', 'executed', 'skipped'].includes(outcome.kind)) {
@@ -67,7 +71,7 @@ export function summarizeTarget(directory: string, state: any, identity: ReportI
         ? localize('未完成：缺少完整通過證據') : outcome.label,
         ...(Array.isArray(state.qualityGaps) ? state.qualityGaps.filter((v: unknown) => typeof v === 'string') : [])].join('；');
     const result: TargetReportSummary = { included: !isReportExcluded(state.terminalStatus), outcome: outcome.label,
-        reason, summaryReason: ['passed', 'executed'].includes(outcome.kind) ? reason : publicReason, coverage: `N/A (${unavailable})`, mutation: `N/A (${unavailable})` };
+        reason, summaryReason: ['passed', 'executed'].includes(outcome.kind) ? reason : publicReason, coverage: `N/A (${unavailable})`, mutation: `N/A (${mutationUnavailable})` };
     if (outcome.state === 'review-blocked' && outcome.kind === 'pending') {
         result.latestCandidate = { status: 'review-blocked', mutation: 'not-run' };
     }

@@ -5,7 +5,7 @@
 ## 2026-11-08 PR #3（成功分層與批次失敗彙總）
 - 實作終態分層（`quality-passed`、`usable`、`failed`、`environment-blocked`、`tool-blocked`），將隔離通過、呼叫真實目標且完成突變量測的保留基線明確標示為 `usable`。
 - 保留下來的可執行基線（`checkpoints.executable`）於失敗或審查未完成收尾時一律補跑隔離突變測試並記錄 `quality_baseline.json`，Reviewer 僅決定能否升為 `quality-passed`。
-- Reviewer 回覆若僅 `basis` 引用格式不合（`missing-evidence-basis`、`invalid-evidence-basis`、`evidence-reference-missing`、`evidence-reference-unrelated`），不再反覆退回重試，改轉為建議交給 Writer 且不扣目標失敗額度；事實或執行結果矛盾照舊攔截。
+- Reviewer 僅 `basis` 格式不合時交給 Writer 一次修訂且不扣失敗額度；修訂仍未核准則保留為 `usable`，不增加原迴圈上限；保留基線量測失敗寫入 `retained-measurement-failed`。
 - 修正 `Review revision requires the current method inventory.` 工具受阻：審查修訂前若候選缺少 AST 方法清冊，自動補跑 `inventoryExecutedBaseline`。
 - `BatchJournal` 新增輸出 `batch_failure_summary.json` 與 `batch_failure_summary.md`，統計五類終態分層（合計等於 `expectedTargets`）、`stage × reasonCode` 分布、各角色回覆可用率與規格不符數；`test:fast`（776/776、48/48）與 `test:golden`（11/11）全過。
 
