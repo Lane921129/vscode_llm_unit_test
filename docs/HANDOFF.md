@@ -62,9 +62,9 @@
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
 | 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02a-target-selection`） | 2026-11-08 Antigravity |
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
-| 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過** | `pr/03-tiered-success-failure-summary` | 2026-11-08 Claude Code |
+| 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
-| 5 | case-table-v1 結構與驗證 | 未開始 | | |
+| 5 | case-table-v1 結構與驗證 | 進行中 | `pr/05-case-table` | 2026-11-08 Claude Code |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | 未開始 | | |
@@ -77,7 +77,23 @@
 
 ---
 
-## 2. PR #3 完成紀錄與下一步
+## 2. PR #5 進度與下一步（最新）
+
+### 2026-11-08 Claude Code 開始 PR #5
+
+- 起點：`lane_edition` 本機 HEAD `474e4e5`（PR #3 合併），開分支 `pr/05-case-table`。
+- PR #3 push 待辦：VM 對 `github.com` 的連線被代理擋下（HTTP 403），無法確認遠端 ref，也無法 push。使用者要在 Windows 執行：`git fetch origin`，確認 `git rev-parse origin/lane_edition` 是 `19d7394`，然後 `git push origin lane_edition`。若遠端不是 `19d7394`，不要 rebase 或 force，先回報。
+- 範圍（使用者指定）：只建 `src/pipeline/caseTable/` 型別、逐行解析、`python_scripts/case_row_validator.py` 與單元測試；不接 orchestrator、不改 v1、不寫提示詞。
+- 環境限制：本 agent 的 shell 是使用者電腦上的 Linux VM。`.venv` 是 Windows 的 Python 3.13，VM 裡不能用，所以 Python 測試先用 VM 的 Python 3.10 驗證；正式 `test:fast`／`test:python` 要在 Windows 原生執行。
+
+#### 下一步
+
+- [ ] 1. `caseTable.ts` 型別與 `caseRowParser.ts` 逐行解析＋Node 單元測試
+- [ ] 2. `case_row_validator.py` ＋ Python 單元測試
+- [ ] 3. 加進 fast／test:python 清單、CHANGELOG；check-types、lint、相關測試
+- [ ] 4. 交使用者在 Windows 跑 `test:fast`、`test:python`，貼摘要
+
+## 2. PR #3 完成紀錄（歷史）
 
 詳細說明：`eval/README.md`、`docs/模型篩選結果_2026_11_08.md`。本節為最新續接狀態；第 6 節保留歷史。
 
@@ -429,6 +445,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 23:10 | Claude Code | PR #3 合併／PR #5 開始 | 本機 `--no-ff` 合併 PR #3 到 `lane_edition`（`474e4e5`）；VM 連不到 GitHub，push 待使用者在 Windows 執行；開 `pr/05-case-table` | 本筆 docs commit |
 | 2026-11-08 23:00 | Claude Code | PR #3 驗收紀錄 | 監督核對結果一致；使用者驗收 PR #3；PR #4 延後（使用者決定） | 本筆 `docs(pr03): record full integration comparison` |
 | 2026-11-08 22:50 | Claude Code | PR #3 步驟 4、5／收尾 | 判讀背景 integration：Node 1053／1036 pass／17 fail（14 leaf，與既有清單完全相同，新增 0）、Python 842 OK；629 檔來源與 HEAD 零差異；golden 11/11 不重跑。未改程式，PR #3 待驗收 | 本筆 docs commit |
 | 2026-11-08 19:07 | Codex（GPT-6） | PR #3 步驟 4／背景驗證 | golden 11/11 零差異；完整 integration 已背景啟動（PID 14768），輸出寫 log；後續只看摘要與失敗名稱並逐案比對，不改已凍結程式 | `728a674`、`8f3d487`；本筆文件 checkpoint |
