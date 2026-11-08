@@ -94,16 +94,94 @@ class SignatureBindingTests(unittest.TestCase):
 
 
 class LiteralTests(unittest.TestCase):
-    def test_args_must_be_a_tuple_literal_and_kwargs_a_string_keyed_dict(self):
+    def test_args_must_be_literal_and_kwargs_a_string_keyed_dict(self):
         self.assertEqual(verdicts('bmi', [
-            row('C1', '(70)'), row('C2', '(make_weight(), 175)'), row('C3', '(70, 175)', '[1]'),
+            row('C2', '(make_weight(), 175)'), row('C3', '(70, 175)', '[1]'),
             row('C4', '(70, 175)', '{1: 2}'), row('C5', '(70, 175)', 'dict(a=1)'), row('C6', 'x' * 20001),
-        ]), [('C1', False, 'args-not-tuple'), ('C2', False, 'args-not-literal'), ('C3', False, 'kwargs-not-dict'),
-             ('C4', False, 'kwargs-not-dict'), ('C5', False, 'kwargs-not-literal'), ('C6', False, 'args-too-long')])
+            row('C7', 'weight'),
+        ]), [('C2', False, 'args-not-literal'), ('C3', False, 'kwargs-not-dict'),
+             ('C4', False, 'kwargs-not-dict'), ('C5', False, 'kwargs-not-literal'), ('C6', False, 'args-too-long'),
+             ('C7', False, 'args-not-literal')])
 
     def test_literal_containers_and_special_values_are_accepted(self):
         self.assertEqual(verdicts('flexible', [row('C1', "(-1.5, 'é', b'x', None, (1, [2]), {'k': {1, 2}})")]),
                          [('C1', True, None)])
+
+
+class ArgsNormalizationTests(unittest.TestCase):
+    def results(self, target, rows):
+        return validate_request(request(target, rows))['results']
+
+    def test_parenthesized_single_value_is_wrapped_and_binds(self):
+        self.assertEqual(self.results('Garage.normalize', [row('C1', '(70)')]), [
+            {'id': 'C1', 'valid': True, 'normalizedArgs': '(70,)', 'normalizations': ['args-wrapped-single']}])
+
+    def test_bare_scalar_and_list_are_wrapped_too(self):
+        self.assertEqual(self.results('Garage.normalize', [row('C1', '70'), row('C2', '[1,2]'), row('C3', "'ABC-123'")]), [
+            {'id': 'C1', 'valid': True, 'normalizedArgs': '(70,)', 'normalizations': ['args-wrapped-single']},
+            {'id': 'C2', 'valid': True, 'normalizedArgs': '([1, 2],)', 'normalizations': ['args-wrapped-single']},
+            {'id': 'C3', 'valid': True, 'normalizedArgs': "('ABC-123',)", 'normalizations': ['args-wrapped-single']}])
+
+    def test_tuples_are_left_untouched(self):
+        self.assertEqual(self.results('Garage.normalize', [row('C1', '(70,)'), row('C2', '((1, 2),)')]),
+                         [{'id': 'C1', 'valid': True}, {'id': 'C2', 'valid': True}])
+
+    def test_wrapped_args_that_still_do_not_bind_are_rejected(self):
+        self.assertEqual(verdicts('bmi', [row('C1', '(70)'), row('C2', '[70, 175]')]),
+                         [('C1', False, 'signature-mismatch'), ('C2', False, 'signature-mismatch')])
+        self.assertNotIn('normalizedArgs', self.results('bmi', [row('C1', '(70)')])[0])
+
+
+class DecoratedTargetTests(unittest.TestCase):
+    DECORATED = '''
+import functools
+
+def validator(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+@validator
+def iban(value, /):
+    return value
+
+@functools.lru_cache(maxsize=8)
+def cached(n):
+    return n
+
+def plain(x):
+    return x
+
+class Box:
+    @staticmethod
+    def make(x):
+        return x
+
+    @classmethod
+    def build(cls, x):
+        return cls()
+
+    @validator
+    def check(self, x):
+        return x
+'''
+
+    def report(self, target, rows=None):
+        return validate_request(request(target, rows or [row('C1', '(1,)')], source=self.DECORATED))
+
+    def test_decorated_targets_are_flagged_and_still_checked_against_the_def(self):
+        for target in ('iban', 'cached', 'Box.check'):
+            with self.subTest(target=target):
+                report = self.report(target, [row('C1', '(1,)'), row('C2', '(1, 2)')])
+                self.assertIs(report['decorated'], True)
+                self.assertEqual([item['valid'] for item in report['results']], [True, False])
+        self.assertNotIn('validator', json.dumps(self.report('iban')), 'decorator names are not reported')
+
+    def test_plain_static_and_class_methods_are_not_flagged(self):
+        for target in ('plain', 'Box.make', 'Box.build'):
+            with self.subTest(target=target):
+                self.assertIs(self.report(target)['decorated'], False)
 
 
 class DependencyTests(unittest.TestCase):
@@ -164,7 +242,8 @@ class RequestTests(unittest.TestCase):
         code = main(io.StringIO(json.dumps(request('bmi', [row('C1', '(1, 2)')]), ensure_ascii=False)), stdout)
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(stdout.getvalue()),
-                         {'version': REPORT_VERSION, 'target': 'bmi', 'results': [{'id': 'C1', 'valid': True}]})
+                         {'version': REPORT_VERSION, 'target': 'bmi', 'decorated': False,
+                          'results': [{'id': 'C1', 'valid': True}]})
         broken = io.StringIO()
         self.assertEqual(main(io.StringIO('{not json'), broken), 1)
         self.assertEqual(json.loads(broken.getvalue()), {'version': REPORT_VERSION, 'error': 'invalid-json'})

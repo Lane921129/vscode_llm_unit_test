@@ -6,7 +6,14 @@ Reads one JSON request on stdin and writes one JSON report on stdout:
               "target": "func" | "Class.method", "dependencies": ["db.fetchone", ...],
               "rows": [{"id": "C1", "args": "(1,)", "kwargs": "{}", "mocks": [...]},
                        {"id": "C2", "needsSetup": "...", "mocks": [...]}]}
-    report:  {"version": "case-row-validation-v1", "results": [{"id": "C1", "valid": true}, ...]}
+    report:  {"version": "case-row-validation-v1", "target": "...", "decorated": false,
+              "results": [{"id": "C1", "valid": true}, ...]}
+
+A non-tuple `args` literal (e.g. "(70)" or "70") is wrapped into a one-element
+tuple before binding; the verdict then carries "normalizedArgs": "(70,)" and
+"normalizations": ["args-wrapped-single"]. "decorated" is true when the target
+has decorators other than staticmethod/classmethod: the signature still comes
+from the def itself, so the runtime wrapper may accept different arguments.
 
 The target module is parsed, never imported or executed: the signature is rebuilt
 from the AST as a parameter-only stub, so binding checks cannot run user code.
@@ -23,6 +30,8 @@ REPORT_VERSION = 'case-row-validation-v1'
 MAX_LITERAL_CHARS = 20000
 DOTTED_NAME = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$')
 _STUB_NAME = '__case_row_target__'
+_METHOD_KIND_DECORATORS = frozenset({'staticmethod', 'classmethod'})
+ARGS_WRAPPED_SINGLE = 'args-wrapped-single'
 
 
 class RequestError(Exception):
@@ -76,6 +85,11 @@ def _strip_bound_parameter(arguments):
 
 def target_signature(source, target):
     """Build an inspect.Signature for the target from source text without executing it."""
+    return target_definition(source, target)[0]
+
+
+def target_definition(source, target):
+    """Return (inspect.Signature, decorated) for the target without executing the module."""
     if not isinstance(target, str) or not DOTTED_NAME.match(target):
         raise RequestError('invalid-target')
     try:
@@ -92,14 +106,16 @@ def target_signature(source, target):
         kwarg=ast.arg(arg=node.args.kwarg.arg) if node.args.kwarg else None,
         defaults=[ast.Constant(value=None) for _ in node.args.defaults],
     )
-    if is_method and 'staticmethod' not in _decorator_names(node):
+    decorators = _decorator_names(node)
+    if is_method and 'staticmethod' not in decorators:
         _strip_bound_parameter(arguments)
+    decorated = len(node.decorator_list) > len(decorators & _METHOD_KIND_DECORATORS)
     # Unparse the parameter list into source so the stub does not depend on
     # version-specific FunctionDef fields (e.g. type_params in Python 3.12+).
     stub = f'def {_STUB_NAME}({ast.unparse(arguments)}):\n    pass\n'
     namespace = {}
     exec(compile(stub, '<case-row-signature>', 'exec'), {'__builtins__': {}}, namespace)
-    return inspect.signature(namespace[_STUB_NAME])
+    return inspect.signature(namespace[_STUB_NAME]), decorated
 
 
 def _literal(text, field):
@@ -114,9 +130,12 @@ def _literal(text, field):
 
 
 def _check_call(row, signature):
+    """Bind the literal call; return the normalized args text when a non-tuple was wrapped."""
     args = _literal(row.get('args'), 'args')
+    normalized = None
     if not isinstance(args, tuple):
-        raise RowRejection('args-not-tuple')
+        args = (args,)
+        normalized = repr(args)
     kwargs = _literal(row.get('kwargs', '{}'), 'kwargs')
     if not isinstance(kwargs, dict) or not all(isinstance(key, str) for key in kwargs):
         raise RowRejection('kwargs-not-dict')
@@ -124,6 +143,7 @@ def _check_call(row, signature):
         signature.bind(*args, **kwargs)
     except TypeError as failure:
         raise RowRejection('signature-mismatch', str(failure))
+    return normalized
 
 
 def _check_mocks(mocks, dependencies):
@@ -147,6 +167,7 @@ def _check_mocks(mocks, dependencies):
 def validate_row(row, signature, dependencies):
     """Return the verdict for one row; never raises for row content."""
     row_id = row.get('id') if isinstance(row, dict) else None
+    normalized = None
     try:
         if not isinstance(row_id, str) or not row_id:
             raise RowRejection('invalid-row', 'row id must be a non-empty string')
@@ -155,13 +176,15 @@ def validate_row(row, signature, dependencies):
             if not isinstance(setup, str) or not setup.strip():
                 raise RowRejection('invalid-row', 'needsSetup must be a non-empty string')
         else:
-            _check_call(row, signature)
+            normalized = _check_call(row, signature)
         _check_mocks(row.get('mocks', []), dependencies)
     except RowRejection as rejection:
         verdict = {'id': row_id, 'valid': False, 'reason': rejection.reason}
         if rejection.detail:
             verdict['detail'] = rejection.detail
         return verdict
+    if normalized is not None:
+        return {'id': row_id, 'valid': True, 'normalizedArgs': normalized, 'normalizations': [ARGS_WRAPPED_SINGLE]}
     return {'id': row_id, 'valid': True}
 
 
@@ -174,11 +197,11 @@ def validate_request(request):
         if not isinstance(source, str) or not isinstance(rows, list) or not isinstance(dependencies, list) \
                 or not all(isinstance(name, str) for name in dependencies):
             raise RequestError('invalid-request')
-        signature = target_signature(source, request.get('target'))
+        signature, decorated = target_definition(source, request.get('target'))
     except RequestError as failure:
         return {'version': REPORT_VERSION, 'error': str(failure)}
     known = set(dependencies)
-    return {'version': REPORT_VERSION, 'target': request['target'],
+    return {'version': REPORT_VERSION, 'target': request['target'], 'decorated': decorated,
             'results': [validate_row(row, signature, known) for row in rows]}
 
 

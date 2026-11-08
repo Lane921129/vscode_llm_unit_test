@@ -14,16 +14,24 @@ export const SCENARIO_MAX_LENGTH = 80;
 export const CASE_CATEGORIES = ['normal', 'boundary', 'error', 'dependency-failure', 'state'] as const;
 export type CaseCategory = typeof CASE_CATEGORIES[number];
 
-export type CaseOrigin = 'analyst' | 'reviewer' | 'quality-analyst';
-export type ExpectedSource = 'spec' | 'observed';
-export type OutcomeKind = 'return' | 'raise';
-export type MockBehavior = 'return' | 'raise';
+export const CASE_ORIGINS = ['analyst', 'reviewer', 'quality-analyst'] as const;
+export type CaseOrigin = typeof CASE_ORIGINS[number];
+export const EXPECTED_SOURCES = ['spec', 'observed'] as const;
+export type ExpectedSource = typeof EXPECTED_SOURCES[number];
+export const OUTCOME_KINDS = ['return', 'raise'] as const;
+export type OutcomeKind = typeof OUTCOME_KINDS[number];
+export type MockBehavior = OutcomeKind;
 
-export type OracleStatus = 'spec-matched' | 'spec-mismatch' | 'needs-review'
-    | 'prediction-unstable' | 'observed-unconfirmed';
+export const ORACLE_STATUSES = ['spec-matched', 'spec-mismatch', 'needs-review',
+    'prediction-unstable', 'observed-unconfirmed'] as const;
+export type OracleStatus = typeof ORACLE_STATUSES[number];
 
-export type CaseRowStatus = 'proposed' | 'invalid' | 'captured' | 'capture-failed'
-    | 'test-generated' | 'test-passed' | 'test-failed';
+export const CASE_ROW_STATUSES = ['proposed', 'invalid', 'captured', 'capture-failed',
+    'test-generated', 'test-passed', 'test-failed'] as const;
+export type CaseRowStatus = typeof CASE_ROW_STATUSES[number];
+
+/** Host-side rewrites applied to a row, e.g. `args-wrapped-single` when `(70)` became `(70,)`. */
+export const ARGS_WRAPPED_SINGLE = 'args-wrapped-single';
 
 /** One patched dependency: `value` is a Python literal (return) or an exception name (raise). */
 export interface CaseMock {
@@ -67,6 +75,15 @@ export interface CaseRow {
     /** Reason code when the row is invalid or failed. */
     reason?: string;
     testMethod?: string;
+    /** Host normalizations applied to the model's row (kept for reporting). */
+    normalizations?: string[];
+}
+
+/** Persisted form of case_table.json in each target's result folder. */
+export interface CaseTableFile {
+    version: typeof CASE_TABLE_VERSION;
+    target: string;
+    rows: CaseRow[];
 }
 
 export function isCaseCategory(value: unknown): value is CaseCategory {
@@ -90,4 +107,33 @@ export function nextCaseRowIndex(rows: readonly Pick<CaseRow, 'id'>[]): number {
         if (match) { highest = Math.max(highest, Number(match[1])); }
     }
     return highest + 1;
+}
+
+/** The only status changes section 3.2 allows; every other change is a host bug. */
+export const CASE_ROW_TRANSITIONS: Readonly<Record<CaseRowStatus, readonly CaseRowStatus[]>> = {
+    'proposed': ['invalid', 'captured', 'capture-failed'],
+    'captured': ['test-generated'],
+    'test-generated': ['test-passed', 'test-failed'],
+    'invalid': [],
+    'capture-failed': [],
+    'test-passed': [],
+    'test-failed': []
+};
+
+const FAILURE_STATUSES: ReadonlySet<CaseRowStatus> = new Set<CaseRowStatus>(['invalid', 'capture-failed', 'test-failed']);
+
+/**
+ * Return a copy of the row in the next status. Failure statuses require a reason
+ * code; other statuses drop any earlier reason. Illegal changes throw.
+ */
+export function transitionCaseRow(row: CaseRow, next: CaseRowStatus, reason?: string): CaseRow {
+    if (!CASE_ROW_TRANSITIONS[row.status].includes(next)) {
+        throw new Error(`case-row-transition-invalid: ${row.id} ${row.status} -> ${next}`);
+    }
+    const { reason: _previous, ...rest } = row;
+    if (FAILURE_STATUSES.has(next)) {
+        if (!reason || !reason.trim()) { throw new Error(`case-row-transition-reason-required: ${row.id} -> ${next}`); }
+        return { ...rest, status: next, reason: reason.trim() };
+    }
+    return { ...rest, status: next };
 }

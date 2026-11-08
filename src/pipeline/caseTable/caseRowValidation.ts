@@ -30,6 +30,15 @@ export interface CaseRowValidationResult {
     valid: boolean;
     reason?: string;
     detail?: string;
+    /** Rewritten literal call, e.g. "(70,)" when the model wrote "(70)". */
+    normalizedArgs?: string;
+    normalizations?: string[];
+}
+
+export interface CaseRowValidationOutcome {
+    rows: CaseRow[];
+    /** The target has decorators other than staticmethod/classmethod; binding used the def itself. */
+    decorated: boolean;
 }
 
 export interface CaseRowValidationContext {
@@ -50,23 +59,34 @@ export function buildCaseRowValidationRequest(rows: readonly CaseRow[], context:
     };
 }
 
-/** Return new rows: proposed rows judged invalid become `invalid` with the validator's reason code. */
-export function applyCaseRowValidation(rows: readonly CaseRow[], report: unknown): CaseRow[] {
-    const results = readReport(report);
-    return rows.map(row => {
-        if (row.status !== 'proposed') { return row; }
-        const result = results.get(row.id);
-        if (!result) { throw new Error(`case-row-validation-incomplete: no verdict for ${row.id}`); }
-        return result.valid ? row : { ...row, status: 'invalid', reason: result.reason };
-    });
+/**
+ * Return new rows: proposed rows judged invalid become `invalid` with the validator's
+ * reason code; valid rows take any normalized args and keep the normalization codes.
+ */
+export function applyCaseRowValidation(rows: readonly CaseRow[], report: unknown): CaseRowValidationOutcome {
+    const { results, decorated } = readReport(report);
+    return {
+        decorated,
+        rows: rows.map(row => {
+            if (row.status !== 'proposed') { return row; }
+            const result = results.get(row.id);
+            if (!result) { throw new Error(`case-row-validation-incomplete: no verdict for ${row.id}`); }
+            if (!result.valid) { return { ...row, status: 'invalid', reason: result.reason }; }
+            if (result.normalizedArgs === undefined) { return row; }
+            if (needsSetup(row.call)) { throw new Error(`case-row-validation-malformed: normalized args for setup row ${row.id}`); }
+            return { ...row, call: { args: result.normalizedArgs, kwargs: row.call.kwargs },
+                normalizations: [...(row.normalizations ?? []), ...(result.normalizations ?? [])] };
+        })
+    };
 }
 
-function readReport(report: unknown): Map<string, CaseRowValidationResult> {
+function readReport(report: unknown): { results: Map<string, CaseRowValidationResult>; decorated: boolean } {
     if (!isRecord(report) || report.version !== CASE_ROW_VALIDATION_VERSION) {
         throw new Error('case-row-validation-malformed: unexpected report version');
     }
     if (typeof report.error === 'string') { throw new Error(`case-row-validation-failed: ${report.error}`); }
     if (!Array.isArray(report.results)) { throw new Error('case-row-validation-malformed: results must be an array'); }
+    if (typeof report.decorated !== 'boolean') { throw new Error('case-row-validation-malformed: decorated must be a boolean'); }
     const results = new Map<string, CaseRowValidationResult>();
     for (const entry of report.results) {
         if (!isRecord(entry) || typeof entry.id !== 'string' || typeof entry.valid !== 'boolean'
@@ -74,10 +94,20 @@ function readReport(report: unknown): Map<string, CaseRowValidationResult> {
             throw new Error('case-row-validation-malformed: invalid result entry');
         }
         if (results.has(entry.id)) { throw new Error(`case-row-validation-malformed: duplicate verdict for ${entry.id}`); }
-        results.set(entry.id, entry.valid ? { id: entry.id, valid: true }
-            : { id: entry.id, valid: false, reason: entry.reason as string });
+        results.set(entry.id, entry.valid ? validResult(entry) : { id: entry.id, valid: false, reason: entry.reason as string });
     }
-    return results;
+    return { results, decorated: report.decorated };
+}
+
+function validResult(entry: Record<string, unknown>): CaseRowValidationResult {
+    const id = entry.id as string;
+    if (entry.normalizedArgs === undefined && entry.normalizations === undefined) { return { id, valid: true }; }
+    const normalizations = entry.normalizations;
+    if (typeof entry.normalizedArgs !== 'string' || !entry.normalizedArgs.trim() || !Array.isArray(normalizations)
+        || normalizations.length === 0 || !normalizations.every(code => typeof code === 'string' && code.length > 0)) {
+        throw new Error(`case-row-validation-malformed: invalid normalization for ${id}`);
+    }
+    return { id, valid: true, normalizedArgs: entry.normalizedArgs, normalizations: [...normalizations] as string[] };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

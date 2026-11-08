@@ -28,6 +28,14 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-08 PR #5 案例表設計決策（監督審查 `c7e17fe` 後決定）**：
+1. `kwargs`、`mocks`、`requirement` 可空；`scenario`、`category`、`args` 必填。維持。
+2. **（使用者 11/08 核准，B 類）** `args` 解析出來不是 tuple 時，由驗證器包成單元素 tuple 再做簽名綁定。驗證結果回傳 `normalizedArgs`（例如 `"(70,)"`）與 `normalizations: ["args-wrapped-single"]`；TS 端套用到 `CaseRow.call.args`，並在列上保留 `normalizations`。tuple 照舊不動；不是字面值的仍拒為 `args-not-literal`。
+3. `mocks` 只在「字串字面值與括號之外」的 `;` 切段，值裡的 `;` 與 `->` 不能切壞；格式契約不變。
+4. 列數上限留給 PR #6，PR #5 不做。
+5. PR #5 補做架構第 4 節第 2 列的兩項：`case_table.json` 讀寫（`{version: "case-table-v1", target, rows}`，以 `renameAtomicSync` 原子寫入；讀取驗證版本與欄位，壞檔拋出明確錯誤，不回傳空表），以及狀態轉移純函式（只允許 `proposed→invalid|captured|capture-failed`、`captured→test-generated`、`test-generated→test-passed|test-failed`，其他拋錯）。不接 orchestrator。
+6. 有裝飾器的目標維持用 `def` 參數判斷，驗證報告加上 `decorated: true`（不寫入裝飾器名稱）。
+
 **2026-11-08 模型篩選結果（詳見 `docs/模型篩選結果_2026_11_08.md`）**：主力模型 **gpt-oss:20b**（26 個目標中完整通過 6、可執行 25、平均覆蓋率 90%），備援 **ministral-3:14b**。之後的開發驗證與評估都以 gpt-oss:20b 為準。
 - PR #3 追加需求：保留下來的可執行基線也要跑突變測試，不論 Reviewer 是否核准；否則「可用」層幾乎無法達成。
 - PR #3 追加 C 類修正：工具受阻 `Review revision requires the current method inventory.`（篩選中出現 4 次）。

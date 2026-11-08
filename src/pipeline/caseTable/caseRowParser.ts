@@ -72,10 +72,14 @@ export function parseCaseRows(text: string, options: ParseCaseRowsOptions): Case
     return { rows, rejected };
 }
 
-/** Parse the `mocks` field: `dep -> literal` or `dep -> raise ExceptionName`, separated by `;`. */
+/**
+ * Parse the `mocks` field: `dep -> literal` or `dep -> raise ExceptionName`, separated by `;`.
+ * Only a `;` outside string literals and brackets separates segments, so values such as
+ * `"a;b"` or `{'k': 'x -> y'}` stay whole. Unbalanced quotes or brackets reject the row.
+ */
 export function parseCaseMocks(text: string): CaseMock[] {
     const mocks: CaseMock[] = [];
-    for (const segment of text.split(';')) {
+    for (const segment of splitMockSegments(text)) {
         const part = segment.trim();
         if (!part) { continue; }
         const match = MOCK_SEGMENT.exec(part);
@@ -92,6 +96,38 @@ export function parseCaseMocks(text: string): CaseMock[] {
         }
     }
     return mocks;
+}
+
+const OPENERS = new Map([[')', '('], [']', '['], ['}', '{']]);
+
+function splitMockSegments(text: string): string[] {
+    const segments: string[] = [];
+    const brackets: string[] = [];
+    let current = '';
+    let quote: string | undefined;
+    let escaped = false;
+    for (const character of text) {
+        if (quote) {
+            current += character;
+            if (escaped) { escaped = false; } else if (character === '\\') { escaped = true; } else if (character === quote) { quote = undefined; }
+            continue;
+        }
+        if (character === "'" || character === '"') {
+            quote = character;
+        } else if (character === '(' || character === '[' || character === '{') {
+            brackets.push(character);
+        } else if (OPENERS.has(character)) {
+            if (brackets.pop() !== OPENERS.get(character)) { throw new LineRejection('invalid-mocks', 'mocks'); }
+        } else if (character === ';' && brackets.length === 0) {
+            segments.push(current);
+            current = '';
+            continue;
+        }
+        current += character;
+    }
+    if (quote || brackets.length) { throw new LineRejection('invalid-mocks', 'mocks'); }
+    segments.push(current);
+    return segments;
 }
 
 function parseLineObject(line: string): Record<string, unknown> {

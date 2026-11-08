@@ -1,6 +1,13 @@
 import * as assert from 'assert';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { test } from 'node:test';
-import { CaseRow, caseRowId, isCaseCategory, needsSetup, nextCaseRowIndex } from '../pipeline/caseTable/caseTable';
+import {
+    CASE_ROW_STATUSES, CASE_ROW_TRANSITIONS, CaseRow, CaseRowStatus, CaseTableFile,
+    caseRowId, isCaseCategory, needsSetup, nextCaseRowIndex, transitionCaseRow
+} from '../pipeline/caseTable/caseTable';
+import { CASE_TABLE_FILE, CaseTableFormatError, readCaseTable, writeCaseTable } from '../pipeline/caseTable/caseTableStore';
 import { parseCaseMocks, parseCaseRows } from '../pipeline/caseTable/caseRowParser';
 import {
     CASE_ROW_VALIDATION_REQUEST_VERSION, CASE_ROW_VALIDATION_VERSION,
@@ -149,7 +156,7 @@ test('the validator request carries only proposed rows and the AST dependency li
 
 test('validator verdicts mark only the rejected rows invalid', () => {
     const rows = proposedRows();
-    const updated = applyCaseRowValidation(rows, { version: CASE_ROW_VALIDATION_VERSION, results: [
+    const { rows: updated } = applyCaseRowValidation(rows, { version: CASE_ROW_VALIDATION_VERSION, decorated: false, results: [
         { id: 'C1', valid: true }, { id: 'C2', valid: true },
         { id: 'C3', valid: false, reason: 'signature-mismatch', detail: 'too many positional arguments' }
     ] });
@@ -161,14 +168,136 @@ test('validator verdicts mark only the rejected rows invalid', () => {
 test('a malformed or incomplete validator report is a tool failure, never a row verdict', () => {
     const rows = proposedRows();
     const ok = { id: 'C1', valid: true };
+    const v = CASE_ROW_VALIDATION_VERSION;
     for (const report of [
-        null, {}, { version: 'other', results: [] },
-        { version: CASE_ROW_VALIDATION_VERSION, error: 'target-not-found' },
-        { version: CASE_ROW_VALIDATION_VERSION, results: 'no' },
-        { version: CASE_ROW_VALIDATION_VERSION, results: [{ id: 'C1', valid: false }] },
-        { version: CASE_ROW_VALIDATION_VERSION, results: [ok, ok] },
-        { version: CASE_ROW_VALIDATION_VERSION, results: [ok, { id: 'C2', valid: true }] }
+        null, {}, { version: 'other', decorated: false, results: [] },
+        { version: v, error: 'target-not-found' },
+        { version: v, decorated: false, results: 'no' },
+        { version: v, results: [ok, { id: 'C2', valid: true }, { id: 'C3', valid: true }] },
+        { version: v, decorated: false, results: [{ id: 'C1', valid: false }] },
+        { version: v, decorated: false, results: [ok, ok] },
+        { version: v, decorated: false, results: [ok, { id: 'C2', valid: true }] },
+        { version: v, decorated: false, results: [{ id: 'C1', valid: true, normalizedArgs: '(1,)' }, { id: 'C2', valid: true }, { id: 'C3', valid: true }] },
+        { version: v, decorated: false, results: [ok, { id: 'C2', valid: true, normalizedArgs: '(1,)', normalizations: ['args-wrapped-single'] },
+            { id: 'C3', valid: true }] }
     ]) {
         assert.throws(() => applyCaseRowValidation(rows, report), /case-row-validation-/, JSON.stringify(report));
     }
+});
+
+test('mocks split only on semicolons outside string literals and brackets', () => {
+    assert.deepStrictEqual(parseCaseMocks(`log.write -> "a;b -> c"; cfg.load -> {'sep': ';', 'arrow': 'x->y'}; q.get -> ("x;", [1; 2])`), [
+        { dependency: 'log.write', behavior: 'return', value: '"a;b -> c"' },
+        { dependency: 'cfg.load', behavior: 'return', value: "{'sep': ';', 'arrow': 'x->y'}" },
+        { dependency: 'q.get', behavior: 'return', value: '("x;", [1; 2])' }
+    ]);
+    assert.deepStrictEqual(parseCaseMocks(String.raw`p.read -> 'it\'s; fine'; p.close -> None`), [
+        { dependency: 'p.read', behavior: 'return', value: String.raw`'it\'s; fine'` },
+        { dependency: 'p.close', behavior: 'return', value: 'None' }
+    ]);
+    const [row] = parseCaseRows(valid({ mocks: 'db.fetchone -> ("A;B", "x -> y")' }), options).rows;
+    assert.deepStrictEqual(row.mocks, [{ dependency: 'db.fetchone', behavior: 'return', value: '("A;B", "x -> y")' }]);
+    for (const mocks of ['db.fetchone -> "open', 'db.fetchone -> (1, 2', 'db.fetchone -> 1)', 'db.fetchone -> [1)']) {
+        assert.deepStrictEqual(parseCaseRows(valid({ mocks }), options).rejected,
+            [{ line: 1, reason: 'invalid-mocks', field: 'mocks' }], mocks);
+    }
+});
+
+test('wrapped single arguments replace the literal call and keep the normalization code', () => {
+    const rows = parseCaseRows([valid({ args: '(70)' }), valid({ args: '<needs-setup: 物件>' }), valid({ args: '(1, 2)' })].join('\n'), options).rows;
+    const outcome = applyCaseRowValidation(rows, { version: CASE_ROW_VALIDATION_VERSION, decorated: true, results: [
+        { id: 'C1', valid: true, normalizedArgs: '(70,)', normalizations: ['args-wrapped-single'] },
+        { id: 'C2', valid: true }, { id: 'C3', valid: true }
+    ] });
+    assert.strictEqual(outcome.decorated, true);
+    assert.deepStrictEqual(outcome.rows[0].call, { args: '(70,)', kwargs: '{}' });
+    assert.deepStrictEqual(outcome.rows[0].normalizations, ['args-wrapped-single']);
+    assert.strictEqual(outcome.rows[2].normalizations, undefined, 'tuples are not normalized');
+    assert.deepStrictEqual(rows[0].call, { args: '(70)', kwargs: '{}' }, 'input rows are not mutated');
+});
+
+const allowedTransitions: [CaseRowStatus, CaseRowStatus][] = [
+    ['proposed', 'invalid'], ['proposed', 'captured'], ['proposed', 'capture-failed'],
+    ['captured', 'test-generated'], ['test-generated', 'test-passed'], ['test-generated', 'test-failed']
+];
+
+test('each allowed status transition succeeds; failures need a reason and success drops it', () => {
+    const base = proposedRows()[0];
+    for (const [from, to] of allowedTransitions) {
+        const failure = to === 'invalid' || to === 'capture-failed' || to === 'test-failed';
+        const next = transitionCaseRow({ ...base, status: from, reason: 'old' }, to, failure ? 'why' : undefined);
+        assert.strictEqual(next.status, to, `${from} -> ${to}`);
+        assert.strictEqual(next.reason, failure ? 'why' : undefined, `${from} -> ${to}`);
+        assert.ok(!(!failure && 'reason' in next), 'a success status does not keep a stale reason');
+    }
+    assert.throws(() => transitionCaseRow(base, 'invalid'), /case-row-transition-reason-required/);
+    assert.throws(() => transitionCaseRow(base, 'capture-failed', '  '), /case-row-transition-reason-required/);
+    const allowedCount = CASE_ROW_STATUSES.reduce((total, status) => total + CASE_ROW_TRANSITIONS[status].length, 0);
+    assert.strictEqual(allowedCount, allowedTransitions.length, 'no transition beyond section 3.2 is allowed');
+});
+
+test('illegal status transitions throw', () => {
+    const base = proposedRows()[0];
+    for (const [from, to] of [['proposed', 'test-passed'], ['captured', 'invalid'], ['test-passed', 'test-failed'],
+        ['invalid', 'proposed'], ['test-failed', 'test-generated'], ['proposed', 'proposed']] as [CaseRowStatus, CaseRowStatus][]) {
+        assert.throws(() => transitionCaseRow({ ...base, status: from }, to, 'why'), /case-row-transition-invalid/, `${from} -> ${to}`);
+    }
+});
+
+function tableFixture(): CaseTableFile {
+    const [first, second, third] = proposedRows();
+    return { version: 'case-table-v1', target: 'Garage.find', rows: [
+        { ...first, status: 'test-passed', normalizations: ['args-wrapped-single'], testMethod: 'test_c1',
+            predictions: [{ kind: 'return', value: '(18.5, "健康")', basis: 'docstring: 18.5 <= BMI', basisVerified: true }],
+            actual: { kind: 'return', value: '(18.5, "健康")' },
+            expected: { kind: 'return', value: '(18.5, "健康")', source: 'spec', confirmedBySpec: true }, oracleStatus: 'spec-matched' },
+        second,
+        { ...third, status: 'invalid', reason: 'signature-mismatch' }
+    ] };
+}
+
+function tempDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'case-table-'));
+}
+
+test('case_table.json round-trips through an atomic write without leaving a pending file', () => {
+    const directory = tempDir();
+    try {
+        const table = tableFixture();
+        writeCaseTable(directory, table);
+        assert.deepStrictEqual(fs.readdirSync(directory), [CASE_TABLE_FILE]);
+        assert.deepStrictEqual(readCaseTable(directory), table);
+        writeCaseTable(directory, { ...table, rows: table.rows.slice(0, 1) });
+        assert.strictEqual(readCaseTable(directory).rows.length, 1, 'a second write replaces the file');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('damaged or wrong-version case tables throw a clear error instead of an empty table', () => {
+    const directory = tempDir();
+    const write = (content: string) => fs.writeFileSync(path.join(directory, CASE_TABLE_FILE), content, 'utf8');
+    const table = tableFixture();
+    try {
+        assert.throws(() => readCaseTable(directory), (error: NodeJS.ErrnoException) => error.code === 'ENOENT');
+        const cases: [string, string][] = [
+            ['{"version": "case-table-v1", "target": "x", "rows": [', '$'],
+            ['[]', '$'],
+            [JSON.stringify({ ...table, version: 'case-table-v0' }), 'version'],
+            [JSON.stringify({ version: 'case-table-v1', target: 'x' }), 'rows'],
+            [JSON.stringify({ ...table, target: '' }), 'target'],
+            [JSON.stringify({ ...table, rows: [{ ...table.rows[0], status: 'done' }] }), 'rows[0].status'],
+            [JSON.stringify({ ...table, rows: [{ ...table.rows[0], category: 'edge' }] }), 'rows[0].category'],
+            [JSON.stringify({ ...table, rows: [table.rows[1], table.rows[1]] }), 'rows[1].id'],
+            [JSON.stringify({ ...table, rows: [{ ...table.rows[1], call: { args: '(1,)' } }] }), 'rows[0].call.kwargs'],
+            [JSON.stringify({ ...table, rows: [{ ...table.rows[1], surprise: 1 }] }), 'rows[0].surprise'],
+            [JSON.stringify({ ...table, rows: [{ ...table.rows[1], mocks: [{ dependency: 'db.x', behavior: 'patch', value: '1' }] }] }),
+                'rows[0].mocks[0].behavior']
+        ];
+        for (const [content, field] of cases) {
+            write(content);
+            assert.throws(() => readCaseTable(directory), (error: unknown) =>
+                error instanceof CaseTableFormatError && error.code === 'case-table-invalid' && error.field === field, field);
+        }
+        assert.throws(() => writeCaseTable(directory, { ...table, version: 'v0' } as unknown as CaseTableFile), CaseTableFormatError,
+            'an invalid table is never written');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
