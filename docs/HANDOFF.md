@@ -97,7 +97,7 @@
 - [x] 1. 驗證保留基線量測失敗會寫入 `mutation/retained-measurement-failed`，沒有空 catch。
 - [x] 2. 驗證原迴圈上限與一次格式建議修訂；未核准只可為 `usable`，不得升為 `quality-passed`。
 - [x] 3. 驗證真實保留基線突變分數與 `html_escape` 建議進 Writer 提示兩項整合測試（另含量測失敗測試）。
-- [ ] 4. lint、test:related、test:fast、test:golden；golden 無差異後背景執行完整 test:integration，比對第 5 節既有 14 個失敗。
+- [ ] 4. lint、test:related、test:fast、test:golden 已通過；背景完整 test:integration 執行中，**下一步等完整 Node／Python 結束，逐案比對第 5 節既有 14 個失敗**。目前不得宣稱無新增失敗。
 - [ ] 5. golden 有差異立即停止並列差異，絕不更新快照；否則完成交接供驗收。
 
 | 本輪驗證 | 結果 | 證據 |
@@ -105,8 +105,8 @@
 | check-types / lint | 最終 fast 再驗通過 | `log/pr3-codex-fast.log` |
 | related | 最終 45/45 全過；初輪其他相關案例通過紀錄保留 | `log/pr3-codex-fixtures-v4.log`、`log/pr3-codex-related.log` |
 | fast | Node 776/776、Python 48/48，含型別、lint、Webview；退出碼 0 | `log/pr3-codex-fast.log`、`log/pr3-codex-fast.status.json` |
-| golden | 下一步，只比對、不更新 | 待執行 |
-| 完整 integration | 待執行並逐案比對既有 14 個失敗 | `log/pr3-codex-*` |
+| golden | 11/11 通過；五組快照零差異，來源雜湊無變更 | `log/pr3-codex-golden.log`、`log/pr3-codex-golden.status.json` |
+| 完整 integration | 背景執行中（PID 14768）；187 個 Node 檔、52 個 Python 檔。Node 若失敗仍補跑完整 Python tier，逐案比對第 5 節既有 14 個失敗 | `log/pr3-codex-integration.log`、`log/pr3-codex-integration.status.json`；來源版本證據 `log/pr3-codex-integration.source-before.json` |
 
 ### 2026-11-08 PR #3 歷史完成紀錄（後續五項續接以上節為準）
 
@@ -411,7 +411,8 @@ PR #4 是選配，建議延後，下一步直接做 PR #5（待使用者確認�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-08 19:03 | Codex（GPT-6） | PR #3 步驟 3 | 正式命令驗證保留基線真突變／usable、html_escape 建議進 Writer 且失敗額度 0、量測失敗事件與報告；相關 45/45，fast 776/48 全過 | 本筆 `test(pr03)`（收尾回填 hash） |
+| 2026-11-08 19:07 | Codex（GPT-6） | PR #3 步驟 4／背景驗證 | golden 11/11 零差異；完整 integration 已背景啟動（PID 14768），輸出寫 log；後續只看摘要與失敗名稱並逐案比對，不改已凍結程式 | `728a674`、`8f3d487`；本筆文件 checkpoint |
+| 2026-11-08 19:03 | Codex（GPT-6） | PR #3 步驟 3 | 正式命令驗證保留基線真突變／usable、html_escape 建議進 Writer 且失敗額度 0、量測失敗事件與報告；相關 45/45，fast 776/48 全過 | `8f3d487` |
 | 2026-11-08 19:02 | Codex（GPT-6） | PR #3 步驟 1、2 | 保留量測失敗 journal／安全診斷；恢復原迴圈條件、Writer 一次建議修訂；修復 artifact hook 誤扣。相關 45/45、fast 通過 | `728a674` |
 | 2026-11-08 18:47 | Codex（GPT-6） | PR #3 續接／開始 | 確認分支與 8a57e31、保留 Antigravity 修改；有 CodeGraph、無 AOCI；核對五項並補一次修訂終止分支，驗證待執行 | 起始 HEAD `8a57e31`；本筆產品修正 commit 見 git log |
 | 2026-11-08 17:58 | Antigravity | PR #3 成功分層與批次失敗彙總 | 完成終態分層（`quality-passed`／`usable`／`failed`）、保留基線一律跑突變測試、Reviewer `basis` 格式問題轉 Writer 建議且不扣額度（含 `html_escape` 回歸 fixture）、修復 `candidate-inventory-tool` 缺方法清冊與輸出 `batch_failure_summary.json`／`.md`；`test:fast`（776/776、48/48）與 `test:golden`（11/11 零差異）全過 | 見 PR 分支 `pr/03-tiered-success-failure-summary` 最新 commit |
