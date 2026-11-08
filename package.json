@@ -145,6 +145,37 @@
           ],
           "description": "%contributes.configuration.properties.llmUnitTest.validationMode.description%"
         },
+        "llmUnitTest.pipelineVersion": {
+          "type": "string",
+          "enum": [
+            "v1",
+            "v2-case-table"
+          ],
+          "default": "v1",
+          "enumDescriptions": [
+            "%contributes.configuration.properties.llmUnitTest.pipelineVersion.enumDescriptions.0%",
+            "%contributes.configuration.properties.llmUnitTest.pipelineVersion.enumDescriptions.1%"
+          ],
+          "description": "%contributes.configuration.properties.llmUnitTest.pipelineVersion.description%"
+        },
+        "llmUnitTest.specOracle": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "%contributes.configuration.properties.llmUnitTest.specOracle.enumDescriptions.0%",
+            "%contributes.configuration.properties.llmUnitTest.specOracle.enumDescriptions.1%"
+          ],
+          "description": "%contributes.configuration.properties.llmUnitTest.specOracle.description%"
+        },
+        "llmUnitTest.requirementsFile": {
+          "type": "string",
+          "default": "",
+          "description": "%contributes.configuration.properties.llmUnitTest.requirementsFile.description%"
+        },
         "llmUnitTest.mutationEngine": {
           "type": "string",
           "enum": ["builtin", "mutatest", "mutmut", "auto"],

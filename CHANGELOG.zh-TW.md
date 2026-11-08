@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-09 PR #6（v2 設定分流與 Analyst-情境）
+- 新增設定 `llmUnitTest.pipelineVersion`（v1／v2-case-table，預設 v1）、`specOracle`（auto／off）、`requirementsFile`，側欄可切換與選擇需求檔；orchestrator 只加入依設定分流到 `runCaseTablePipeline` 的分支。
+- 新增 `case_table_facts.py`（靜態擷取簽名、docstring、分支條件、可 patch 的相依與鏈）；`semanticAnalyzer.ts` 新增 v2 的 `getCaseScenarioPrompt`／`getCaseRowCorrectionPrompt`／`parseCaseRows`（最多 8 列，超過記錄 row-limit）。
+- v2 流程：情境回覆逐行解析、格式錯誤行只重問一次、Python 驗證後寫入 `case_table.json` 與拒絕紀錄；提示詞全文列於 `docs/v2_提示詞_待審.md`，審閱前不用於實驗室。
+- v1 提示詞、預算、重試、停止條件與 golden 均未修改。
+
 ## 2026-11-08 PR #5（case-table-v1 結構與驗證）
 - 新增 `src/pipeline/caseTable/`：`case-table-v1` 型別、逐行 JSON 解析（壞行記錄原因後丟棄，不影響其他行），檢查必要欄位、`category` 列舉、情境 80 字上限、需求編號與 `<needs-setup: …>`；`mocks` 只在字串與括號外的 `;` 切段。
 - 新增 `python_scripts/case_row_validator.py`：只解析不執行受測模組，由 AST 重建簽名後以 `literal_eval`＋`inspect.signature().bind` 檢查；非 tuple 的 `args` 包成單元素 tuple（回傳 `normalizedArgs` 與 `args-wrapped-single`，使用者核准）；`mocks` 只能用 AST 相依名稱；有裝飾器時報告 `decorated: true`。

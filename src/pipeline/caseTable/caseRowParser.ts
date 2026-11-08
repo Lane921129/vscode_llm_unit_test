@@ -37,6 +37,8 @@ export interface ParseCaseRowsOptions {
 
 export interface CaseRowParseResult {
     rows: CaseRow[];
+    /** 1-based response line of each accepted row (same order as `rows`). */
+    rowLines: number[];
     rejected: RejectedCaseLine[];
 }
 
@@ -54,6 +56,7 @@ export function parseCaseRows(text: string, options: ParseCaseRowsOptions): Case
     const requirementIds = new Set(options.requirementIds.map(id => id.trim()));
     let nextIndex = options.firstIndex ?? 1;
     const rows: CaseRow[] = [];
+    const rowLines: number[] = [];
     const rejected: RejectedCaseLine[] = [];
     text.split(/\r?\n/).forEach((raw, offset) => {
         const line = raw.trim();
@@ -61,6 +64,7 @@ export function parseCaseRows(text: string, options: ParseCaseRowsOptions): Case
         try {
             const fields = parseLineObject(line);
             rows.push({ id: caseRowId(nextIndex), origin: options.origin, ...rowFields(fields, requirementIds), status: 'proposed' });
+            rowLines.push(offset + 1);
             nextIndex += 1;
         } catch (failure) {
             if (!(failure instanceof LineRejection)) { throw failure; }
@@ -69,7 +73,7 @@ export function parseCaseRows(text: string, options: ParseCaseRowsOptions): Case
                 : { line: offset + 1, reason: failure.reason, field: failure.field });
         }
     });
-    return { rows, rejected };
+    return { rows, rowLines, rejected };
 }
 
 /**

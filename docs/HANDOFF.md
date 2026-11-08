@@ -84,7 +84,7 @@
 | 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
 | 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
-| 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
+| 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；VM 驗證通過，Windows 驗證待執行** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | 未開始 | | |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
@@ -96,7 +96,30 @@
 
 ---
 
-## 2. PR #5 進度與下一步（最新）
+## 2. PR #6～#8 進度（最新；疊加分支，見第 0 節 23:50 授權）
+
+### PR #6 `pr/06-v2-scenario`（2026-11-09 Claude Code）
+
+- **修改／新增檔案**：
+  - 設定：`package.json`、`package.nls.json`、`package.nls.zh-tw.json` 新增 `llmUnitTest.pipelineVersion`（v1｜v2-case-table，預設 v1）、`llmUnitTest.specOracle`（auto｜off，預設 auto）、`llmUnitTest.requirementsFile`（預設空）。
+  - 分流：`src/orchestrator.ts` 只在 `executeSingleFileAnalysis` 加 12 行：讀設定，是 v2 就在原本的 import fixture 與 target budget 範圍內呼叫 `runCaseTablePipeline`；v1 路徑不變。
+  - v2 入口：`src/pipeline/caseTable/runCaseTablePipeline.ts`（facts → 需求檔 → 情境請求 → 最多 8 列 → 格式錯誤行重問一次 → Python 驗證 → `case_table.json`＋`case_table_rejections.json`；沒有任何有效列時拋 `model-format`／`no-valid-case-rows`，但表格仍寫入）。
+  - 事實擷取：`python_scripts/case_table_facts.py`（新）＋ `src/pipeline/caseTable/caseTableFacts.ts`。相依名稱＝目標模組可解析的點名稱（`_connect`、`sqlite3.connect`、`os.path.exists`），或由這些呼叫綁定的區域變數上的呼叫（`cur.fetchone` → patch `_connect`、chain `()`,`cursor`,`()`,`fetchone`）；`with … as x` 會加上 `__enter__`；builtins 只收 `open`、`input`（`create: true`）。巢狀函式不掃描。
+  - 需求檔：`src/pipeline/caseTable/requirements.ts`（每行 `R1: 描述`，接受全形冒號與清單符號，重複 id 拋錯；讀不到或重複時是 `environment` 失敗，在任何模型請求之前）。
+  - 提示詞：`src/roles/semanticAnalyzer.ts` 末尾新增 `CASE_SCENARIO_ROW_LIMIT=8`、`getCaseScenarioPrompt`、`getCaseRowCorrectionPrompt`、`parseCaseRows`（包裝 PR #5 的解析器並套用列數上限）。舊函式沒動。全文見 `docs/v2_提示詞_待審.md`（新）。
+  - `PYTHON_TOOLS` 新增 `caseTableFacts`、`caseRowValidator`。
+  - PR #5 解析器回傳新增 `rowLines`（每列原始行號）。
+  - 側欄：`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/{en,zh-tw,messages}.ts`：「流程版本」選單、v2 時顯示「預期值來源」選單與需求檔選擇／清除。設定值只接受宣告的列舉，分析進行中不可改。
+  - 測試：`src/test/caseScenarioPrompt.test.ts`（fast，6）、`src/test/caseTablePipelineIntegration.test.ts`（integration，4，固定回覆＋真 Python 工具）、`python_scripts/test_case_table_facts.py`（5）；`verificationRunner.test.ts` Python 模組數 58→59。
+- **設計判斷（請監督確認）**：
+  1. 重問只針對以 `{` 開頭的壞行；純文字說明行（例如「Here are the scenarios:」）直接記錄、不重問，避免浪費請求。
+  2. 驗證器判為無效（簽名不符、相依不存在）的列標 `invalid`，**不重問**；重問只限解析層的格式錯誤。
+  3. 超過 8 列的處理：先收下前 8 個有效列，其餘記錄 `row-limit`；已滿 8 列時壞行也不再重問。
+  4. 批次模式下 v2 目標會 attach 到批次資料夾，但 PR #6 還沒有寫終態，批次彙總會把它算成未完成；終態在 PR #7 補上。
+- **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr6-check-types.log`）、lint 0／0 warning（`log/pr6-lint.log`）、test:webview 通過（`log/pr6-webview.log`）、related 71/71（caseScenarioPrompt、caseTable、caseTablePipelineIntegration、verificationRunner、localization、webviewContent、sidebarPreferences、readabilityImprovements；`log/pr6-related-node.log`）、Python 新模組 24/24（test_case_table_facts＋test_case_row_validator，VM Python 3.10）。
+- **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異：v1 路徑只多一個讀設定的判斷）。
+
+## 2-old. PR #5 進度與下一步
 
 ### 2026-11-08 Claude Code 開始 PR #5
 
@@ -435,6 +458,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Claude Code／PR #6）：沒有 AOCI MCP。新增：`python_scripts/case_table_facts.py`、`python_scripts/test_case_table_facts.py`、`src/pipeline/caseTable/{runCaseTablePipeline,caseTableFacts,requirements}.ts`、`src/test/caseScenarioPrompt.test.ts`、`src/test/caseTablePipelineIntegration.test.ts`、`docs/v2_提示詞_待審.md`。修改：`src/orchestrator.ts`、`src/roles/semanticAnalyzer.ts`、`src/pipeline/pythonTools.ts`、`src/pipeline/caseTable/caseRowParser.ts`、`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/{en,zh-tw,messages}.ts`、`package.json`、`package.nls*.json`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`。
 - 2026-11-08（Claude Code／PR #5 第二版）：再加上新檔 `src/pipeline/caseTable/caseTableStore.ts`；第一版清單中的檔案本輪也有修改。
 - 2026-11-08（Claude Code／PR #5）：沒有 AOCI MCP，未呼叫。新增／修改的受管理檔：`src/pipeline/caseTable/caseTable.ts`、`caseRowParser.ts`、`caseRowValidation.ts`、`src/test/caseTable.test.ts`、`python_scripts/case_row_validator.py`、`python_scripts/test_case_row_validator.py`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`。
 - 2026-11-08（Claude Code／PR #3 收尾）：沒有 AOCI MCP，未呼叫。本輪只改 `docs/HANDOFF.md`，受管理檔清單同下方 Codex 那一筆，不需新增。
@@ -519,6 +543,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 01:30 | Claude Code | PR #6 完成 | 設定分流、Analyst-情境、facts、需求檔、側欄；VM：check-types／lint 0、webview 通過、related 71/71、Python 24/24。Windows fast／python／golden 待執行 | 本筆 |
 | 2026-11-08 23:40 | Claude Code | PR #5 第 4 步（記錄 Windows 結果） | 使用者 Windows `test:fast` 通過：Node 796/796、Python fast 48/48；`test:python` 指令誤貼未執行，仍待使用者 | 本筆 |
 | 2026-11-09 00:45 | Claude Code | PR #5 第三版（監督確認三項解讀） | 第 0 節補第 7～9 項；新增全選填欄位往返測試；第 5 節加 CaseRow 欄位維護註記。VM：check-types／lint 0、related 40/40；Windows fast／python 待使用者執行 | 本筆 |
 | 2026-11-09 00:30 | Claude Code | PR #5 第二版（審查決定） | 第 0 節寫入六項決策；args 單元素包裝、decorated、mocks 安全切段、case_table.json 讀寫、狀態轉移。VM：check-types／lint 0、related 39/39、Python 19/19；Windows fast／python 待使用者執行 | `0dcec49`＋本筆 docs |

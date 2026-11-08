@@ -1,4 +1,5 @@
 import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
+import { readPipelineVersion, readSpecOracleSetting, runCaseTablePipeline } from './pipeline/caseTable/runCaseTablePipeline';
 import { loadTargetProbeFixtures, ProbeFixtureIdentity } from './pipeline/probeInputFixtures';
 import { traceTimingPreferences } from './pipeline/traceStartupBudget';
 import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics, readNativeTimeoutFeedback } from './pipeline/generatedRunnerDiagnostics';
@@ -1898,6 +1899,17 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const budget = planAnalysisTargetBudget(normalizeExecutionSettings(params).maxLoops, limits);
     const stopPolicy = currentStopPolicy() || new TargetStopPolicy(params.stopPolicy ?? config.get<unknown>('stopPolicy', {}));
     const targetBudget = currentTargetBudget() || new TargetBudget(budget);
+    // pipelineVersion routing only; every v2 step lives in src/pipeline/caseTable.
+    if (readPipelineVersion(config.get('pipelineVersion', 'v1')) === 'v2-case-table') {
+        return withImportFixtures(fixtures, () => runWithTargetBudget(targetBudget, async () => { await runCaseTablePipeline({
+            filePath: params.filePath, funcName: params.funcName, projectRoot: root, outputPath: params.outputPath,
+            sessionDate: params.sessionDate || formatSessionDate(), projectName: params.projectName,
+            batchDirectory: params.batchJournal?.directory,
+            onTargetDirectory: directory => { if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, directory); } },
+            pythonExecutable: normalizePythonExecutable(params.pythonExecutable),
+            requirementsFile: config.get<string>('requirementsFile', ''), specOracle: readSpecOracleSetting(config.get('specOracle', 'auto')),
+            requestModel: (system, user) => requestLlmApi(params, system, user, log), log }); }));
+    }
     const reportState: TargetReportState = {};
     return withImportFixtures(fixtures, async () => {
         try {

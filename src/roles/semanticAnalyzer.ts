@@ -15,6 +15,7 @@ import { isolatedResourceSystemRule } from '../prompts/isolatedResourceContext';
 import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templatePlaceholder';
 import { relevantSourceImports } from '../prompts/dependencyMockContract';
 import { createPromptContextReferences } from '../prompts/compactWriterContext';
+import { CaseRowParseResult, ParseCaseRowsOptions, parseCaseRows as parseCaseRowLines } from '../pipeline/caseTable/caseRowParser';
 
 // === Type Definitions ===
 
@@ -695,4 +696,150 @@ export function formatSemanticContextForPrompt(
  */
 export function buildSemanticAnalyzerSystemPrompt(): string {
     return getSemanticAnalyzerSystemPrompt();
+}
+
+// === v2 case table: Analyst-scenario (llmUnitTest.pipelineVersion = "v2-case-table" only) ===
+// The v1 prompts above are unchanged. Full prompt text is listed in docs/v2_提示詞_待審.md.
+
+/** Architecture section 4 row 3: at most eight scenario rows per target. */
+export const CASE_SCENARIO_ROW_LIMIT = 8;
+
+export interface CaseScenarioPromptFacts {
+    signature: string;
+    className: string | null;
+    methodKind: 'module' | 'instance' | 'static' | 'class';
+    isAsync: boolean;
+    docstring: string | null;
+    branches: readonly { line: number; kind: string; condition: string }[];
+    raises: readonly string[];
+    dependencies: readonly { name: string }[];
+    source: string;
+}
+
+export interface CaseScenarioRequirement {
+    id: string;
+    text: string;
+}
+
+export interface RolePrompt {
+    system: string;
+    user: string;
+}
+
+const CASE_SCENARIO_SYSTEM_PROMPT = [
+    'You are the test-scenario Analyst for one Python function.',
+    'Your only task is to list distinct test scenarios: normal inputs, the boundaries of every branch condition,',
+    'invalid inputs, dependency failures and state changes.',
+    'Do not write test code. Do not predict or state the expected result.'
+].join('\n');
+
+const CASE_ROW_FORMAT_LINES = [
+    'Each line is one JSON object with exactly these keys:',
+    '- "scenario": what the case checks, at most 80 characters',
+    '- "category": one of normal, boundary, error, dependency-failure, state',
+    '- "args": a Python tuple literal of the positional arguments, e.g. "(1, 2)";'
+        + ' write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
+    '- "kwargs": a Python dict literal of keyword arguments, "{}" when there are none',
+    '- "mocks": "" or entries "name -> literal" or "name -> raise ExceptionName", separated by ";"',
+    '- "requirement": a requirement id from the list, or ""'
+];
+
+const CASE_SCENARIO_EXAMPLE = '{"scenario":"value equal to the upper limit","category":"boundary","args":"(10, 0, 10)",'
+    + '"kwargs":"{}","mocks":"","requirement":""}';
+
+function caseScenarioContext(facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[]): string[] {
+    const owner = facts.className
+        ? `Method of class ${facts.className} (${facts.methodKind === 'instance' ? 'instance method; args exclude self'
+            : facts.methodKind === 'class' ? 'class method; args exclude cls' : 'static method'})`
+        : 'Module-level function';
+    return [
+        `Target: ${facts.isAsync ? 'async ' : ''}${facts.signature}`,
+        owner,
+        '',
+        'Docstring:',
+        facts.docstring?.trim() || '(none)',
+        '',
+        'Requirements:',
+        ...(requirements.length ? requirements.map(entry => `${entry.id}: ${entry.text}`) : ['(none)']),
+        '',
+        'Branch conditions:',
+        ...(facts.branches.length ? facts.branches.map(branch => `- line ${branch.line}: ${branch.kind} ${branch.condition}`) : ['(none)']),
+        ...(facts.raises.length ? ['', `Exceptions raised in the body: ${facts.raises.join(', ')}`] : []),
+        '',
+        'Dependencies you may mock (use exactly these names):',
+        ...(facts.dependencies.length ? facts.dependencies.map(dependency => `- ${dependency.name}`) : ['(none) - leave "mocks" empty'])
+    ];
+}
+
+/** Analyst-scenario prompt: sees the source so every branch can be covered; never asked for expected values. */
+export function getCaseScenarioPrompt(facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[]): RolePrompt {
+    const user = [
+        ...caseScenarioContext(facts, requirements),
+        '',
+        'Source:',
+        '```python',
+        facts.source,
+        '```',
+        '',
+        `Write at most ${CASE_SCENARIO_ROW_LIMIT} lines, one scenario per line.`,
+        ...CASE_ROW_FORMAT_LINES,
+        'Use each category at least once when it applies to this function.',
+        'Example line:',
+        CASE_SCENARIO_EXAMPLE,
+        `Output only the JSON lines (at most ${CASE_SCENARIO_ROW_LIMIT}), with no other text.`
+    ].join('\n');
+    return { system: CASE_SCENARIO_SYSTEM_PROMPT, user };
+}
+
+const CORRECTION_PROBLEMS: Record<string, string> = {
+    'invalid-json': 'it is not one valid JSON object',
+    'not-an-object': 'it is not a JSON object',
+    'missing-field': 'a required key is missing or empty',
+    'field-type': 'every value must be a JSON string',
+    'scenario-empty': '"scenario" is empty',
+    'scenario-too-long': '"scenario" is longer than 80 characters',
+    'unknown-category': '"category" is not one of the allowed values',
+    'invalid-needs-setup': '"args" must be a tuple literal or "<needs-setup: description>"',
+    'invalid-mocks': '"mocks" entries must look like "name -> literal" or "name -> raise ExceptionName"',
+    'unknown-requirement': '"requirement" is not an id from the list'
+};
+
+/** One-line format correction: the host re-asks only for the broken line, once. */
+export function getCaseRowCorrectionPrompt(line: string, reason: string, field: string | undefined,
+    facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[]): RolePrompt {
+    const problem = CORRECTION_PROBLEMS[reason] ?? 'it does not follow the line format';
+    const user = [
+        ...caseScenarioContext(facts, requirements),
+        '',
+        'This scenario line could not be used:',
+        line,
+        `Problem: ${problem}${field ? ` (key "${field}")` : ''}.`,
+        '',
+        'Rewrite it as one corrected line that keeps the same scenario.',
+        ...CASE_ROW_FORMAT_LINES,
+        'Example line:',
+        CASE_SCENARIO_EXAMPLE,
+        'Output only the one corrected JSON line, with no other text.'
+    ].join('\n');
+    return { system: CASE_SCENARIO_SYSTEM_PROMPT, user };
+}
+
+export interface CaseScenarioParseResult extends CaseRowParseResult {
+    /** Accepted rows beyond the row limit: dropped and recorded, never kept. */
+    overLimit: { line: number; reason: 'row-limit' }[];
+}
+
+/**
+ * Parse Analyst-scenario output: one JSON object per line (see caseRowParser),
+ * keeping at most `limit` accepted rows; later rows are recorded as `row-limit`.
+ */
+export function parseCaseRows(text: string, options: ParseCaseRowsOptions & { limit?: number }): CaseScenarioParseResult {
+    const limit = options.limit ?? CASE_SCENARIO_ROW_LIMIT;
+    const parsed = parseCaseRowLines(text, options);
+    return {
+        rows: parsed.rows.slice(0, limit),
+        rowLines: parsed.rowLines.slice(0, limit),
+        rejected: parsed.rejected,
+        overLimit: parsed.rowLines.slice(limit).map(line => ({ line, reason: 'row-limit' as const }))
+    };
 }
