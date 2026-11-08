@@ -1,0 +1,3 @@
+{"sequence":1,"runId":"run-min-tob","stage":"model-request","status":"requested","detail":{"role":"analyst-planning"}}
+{"sequence":2,"runId":"run-min-tob","stage":"model-request","status":"timing","detail":{"role":"analyst-planning","kind":"transport","ollama":{"completionReason":"stop"}}}
+{"sequence":3,"runId":"run-min-tob","stage":"model-request","status":"completed","detail":{"role":"analyst-planning"}}

@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "batchId": "f04db5dd-54d7-41fb-a2a8-55fa3f2241be",
+  "startedAt": "2026-11-07T09:12:28.000Z",
+  "finishedAt": "2026-11-07T10:03:50.000Z",
+  "validationMode": "full",
+  "stopPolicy": {
+    "failureLimit": 5,
+    "qualityNoImprovementLimit": 3,
+    "batchFailureLimit": 0
+  },
+  "stopReason": null,
+  "allTargetsExecutionVerified": false,
+  "status": "cancelled",
+  "complete": false,
+  "allTargetsPassed": false,
+  "preflightBlockedModules": 0,
+  "model": "mistral-nemo:12b",
+  "buildTimestamp": "2026-11-07T05:55:55.050Z",
+  "pythonExecutable": "/portable/python",
+  "scope": {
+    "root": "/portable/eval_screening",
+    "knownFiles": [
+      "bmi.py",
+      "bottle_utils.py"
+    ],
+    "selectedFiles": [
+      "bmi.py",
+      "bottle_utils.py"
+    ],
+    "excludedFiles": [],
+    "scopeId": "164a8e50d9d73edaf97781b471156c9e4d47e3fe1502b136463069310acb0df4"
+  },
+  "discoveredFiles": [
+    "bmi.py",
+    "bottle_utils.py"
+  ],
+  "discoveryFailures": [],
+  "expectedTargets": 3,
+  "finishedTargets": 2,
+  "attemptedTargets": 2,
+  "preflightBlockedTargets": 0,
+  "statusCounts": {
+    "failed": 1,
+    "cancelled": 1,
+    "pending": 1
+  },
+  "environmentIssues": [],
+  "rates": {
+    "denominator": 3,
+    "passed": 0,
+    "blocked": 0,
+    "incomplete": 0.6666666666666666
+  },
+  "cost": {
+    "modelRequests": 2,
+    "transportAttempts": 5,
+    "outputTokens": 0,
+    "unknownRequestTargets": 1
+  },
+  "modelCapabilitySummary": {
+    "version": "model-capability-summary-v1",
+    "completedTransports": 0,
+    "timedOutTransports": 0,
+    "lengthStoppedTransports": 0,
+    "outputTokens": 0,
+    "outputEvalMs": 0
+  },
+  "targets": [
+    {
+      "id": 0,
+      "file": "bmi.py",
+      "target": "calculate_bmi",
+      "state": "finished",
+      "reportDirectory": "bmi_8a865efd/calculate_bmi_251fb5b9",
+      "terminalStatus": "failed",
+      "category": "model-api",
+      "stage": "model-request",
+      "failureCount": 0,
+      "failureLimit": 5,
+      "stopReason": "model-api-error",
+      "modelRequests": 1,
+      "qualificationRequests": 0,
+      "formalRequests": 1,
+      "transportAttempts": 3
+    },
+    {
+      "id": 1,
+      "file": "bottle_utils.py",
+      "target": "tob",
+      "state": "finished",
+      "reportDirectory": "bottle_utils_9e53c6fc/tob_d198608a",
+      "terminalStatus": "cancelled",
+      "category": "cancelled",
+      "stage": "pipeline",
+      "failureCount": 0,
+      "failureLimit": 5,
+      "stopReason": "pipeline",
+      "modelRequests": 1,
+      "qualificationRequests": 0,
+      "formalRequests": 1,
+      "transportAttempts": 2
+    },
+    {
+      "id": 2,
+      "file": "bottle_utils.py",
+      "target": "html_escape",
+      "state": "pending"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "runId": "run-gpt-tob",
+  "sourceHash": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+  "target": "tob",
+  "terminalStatus": "passed",
+  "coverage": {
+    "coverageText": "18.82%",
+    "selectedTarget": {
+      "qualifiedName": "tob",
+      "executableLines": [12, 13, 14],
+      "missingLines": [],
+      "branchesCovered": true
+    }
+  },
+  "mutationScore": 100.0
+}

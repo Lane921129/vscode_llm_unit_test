@@ -98,13 +98,15 @@ const pythonTests = [
     'python_scripts/test_dependency_skill_facts.py',
     'python_scripts/test_skill_ab_summary.py',
     'python_scripts/test_resource_diagnostics.py',
-    'python_scripts/test_target_alias_bindings.py'
+    'python_scripts/test_target_alias_bindings.py',
+    'python_scripts/test_eval_aggregate.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',
     'python_scripts/test_numeric_skill.py',
     'python_scripts/test_mutation_engine_policy.py',
-    'python_scripts/test_quality_policy.py'
+    'python_scripts/test_quality_policy.py',
+    'python_scripts/test_eval_aggregate.py'
 ]);
 
 function discoverTests(root = workspaceRoot) {

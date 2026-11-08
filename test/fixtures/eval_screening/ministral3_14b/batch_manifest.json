@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "batchId": "7a8b9c0d-1111-4222-8333-444455556666",
+  "startedAt": "2026-11-07T12:00:00.000Z",
+  "finishedAt": "2026-11-07T12:05:00.000Z",
+  "validationMode": "full",
+  "stopPolicy": {
+    "failureLimit": 5,
+    "qualityNoImprovementLimit": 3,
+    "batchFailureLimit": 0
+  },
+  "stopReason": null,
+  "allTargetsExecutionVerified": false,
+  "status": "failed",
+  "complete": false,
+  "allTargetsPassed": false,
+  "preflightBlockedModules": 0,
+  "model": "ministral-3:14b",
+  "buildTimestamp": "2026-11-07T05:55:55.050Z",
+  "pythonExecutable": "/portable/python",
+  "scope": {
+    "root": "/portable/eval_screening",
+    "knownFiles": [
+      "bmi.py",
+      "bottle_utils.py",
+      "validators_utils.py"
+    ],
+    "selectedFiles": [
+      "bmi.py",
+      "bottle_utils.py",
+      "validators_utils.py"
+    ],
+    "excludedFiles": [],
+    "scopeId": "164a8e50d9d73edaf97781b471156c9e4d47e3fe1502b136463069310acb0df4"
+  },
+  "discoveredFiles": [
+    "bmi.py",
+    "bottle_utils.py",
+    "validators_utils.py"
+  ],
+  "discoveryFailures": [],
+  "expectedTargets": 3,
+  "finishedTargets": 3,
+  "attemptedTargets": 3,
+  "preflightBlockedTargets": 0,
+  "statusCounts": {
+    "retained-after-failure": 2,
+    "failed": 1
+  },
+  "environmentIssues": [],
+  "rates": {
+    "denominator": 3,
+    "passed": 0,
+    "blocked": 0,
+    "incomplete": 0
+  },
+  "cost": {
+    "modelRequests": 18,
+    "transportAttempts": 18,
+    "outputTokens": 4800,
+    "unknownRequestTargets": 0
+  },
+  "modelCapabilitySummary": {
+    "version": "model-capability-summary-v1",
+    "completedTransports": 18,
+    "timedOutTransports": 0,
+    "lengthStoppedTransports": 0,
+    "outputTokens": 4800,
+    "outputEvalMs": 150000.0
+  },
+  "targets": [
+    {
+      "id": 0,
+      "file": "bmi.py",
+      "target": "calculate_bmi",
+      "state": "finished",
+      "reportDirectory": "bmi_8a865efd/calculate_bmi_251fb5b9",
+      "terminalStatus": "retained-after-failure",
+      "category": "validation",
+      "stage": "target-failure-policy",
+      "failureCount": 5,
+      "failureLimit": 5,
+      "stopReason": "failure-limit",
+      "modelRequests": 6,
+      "qualificationRequests": 0,
+      "formalRequests": 6,
+      "transportAttempts": 6,
+      "capabilitySummary": {
+        "version": "model-capability-summary-v1",
+        "completedTransports": 6,
+        "timedOutTransports": 0,
+        "lengthStoppedTransports": 0,
+        "outputTokens": 1600,
+        "outputEvalMs": 50000.0
+      }
+    },
+    {
+      "id": 1,
+      "file": "bottle_utils.py",
+      "target": "tob",
+      "state": "finished",
+      "reportDirectory": "bottle_utils_9e53c6fc/tob_d198608a",
+      "terminalStatus": "retained-after-failure",
+      "category": "validation",
+      "stage": "quality-policy",
+      "failureCount": 3,
+      "failureLimit": 5,
+      "stopReason": "quality-no-improvement-limit",
+      "modelRequests": 6,
+      "qualificationRequests": 0,
+      "formalRequests": 6,
+      "transportAttempts": 6,
+      "capabilitySummary": {
+        "version": "model-capability-summary-v1",
+        "completedTransports": 6,
+        "timedOutTransports": 0,
+        "lengthStoppedTransports": 0,
+        "outputTokens": 1600,
+        "outputEvalMs": 50000.0
+      }
+    },
+    {
+      "id": 2,
+      "file": "validators_utils.py",
+      "target": "validator",
+      "state": "finished",
+      "reportDirectory": "validators_utils_f74e1201/validator_068f6792",
+      "terminalStatus": "failed",
+      "category": "validation",
+      "stage": "target-failure-policy",
+      "failureCount": 5,
+      "failureLimit": 5,
+      "stopReason": "failure-limit",
+      "modelRequests": 6,
+      "qualificationRequests": 0,
+      "formalRequests": 6,
+      "transportAttempts": 6,
+      "capabilitySummary": {
+        "version": "model-capability-summary-v1",
+        "completedTransports": 6,
+        "timedOutTransports": 0,
+        "lengthStoppedTransports": 0,
+        "outputTokens": 1600,
+        "outputEvalMs": 50000.0
+      }
+    }
+  ]
+}
