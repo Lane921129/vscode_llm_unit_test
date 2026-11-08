@@ -28,6 +28,13 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-08 模型篩選結果（詳見 `docs/模型篩選結果_2026_11_08.md`）**：主力模型 **gpt-oss:20b**（26 個目標中完整通過 6、可執行 25、平均覆蓋率 90%），備援 **ministral-3:14b**。之後的開發驗證與評估都以 gpt-oss:20b 為準。
+- PR #3 追加需求：保留下來的可執行基線也要跑突變測試，不論 Reviewer 是否核准；否則「可用」層幾乎無法達成。
+- PR #3 追加 C 類修正：工具受阻 `Review revision requires the current method inventory.`（篩選中出現 4 次）。
+- PR #3 追加 Reviewer 修改（使用者 11/08 核准）：Reviewer 回覆若只是 `basis` 引用格式不合，改把 findings 當建議傳給 Writer，不反覆退回，也不扣目標失敗額度；與實際執行結果或來源事實矛盾的主張照舊擋下。依據：篩選中 31 個審查阻擋目標有 24 個是回覆被格式驗證退回，例如 gpt-oss 的 `html_escape` 正確指出缺少特殊字元情境卻被退回 4 次。詳見架構文件第 9 節 PR #3。
+- 待實驗：gpt-oss:20b 的 `localThinkingMode` A/B（provider-default vs disabled）。這批有 64 次輸出截斷，輸出 tokens 是其他模型的 6～12 倍。
+
+
 0. **2026-11-04 15:30 方向調整（與指導教授討論後，優先於下列舊項目）**：不做錯誤定位。原本的兩種模式合併成單一流程，「預期值以規格為準」：有規格來源時，由模型依規格預測預期值，預測提示中不含函式本體與任何執行結果；與實際結果不一致時，不寫進正式測試，改列入 `test_spec_mismatch.py` 和規格不符報告。設定改為 `llmUnitTest.specOracle: auto | off`，不再有 `generationGoal`。詳見架構文件 0.1、1.3 節。
 1. 分層成功（`usable` / `quality-passed`）、允許模型依規格預測預期值、只使用非中國大陸的模型。詳見架構文件 0.1 節。
 2. `050f969` 的停止政策保留：`failureLimit=5`、`qualityNoImprovementLimit=3`、`batchFailureLimit=0`。環境受阻、工具受阻和 HTTP 重試不扣額度。
@@ -53,6 +60,7 @@
 | PR | 內容 | 狀態 | 分支 | 最後更新 |
 | --- | --- | --- | --- | --- |
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
+| 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | 未開始（**優先，先於 PR #2**） | | 2026-11-07 Claude（規劃） |
 | 2 | 模型篩選工具與評估集 | 未開始 | | |
 | 3 | 成功分層與批次失敗彙總 | 未開始 | | |
 | 4 | 測試範圍預設排除備份與副本 | 未開始 | | |
@@ -234,7 +242,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 - [ ] 6. AOCI 維護依 11/7 使用者決定可延後，不阻擋 PR #2；日後只在最終穩定狀態維護一次，受阻列人工項目，不自行 acknowledge。
 - [x] 7. 使用者已驗收PR #1；本次合併至lane_edition並依授權正常push至origin/lane_edition，以本機HEAD與遠端ref一致核對。
 
-**接續入口：下一個 PR 對話從 PR #2「模型篩選工具與評估集」開始。** 先完整讀本檔與架構0.1／1.3，再依第9節PR #2範圍及6.1／6.2評估設定執行；依架構的一PR一對話規則，本對話只完成PR #1。第6步AOCI與第5節既有失敗保留追蹤，不阻擋PR #2。PR #1已經使用者驗收並合併主線，第7步門檻已通過。真實模型／GPU及跨平台驗收仍需實驗室執行。
+**接續入口（2026-11-07 更新）：下一個 PR 對話先做 PR #2a「側欄目標選擇改善」，規格在 `docs/側欄目標選擇改善規格_2026_11_07.md`；完成後再做 PR #2。** 篩選用評估資料夾已建立於 `D:/read/專題/test/eval_screening/`（26 個函式，清單在 `targets.json`），PR #2 建立 `eval/eval-set-v1.json` 時以它為準。以下為原接續說明： 先完整讀本檔與架構0.1／1.3，再依第9節PR #2範圍及6.1／6.2評估設定執行；依架構的一PR一對話規則，本對話只完成PR #1。第6步AOCI與第5節既有失敗保留追蹤，不阻擋PR #2。PR #1已經使用者驗收並合併主線，第7步門檻已通過。真實模型／GPU及跨平台驗收仍需實驗室執行。
 
 ---
 
@@ -321,6 +329,9 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 15:15 | Claude（規劃） | PR #3 追加 Reviewer 格式退回改為建議 | 使用者核准；架構文件第 9 節同步 | 未 commit |
+| 2026-11-08 15:05 | Claude（規劃） | 分析實驗室模型篩選結果 | 主力 gpt-oss:20b、備援 ministral-3:14b；PR #3 追加兩項 | 未 commit |
+| 2026-11-07 14:30 | Claude（規劃） | 新增 PR #2a 規格；建立 eval_screening（26 函式） | 使用者回報側欄排序、多選、批次連動問題 | 未 commit |
 | 2026-11-07 | Codex | PR #1 驗收／合併主線 | 使用者驗收通過；no-ff合併codex/pr1-regression-baseline至lane_edition並正常push，HANDOFF標記完成；第6步AOCI仍為待辦 | 本次merge commit（保留e1bae98／c845d44） |
 | 2026-11-07 | Codex | PR #1 步驟5／完成交接 | 全量逐案比較無新增失敗；4／4.5／5已勾選，既有14案留第5節；歷史憑證掃描及diff檢查通過。AOCI可後補，下一PR對話從#2開始 | e1bae98＋本筆fix: restore PR1 regression contracts（僅兩筆） |
 | 2026-11-07 | Codex | PR #1 步驟4.5 | 單一spec oracle決策、品質Reviewer／規格盲測界線及五行CHANGELOG完成 | 本步docs WIP（最終第5步整併） |
