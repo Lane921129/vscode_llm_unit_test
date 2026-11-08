@@ -219,6 +219,86 @@ test('gpt_oss20b html_escape regression: basis reference format issues become Wr
     assert.match(writerFeedbackReceived, /missing scenario for non-empty string with special characters/);
     assert.equal(candidateResult.code, fixture.writerRevisedCode);
     assert.equal(candidateResult.reviewStatus, 'completed');
+
+    for (const repeatedBasisFormat of [true, false]) {
+        let repeatedReviewerCalls = 0;
+        let repeatedWriterRevisions = 0;
+        const repeatedEvents: Array<{ stage: string; status: string; detail: unknown }> = [];
+        const repeatedResult = await runWithStopPolicy(new TargetStopPolicy({ failureLimit: 5 }), () =>
+            validateTestCandidate(fixture.seedCode, {
+                validate: async () => undefined,
+                execute: async () => ({
+                    ok: true,
+                    out: 'Ran 1 test in 0.001s\n\nOK',
+                    qualityGaps: []
+                }),
+                review: async code => {
+                    repeatedReviewerCalls++;
+                    const review = await reviewWithContractRepair({
+                        tests: code,
+                        prompt: 'REVIEW_REQUEST_V8 html_escape repeated basis issue',
+                        deadlineAt: 10_000,
+                        now: () => 100,
+                        constraints: { target: fixture.target, module: fixture.module, methodKind: 'module', identity,
+                            facts: { ...seedFacts, testHash: evidenceHash(code) } },
+                        request: async () => JSON.stringify(fixture.reviewerResponse),
+                        checkCancelled: () => {},
+                        event: () => {}
+                    });
+                    if (!repeatedBasisFormat && repeatedReviewerCalls > 1 && review) {
+                        delete review.basisFormatDiagnostics;
+                    }
+                    return review;
+                },
+                revise: async () => {
+                    repeatedWriterRevisions++;
+                    return fixture.writerRevisedCode;
+                },
+                event: (stage, status, detail) => repeatedEvents.push({ stage, status, detail }),
+                checkCancelled: () => {}
+            })
+        );
+        assert.equal(repeatedWriterRevisions, 1, 'basis format suggestion is handed to Writer at most once');
+        assert.equal(repeatedReviewerCalls, 2);
+        assert.equal(repeatedResult.code, fixture.writerRevisedCode);
+        assert.equal(repeatedResult.reviewStatus, 'incomplete');
+        assert.equal(repeatedResult.approvedCodeHash, undefined);
+        assert.ok(repeatedEvents.some(e => e.stage === 'reviewer' && e.status === 'suggestion-stopped'));
+    }
+
+    const unAdoptedPolicy = new TargetStopPolicy({ failureLimit: 5 });
+    let unAdoptedRevisions = 0;
+    const unAdoptedResult = await runWithStopPolicy(unAdoptedPolicy, () =>
+        validateTestCandidate(fixture.seedCode, {
+            validate: async () => undefined,
+            execute: async () => ({
+                ok: true,
+                out: 'Ran 1 test in 0.001s\n\nOK',
+                qualityGaps: []
+            }),
+            review: async code => reviewWithContractRepair({
+                tests: code,
+                prompt: 'REVIEW_REQUEST_V8 html_escape un-adopted suggestion',
+                deadlineAt: 10_000,
+                now: () => 100,
+                constraints: { target: fixture.target, module: fixture.module, methodKind: 'module', identity, facts: seedFacts },
+                request: async () => JSON.stringify(fixture.reviewerResponse),
+                checkCancelled: () => {},
+                event: () => {}
+            }),
+            revise: async code => {
+                unAdoptedRevisions++;
+                return code;
+            },
+            event: () => {},
+            checkCancelled: () => {}
+        })
+    );
+    assert.equal(unAdoptedRevisions, 1, 'stops immediately when Writer does not adopt the basis-format suggestion');
+    assert.equal(unAdoptedPolicy.failureCount, 0, 'un-adopted suggestion must not deduct target failure budget');
+    assert.equal(unAdoptedResult.code, fixture.seedCode, 'retains the passing baseline candidate');
+    assert.equal(unAdoptedResult.reviewStatus, 'incomplete');
+    assert.equal(unAdoptedResult.approvedCodeHash, undefined);
 });
 
 test('basis format variants convert to quality suggestions while fact and outcome contradictions remain blocked', async () => {

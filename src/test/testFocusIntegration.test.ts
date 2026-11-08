@@ -173,7 +173,9 @@ async function verifyFocusedWorkflow(truncated: boolean, reviewAccepted = true, 
             const knowledge = JSON.parse(fs.readFileSync(path.join(output, knowledgePath), 'utf8'));
             if (!reviewAccepted) {
                 assert.notEqual(knowledge.terminalStatus, 'passed');
-                assert.ok(!events.some(event => event.stage === 'mutation' && event.status === 'measured'));
+                assert.equal(knowledge.qualityAssessment?.fullyPassed, false);
+                assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'),
+                    'retained executable baseline still runs mutation when Reviewer fails');
                 assert.ok(requests.some(request => request.isReviewer));
                 return;
             }

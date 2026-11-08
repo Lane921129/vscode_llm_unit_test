@@ -139,7 +139,8 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                     const knowledge = JSON.parse(fs.readFileSync(path.join(output, knowledgeFile), 'utf8'));
                     assert.equal(knowledge.failureStage, 'writer-method-edit-scope');
                     assert.equal(events.filter(event => event.stage === 'validation' && event.status === 'passed').length, 1);
-                    assert.ok(!events.some(event => event.stage === 'mutation'));
+                    assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'),
+                        'retained executable seed still runs mutation after review-scope failure');
                 } else if (['reviewer-type', 'length-recovery'].includes(mode)) {
                     assert.equal(writers, mode === 'reviewer-type' ? 1 : 2,
                         JSON.stringify(events.filter(event => ['failed', 'error', 'budget-exceeded', 'tool-unavailable', 'invalid-response'].includes(event.status))));
@@ -165,6 +166,9 @@ test('completed malformed seed replies use a paired wire budget, safe diagnostic
                 }
                 if (['repair', 'reviewer-type', 'length-recovery'].includes(mode)) {
                     assert.ok(events.some(event => event.stage === 'reviewer' && event.status === 'approved'));
+                    assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'));
+                } else if (mode === 'review-scope') {
+                    assert.ok(!events.some(event => event.stage === 'reviewer' && event.status === 'approved'));
                     assert.ok(events.some(event => event.stage === 'mutation' && event.status === 'measured'));
                 } else {
                     assert.ok(!events.some(event => event.stage === 'reviewer' && event.status === 'approved' || event.stage === 'mutation'));
