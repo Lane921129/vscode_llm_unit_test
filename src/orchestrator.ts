@@ -66,7 +66,8 @@ import { focusedSeedOutputFloor, isTestFocus, resolveTestFocus, testFocusInstruc
 import { mayFallbackTier, selectCandidateRepairRole } from './tier/tierFailurePolicy';
 import { ReportIdentity, writeTargetReports, renderMutationBaselineTiming } from './pipeline/targetReport';
 import { planMutationProbes } from './pipeline/mutationProbePlan';
-import { deduplicateTargets } from './pipeline/batchScope';
+import { batchScopeFiles, createBatchScopeSelection, deduplicateTargets } from './pipeline/batchScope';
+import { deduplicateTargetList, TargetListItem } from './pipeline/targetList';
 import { prepareQualityExperiments, buildQualityExperimentEvidencePrompt, assessQualityCandidateNovelty } from './pipeline/qualityExperiments';
 import { QualityImprovementSession, PendingQualityFocus } from './pipeline/qualityImprovementSession';
 import { containsCredential } from './pipeline/artifactSafety';
@@ -690,6 +691,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     interface BatchAnalysisParams extends Omit<AnalysisParams, 'filePath' | 'funcName'> {
         batchPath: string;
+        targets?: ReadonlyArray<TargetListItem>;
     }
 
     const runBatchCmd = vscode.commands.registerCommand(
@@ -723,9 +725,18 @@ export function activate(context: vscode.ExtensionContext) {
                         throw new Error(localize("批次來源掃描未完成，請檢查資料夾是否存在及讀取權限。"));
                     }
                     throwIfExecutionCancelled();
-                    const scope = await sidebarProvider.previewBatchScope(runParams.batchPath, files);
-                    throwIfExecutionCancelled();
-                    if (!scope) { outcome = 'cancelled'; return; }
+                    const explicitTargets = Array.isArray(runParams.targets) ? deduplicateTargetList(runParams.targets) : [];
+                    let scope;
+                    if (explicitTargets.length > 0) {
+                        const targetPaths = explicitTargets.map(item => path.resolve(runParams.batchPath, item.file));
+                        const inventory = batchScopeFiles(runParams.batchPath, [...files, ...targetPaths.filter(candidate => fs.existsSync(candidate))]);
+                        const selectedRelative = batchScopeFiles(runParams.batchPath, targetPaths);
+                        scope = createBatchScopeSelection(runParams.batchPath, inventory, selectedRelative);
+                    } else {
+                        scope = await sidebarProvider.previewBatchScope(runParams.batchPath, files);
+                        throwIfExecutionCancelled();
+                        if (!scope) { outcome = 'cancelled'; return; }
+                    }
                     batch.selectScope(scope);
                     const continuity = captureBatchSetupScope(scope, runParams.pythonExecutable);
                     files = scope.selectedFiles.map(file => path.join(scope.root, file));
@@ -733,25 +744,36 @@ export function activate(context: vscode.ExtensionContext) {
                     const tasks: Array<() => Promise<void>> = [];
                     const taskSources: BatchPreflightTarget[] = [];
                     const importTargets: ImportCheckTarget[] = [];
-                    for (const file of files) {
-                        throwIfExecutionCancelled();
-                        let funcs;
-                        try { funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable, true); }
-                        catch {
+                    if (explicitTargets.length > 0) {
+                        const fileIdentity = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value).replace(/\\/g, '/');
+                        const discoveredFiles = new Map<string, { file: string; rel: string; available: Set<string> }>();
+                        for (const file of files) {
                             throwIfExecutionCancelled();
-                            batch.discoveryFailed(file, 'ast-discovery');
-                            log(localize("[系統] 無法解析 {0}，批次摘要將保留掃描未完成狀態。", path.relative(runParams.batchPath, file)));
-                            continue;
+                            let funcs;
+                            try { funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable, true); }
+                            catch {
+                                throwIfExecutionCancelled();
+                                batch.discoveryFailed(file, 'ast-discovery');
+                                log(localize("[系統] 無法解析 {0}，批次摘要將保留掃描未完成狀態。", path.relative(runParams.batchPath, file)));
+                                continue;
+                            }
+                            const unique = deduplicateTargets(funcs);
+                            const available = new Set([...unique.targets.map(func => func.fullName), ...unique.ambiguousTargets]);
+                            const rel = path.relative(existingRealPath(scope.root), existingRealPath(file)).replace(/\\/g, '/');
+                            discoveredFiles.set(fileIdentity(rel), { file, rel, available });
+                            const selectedNames = new Set(explicitTargets.filter(item => fileIdentity(item.file) === fileIdentity(rel)).map(item => item.target));
+                            const importTarget = funcs.find(func => selectedNames.has(func.fullName) && !hasDummyFunctionNameMarker(func.fullName))
+                                ?? funcs.find(func => !hasDummyFunctionNameMarker(func.fullName));
+                            if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
                         }
-                        const unique = deduplicateTargets(funcs);
-                        // Keep one diagnosable target for each ambiguous definition; never choose a body here.
-                        const targets = [...unique.targets.map(func => func.fullName), ...unique.ambiguousTargets];
-                        batch.discover(file, targets);
-                        const importTarget = funcs.find(func => !hasDummyFunctionNameMarker(func.fullName));
-                        if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
-                        for (const target of targets) {
+                        for (const item of explicitTargets) {
+                            const entry = discoveredFiles.get(fileIdentity(item.file));
+                            if (!entry || !entry.available.has(item.target)) { continue; }
+                            const { file, rel } = entry;
+                            const target = item.target;
+                            batch.discover(file, [target]);
                             const id = tasks.length;
-                            taskSources.push({ id, file: path.relative(existingRealPath(scope.root), existingRealPath(file)).replace(/\\/g, '/'), target });
+                            taskSources.push({ id, file: rel, target });
                             tasks.push(async () => {
                                 throwIfExecutionCancelled();
                                 batch.begin(id);
@@ -762,6 +784,38 @@ export function activate(context: vscode.ExtensionContext) {
                                 }, log, view); }
                                 finally { batch.refresh(id); batch.stopDispatch(); }
                             });
+                        }
+                    } else {
+                        for (const file of files) {
+                            throwIfExecutionCancelled();
+                            let funcs;
+                            try { funcs = await extractFunctionsWithAst(file, runParams.pythonExecutable, true); }
+                            catch {
+                                throwIfExecutionCancelled();
+                                batch.discoveryFailed(file, 'ast-discovery');
+                                log(localize("[系統] 無法解析 {0}，批次摘要將保留掃描未完成狀態。", path.relative(runParams.batchPath, file)));
+                                continue;
+                            }
+                            const unique = deduplicateTargets(funcs);
+                            // Keep one diagnosable target for each ambiguous definition; never choose a body here.
+                            const targets = [...unique.targets.map(func => func.fullName), ...unique.ambiguousTargets];
+                            batch.discover(file, targets);
+                            const importTarget = funcs.find(func => !hasDummyFunctionNameMarker(func.fullName));
+                            if (importTarget) { importTargets.push({ file, target: importTarget.fullName }); }
+                            for (const target of targets) {
+                                const id = tasks.length;
+                                taskSources.push({ id, file: path.relative(existingRealPath(scope.root), existingRealPath(file)).replace(/\\/g, '/'), target });
+                                tasks.push(async () => {
+                                    throwIfExecutionCancelled();
+                                    batch.begin(id);
+                                    log(localize("[系統] 批次目標：{0}:{1}", path.basename(file), target));
+                                    try { await executeSingleFileAnalysis({
+                                        ...runParams, filePath: file, funcName: target,
+                                        projectName, batchJournal: batch, batchTargetId: id
+                                    }, log, view); }
+                                    finally { batch.refresh(id); batch.stopDispatch(); }
+                                });
+                            }
                         }
                     }
                     batch.start();

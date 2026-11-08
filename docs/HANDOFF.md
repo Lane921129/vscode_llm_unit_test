@@ -60,8 +60,8 @@
 | PR | 內容 | 狀態 | 分支 | 最後更新 |
 | --- | --- | --- | --- | --- |
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
-| 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | 未開始（**優先，先於 PR #2**） | | 2026-11-07 Claude（規劃） |
-| 2 | 模型篩選工具與評估集 | 未開始 | | |
+| 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成（待使用者驗收／合併主線）** | `pr/02a-target-selection` | 2026-11-08 Antigravity |
+| 2 | 模型篩選工具與評估集 | 未開始（**下一步**） | | |
 | 3 | 成功分層與批次失敗彙總 | 未開始 | | |
 | 4 | 測試範圍預設排除備份與副本 | 未開始 | | |
 | 5 | case-table-v1 結構與驗證 | 未開始 | | |
@@ -77,11 +77,28 @@
 
 ---
 
-## 2. PR #1 完成紀錄與下一步
+## 2. PR #2a 完成紀錄與下一步
 
-詳細紀錄：`docs/refactor/pr1-regression-review-2026-11-04.md`。本節為最新續接狀態；第 6 節保留歷史。
+詳細紀錄：`docs/側欄目標選擇改善規格_2026_11_07.md`。本節為最新續接狀態；第 6 節保留歷史。
 
-### 2026-11-07 使用者驗收通過與主線合併
+### 2026-11-08 PR #2a 完成（側欄目標選擇改善）
+
+- **已實作**：
+  - `src/pipeline/targetList.ts`：實作 R1 不分大小寫字母排序（`Class.method` 以完整名稱排序，同名函式以檔案相對路徑決勝）、R2 目標清單累加／去重／單項移除／清空、R4 `eval-screening-v1` JSON 匯出入與檔案／函式存在性檢查（明確列出並略過缺漏項目，不靜默忽略）、R5 依正規化專案根保存與還原目標清單狀態（`targetListStateKey`）。
+  - `src/pipeline/batchScope.ts`：新增 `buildBatchScopeTargetCandidates` 與 `resolveBatchScopeTargets`，支援 R3 批次範圍預覽已選檔案的函式彙整與排序。
+  - `src/pipeline/batchJournal.ts`、`src/orchestrator.ts`：`runBatchAnalysis` 支援明確 `targets` 清單並依目標清單順序逐一探索與執行，沿用既有 `BatchJournal`、`batch_manifest.json`、報告、隔離與停止政策。
+  - `src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`：實作側欄檔案／函式排序（R1）、函式勾選清單與全選／全不選／加入目標清單、目標清單區塊（總數、單項移除、清空、匯出／匯入 JSON）（R2／R4）、批次範圍預覽連動測試目標區並隱藏單檔選擇控制項（R3），以及專案根目標清單狀態保存（R5）。
+  - `src/test/targetList.test.ts`：新增 7 項完整測試，涵蓋 R1～R5、Webview 互動、2 檔 3 函式明確目標清單順序批次整合測試，以及匯入 `D:/read/專題/test/eval_screening/targets.json`（驗證得到 26 個目標、0 個不存在項目）。
+- **回歸通過**（日誌保存於 `log/pr2a-*.log`）：
+  - `npm run test:webview`：通過（Webview script 語法與結構驗證）。
+  - `npm run test:related -- --node targetList --node batchScope --node batchJournal --node webviewContent --node sidebarPreferences --node sidebarDashboardReplay`：38/38 通過（`log/pr2a-related.log`）。
+  - `npm run test:fast`：退出碼 0，含 `check-types`、`lint`、Node 774/774、Webview 語法、Python 44/44（`log/pr2a-fast.log`）。
+  - `npm run test:golden`：退出碼 0，11/11 通過，5 個 golden 快照零修改（`log/pr2a-golden.log`）。
+- **尚需實驗室實測**：VS Code 實機擴充套件視窗操作與實驗室模型批次驗收。
+
+**接續入口（2026-11-08 更新）：PR #2a 已在分支 `pr/02a-target-selection` 完成並通過驗證；下一個步驟為 PR #2「模型篩選工具與評估集」（見架構文件第 6 節與第 9 節 PR #2）。** 篩選用評估資料夾位於 `D:/read/專題/test/eval_screening/`（26 個函式，清單在 `targets.json`），PR #2 建立 `eval/eval-set-v1.json` 時以它為準。
+
+### 2026-11-07 PR #1 使用者驗收通過與主線合併
 
 - 使用者已明確驗收PR #1，並授權將 `codex/pr1-regression-baseline` 合併至 `lane_edition` 與正常push。合併前本機與origin/lane_edition均為050f969，沒有分歧；使用no-ff合併保留PR邊界，原始兩筆內容提交e1bae98／c845d44不改寫。
 - PR #1標記完成；第7步驗收／合併流程完成。本次merge commit同時保存此完成紀錄，推送目標僅為origin/lane_edition，遠端同步以本機HEAD與遠端ref一致核對。程式及測試保持已驗收的c845d44內容，本次只補HANDOFF。
@@ -242,7 +259,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 - [ ] 6. AOCI 維護依 11/7 使用者決定可延後，不阻擋 PR #2；日後只在最終穩定狀態維護一次，受阻列人工項目，不自行 acknowledge。
 - [x] 7. 使用者已驗收PR #1；本次合併至lane_edition並依授權正常push至origin/lane_edition，以本機HEAD與遠端ref一致核對。
 
-**接續入口（2026-11-07 更新）：下一個 PR 對話先做 PR #2a「側欄目標選擇改善」，規格在 `docs/側欄目標選擇改善規格_2026_11_07.md`；完成後再做 PR #2。** 篩選用評估資料夾已建立於 `D:/read/專題/test/eval_screening/`（26 個函式，清單在 `targets.json`），PR #2 建立 `eval/eval-set-v1.json` 時以它為準。以下為原接續說明： 先完整讀本檔與架構0.1／1.3，再依第9節PR #2範圍及6.1／6.2評估設定執行；依架構的一PR一對話規則，本對話只完成PR #1。第6步AOCI與第5節既有失敗保留追蹤，不阻擋PR #2。PR #1已經使用者驗收並合併主線，第7步門檻已通過。真實模型／GPU及跨平台驗收仍需實驗室執行。
+**歷史接續說明（PR #1 完成時）：** 先完整讀本檔與架構0.1／1.3，再依第9節PR #2範圍及6.1／6.2評估設定執行；依架構的一PR一對話規則，本對話只完成PR #1。第6步AOCI與第5節既有失敗保留追蹤，不阻擋PR #2。PR #1已經使用者驗收並合併主線，第7步門檻已通過。真實模型／GPU及跨平台驗收仍需實驗室執行。
 
 ---
 
@@ -254,6 +271,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由 Codex 處理）
 
+- 2026-11-08（PR #2a）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2a 新增與修改的受管理檔案執行 `aoci_maintain`：`src/pipeline/targetList.ts`、`src/pipeline/batchScope.ts`、`src/pipeline/batchJournal.ts`、`src/orchestrator.ts`、`src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/targetList.test.ts`。
 - 2026-11-04：PR #1 收尾時 `aoci_maintain` 受阻，原因是 1,210 筆 observe 變化待覆核，以及 8 個人工審查項目。完成第 2 節步驟 3 後再試一次。
 
 ---
@@ -329,9 +347,10 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-08 15:15 | Claude（規劃） | PR #3 追加 Reviewer 格式退回改為建議 | 使用者核准；架構文件第 9 節同步 | 未 commit |
-| 2026-11-08 15:05 | Claude（規劃） | 分析實驗室模型篩選結果 | 主力 gpt-oss:20b、備援 ministral-3:14b；PR #3 追加兩項 | 未 commit |
-| 2026-11-07 14:30 | Claude（規劃） | 新增 PR #2a 規格；建立 eval_screening（26 函式） | 使用者回報側欄排序、多選、批次連動問題 | 未 commit |
+| 2026-11-08 15:45 | Antigravity | PR #2a 實作與驗證 | 完成 R1～R5 側欄目標選擇改善；匯入 `eval_screening/targets.json` 得 26 目標、0 缺漏；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過；下一步指向 PR #2 | 本次 PR #2a commit（分支 `pr/02a-target-selection`） |
+| 2026-11-08 15:15 | Claude（規劃） | PR #3 追加 Reviewer 格式退回改為建議 | 使用者核准；架構文件第 9 節同步 | `6b280ce` |
+| 2026-11-08 15:05 | Claude（規劃） | 分析實驗室模型篩選結果 | 主力 gpt-oss:20b、備援 ministral-3:14b；PR #3 追加兩項 | `6b280ce` |
+| 2026-11-07 14:30 | Claude（規劃） | 新增 PR #2a 規格；建立 eval_screening（26 函式） | 使用者回報側欄排序、多選、批次連動問題 | `6b280ce` |
 | 2026-11-07 | Codex | PR #1 驗收／合併主線 | 使用者驗收通過；no-ff合併codex/pr1-regression-baseline至lane_edition並正常push，HANDOFF標記完成；第6步AOCI仍為待辦 | 本次merge commit（保留e1bae98／c845d44） |
 | 2026-11-07 | Codex | PR #1 步驟5／完成交接 | 全量逐案比較無新增失敗；4／4.5／5已勾選，既有14案留第5節；歷史憑證掃描及diff檢查通過。AOCI可後補，下一PR對話從#2開始 | e1bae98＋本筆fix: restore PR1 regression contracts（僅兩筆） |
 | 2026-11-07 | Codex | PR #1 步驟4.5 | 單一spec oracle決策、品質Reviewer／規格盲測界線及五行CHANGELOG完成 | 本步docs WIP（最終第5步整併） |

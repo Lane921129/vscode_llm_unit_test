@@ -142,7 +142,9 @@ export class BatchJournal {
         if (this.scope && !this.scope.selectedFiles.some(selected => identity(selected) === identity(relative))) {
             throw new Error('Batch source was excluded from the confirmed scope');
         }
-        this.files.push(relative);
+        if (!this.files.some(existing => identity(existing) === identity(relative))) {
+            this.files.push(relative);
+        }
         for (const target of targets) { this.targets.push({ id: this.targets.length, file: relative, target, state: 'pending' }); }
         this.save();
     }
