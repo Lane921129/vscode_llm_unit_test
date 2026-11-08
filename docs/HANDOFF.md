@@ -61,8 +61,8 @@
 | --- | --- | --- | --- | --- |
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
 | 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02a-target-selection`） | 2026-11-08 Antigravity |
-| 2 | 模型篩選工具與評估集 | 未開始（**下一步**） | | |
-| 3 | 成功分層與批次失敗彙總 | 未開始 | | |
+| 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
+| 3 | 成功分層與批次失敗彙總 | 未開始（**下一步**） | | |
 | 4 | 測試範圍預設排除備份與副本 | 未開始 | | |
 | 5 | case-table-v1 結構與驗證 | 未開始 | | |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
@@ -77,9 +77,25 @@
 
 ---
 
-## 2. PR #2a 完成紀錄與下一步
+## 2. PR #2 完成紀錄與下一步
 
-詳細紀錄：`docs/側欄目標選擇改善規格_2026_11_07.md`。本節為最新續接狀態；第 6 節保留歷史。
+詳細說明：`eval/README.md`、`docs/模型篩選結果_2026_11_08.md`。本節為最新續接狀態；第 6 節保留歷史。
+
+### 2026-11-08 PR #2 完成（模型篩選工具與評估集）
+
+- **已實作**：
+  - `eval/eval-set-v1.json`：由倉庫內 `eval/eval_screening/`（7 個檔案、26 個函式）建立固定版本與固定內容雜湊（`contentHash: 0afe8e4d1147920571949cca7faf67d241e4778faa9ef62b1efb7874c6feec14`）的評估集清單，包含各檔案 SHA-256、26 個目標的 `hasSpec`／`specSources` 分類（有規格來源 18 個、無規格來源 8 個），並將架構文件 6.1 節其餘專案（`markupsafe`、`learn-python`、`bottle` 其餘函式等）列於 `plannedExtensions` 供後續擴充；同時維持 `version: "eval-screening-v1"` 與 `targets` 結構，可直接匯入側欄目標清單。
+  - `eval/eval_screening/LICENSES.md`、`eval/README.md`、`eval/eval_screening/README.md`：補齊複製自 Bottle（Marcel Hellkamp）與 validators（Konsta Vesterinen）的 MIT 授權全文與原作者版權聲明，並撰寫評估集與 `eval_aggregate.py` 的操作說明。
+  - `python_scripts/eval_aggregate.py`：讀取包含多個模型結果子資料夾的根目錄或多個 `batch_manifest.json`，結合各目標 `function_knowledge.json`（與備援 `quality_baseline.json`／`executable_baseline.json`）及 `role_events.jsonl`，輸出每個模型的完整通過、保留可用、審查阻擋、失敗、其他終態、產生可執行測試數、平均覆蓋率、量到突變分數的數量、平均突變分數、耗時、請求數、輸出 tokens 與輸出截斷次數（`role_events.jsonl` 中 `completionReason == "length"` 的次數），並提供有／無規格來源分開統計；被取消或未完成的批次（如 `mistralnemo12b_2`）自動標示於「被取消或未完成的批次（不列入比較）」，不混入模型比較總表。
+  - `test/fixtures/eval_screening/`、`python_scripts/test_eval_aggregate.py`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`、`src/test/targetList.test.ts`：新增去本機路徑的精簡批次 fixture（`gpt_oss20b`、`ministral3_14b` 與已取消的 `mistralnemo12b_2`）及單元測試，完全使用倉庫內 fixture 而不依賴 `D:/read` 等本機路徑。
+- **回歸通過**（日誌保存於 `log/pr2-*.log`）：
+  - 實際實驗室資料驗證：`python python_scripts/eval_aggregate.py D:/read/專題/test/result/model_test --output log/pr2-eval-aggregate-model-test.md`，5 個完成模型（`gpt-oss:20b`、`ministral-3:14b`、`phi4:14b`、`mistral-nemo:12b`、`codellama:13b`）的所有指標與 `docs/模型篩選結果_2026_11_08.md` 完全一致，`mistralnemo12b_2` 正確標示為 `cancelled`（`3／26`、`pending=23`）並排除於比較表外。
+  - `npm run test:related -- --node verificationRunner --node targetList --python test_eval_aggregate --python test_skill_ab_summary --python test_fixture_scorecard --python test_lab_batch_plan --python test_secret_scan`：Node 25/25、Python 29/29 通過（`log/pr2-related-full.log`）。
+  - `npm run test:fast`：退出碼 0，含 `check-types`、`lint`、Node 774/774、Webview 語法、Python 48/48（`log/pr2-fast.log`）。
+  - `python python_scripts/secret_scan.py`：通過。
+- **尚需實驗室實測**：`gpt-oss:20b` 的 `localThinkingMode`（`provider-default` vs `disabled`）A/B 實驗室批次實測。
+
+**接續入口：PR #2 已獲使用者驗收通過，並已合併至 `lane_edition` 及 push 至 `origin/lane_edition`；下一個 PR 為 PR #3「成功分層與批次失敗彙總」（見架構文件第 4 節第 15 列與第 9 節 PR #3，包含 2026-11-08 追加的三項需求：①保留的可執行基線一律跑突變測試、②Reviewer `basis` 引用格式不合改當建議傳給 Writer 且不扣失敗額度、③修復 `Review revision requires the current method inventory.` 工具受阻）。**
 
 ### 2026-11-08 PR #2a 完成（側欄目標選擇改善）
 
@@ -271,6 +287,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由 Codex 處理）
 
+- 2026-11-08（PR #2）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2 新增與修改的受管理檔案執行 `aoci_maintain`：`eval/eval-set-v1.json`、`eval/README.md`、`eval/eval_screening/LICENSES.md`、`eval/eval_screening/README.md`、`python_scripts/eval_aggregate.py`、`python_scripts/test_eval_aggregate.py`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`、`src/test/targetList.test.ts`。
 - 2026-11-08（PR #2a）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #2a 新增與修改的受管理檔案執行 `aoci_maintain`：`src/pipeline/targetList.ts`、`src/pipeline/batchScope.ts`、`src/pipeline/batchJournal.ts`、`src/orchestrator.ts`、`src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/targetList.test.ts`、`eval/eval_screening/*`。
 - 2026-11-04：PR #1 收尾時 `aoci_maintain` 受阻，原因是 1,210 筆 observe 變化待覆核，以及 8 個人工審查項目。完成第 2 節步驟 3 後再試一次。
 
@@ -347,6 +364,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 16:34 | Antigravity | PR #2 模型篩選工具與評估集 | 建立 `eval/eval-set-v1.json`、`eval/eval_screening/LICENSES.md`、`eval/README.md`、`python_scripts/eval_aggregate.py` 與倉庫內精簡 fixture 測試；實際 `model_test` 驗證一致，`test:related`（25/25、29/29）與 `test:fast`（774/774、48/48）全過 | 見 PR 分支 `pr/02-model-screening` 最新 commit |
 | 2026-11-08 16:05 | Antigravity | PR #2a 驗收／合併主線 | 使用者驗收通過；`--no-ff` 合併 `pr/02a-target-selection` 至 `lane_edition` 並 push 至 `origin/lane_edition`，HANDOFF 標記完成 | 本次 merge commit（保留 `6b280ce`／`749973e`／`aa0143f`） |
 | 2026-11-08 16:00 | Antigravity | PR #2a 驗收前四項修正與重驗 | `eval/eval_screening` 納入倉庫並移除絕對路徑；明確目標缺漏記錄 `target-missing` 並顯示於 `batch_summary`／`batch_manifest`；補齊 `throwIfExecutionCancelled()` 與抽離 `resolveExplicitBatchTargets`；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過 | `aa0143f` |
 | 2026-11-08 15:45 | Antigravity | PR #2a 實作與驗證 | 完成 R1～R5 側欄目標選擇改善；匯入 `eval_screening/targets.json` 得 26 目標、0 缺漏；`test:webview`、`test:related`（38/38）、`test:fast`（774/774、44/44）、`test:golden`（11/11）全過；下一步指向 PR #2 | `749973e` |

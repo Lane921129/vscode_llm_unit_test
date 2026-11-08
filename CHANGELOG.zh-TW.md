@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-08 PR #2（模型篩選工具與評估集）
+- 由 `eval/eval_screening/`（7 檔 26 個函式）建立 `eval/eval-set-v1.json`，固定檔案 SHA-256、有／無規格來源分類（18／8）及後續擴充清單。
+- 於 `eval/eval_screening/LICENSES.md` 補齊 Bottle 與 validators 的原作者版權聲明與 MIT 授權全文，並撰寫 `eval/README.md` 操作說明。
+- 新增 `python_scripts/eval_aggregate.py`，讀取各模型 `batch_manifest.json`、目標 `function_knowledge.json` 與 `role_events.jsonl`，輸出通過、保留可用、審查阻擋、失敗、可執行測試數、平均覆蓋率、突變分數目標數、耗時、請求數、輸出 tokens 與 `completionReason=length` 截斷次數，並標示排除已取消／未完成批次。
+- 新增可攜精簡批次 fixture（`test/fixtures/eval_screening/`）與單元測試 `python_scripts/test_eval_aggregate.py`；`test:related` 與 `test:fast` 全綠。
+
 ## 2026-11-08 PR #2a（側欄目標選擇改善）
 - 實作檔案與函式名稱不分大小寫字母排序（R1），並新增跨檔案目標清單多選累加、去重、單項移除、清空與專案根狀態保存（R2、R5）。
 - 批次範圍預覽連動測試目標區並自動列出已選檔案全部函式（預設全選、可取消勾選），同時隱藏單檔下拉控制項避免並存衝突（R3）。

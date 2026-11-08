@@ -1,0 +1,3 @@
+{"sequence":1,"runId":"run-min-validator","stage":"model-request","status":"requested","detail":{"role":"writer"}}
+{"sequence":2,"runId":"run-min-validator","stage":"model-request","status":"timing","detail":{"role":"writer","kind":"transport","ollama":{"completionReason":"stop"}}}
+{"sequence":3,"runId":"run-min-validator","stage":"model-request","status":"error","detail":{"role":"writer","reasonCode":"syntax-error"}}

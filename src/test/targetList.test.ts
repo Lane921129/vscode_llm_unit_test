@@ -197,15 +197,22 @@ test('R4 JSON export/import round-trip preserves targets and reports nonexistent
     }
 });
 
-test('R4 importing eval_screening/targets.json produces exactly 26 valid targets and 0 missing items', async () => {
+test('R4 importing eval_screening/targets.json and eval/eval-set-v1.json produces exactly 26 valid targets and 0 missing items', async () => {
     const evalDir = path.resolve(__dirname, '../../eval/eval_screening');
     const targetsJsonPath = path.join(evalDir, 'targets.json');
+    const evalSetV1Path = path.resolve(__dirname, '../../eval/eval-set-v1.json');
     assert.ok(fs.existsSync(targetsJsonPath), 'eval/eval_screening/targets.json must exist in repository');
-    const raw = fs.readFileSync(targetsJsonPath, 'utf8');
+    assert.ok(fs.existsSync(evalSetV1Path), 'eval/eval-set-v1.json must exist in repository');
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
-    const result = await importTargetListFromJson(evalDir, raw, defaultFunctionInventoryResolver(python));
-    assert.deepEqual(result.missing, []);
-    assert.equal(result.targets.length, 26);
+    const resolver = defaultFunctionInventoryResolver(python);
+
+    const resultTargets = await importTargetListFromJson(evalDir, fs.readFileSync(targetsJsonPath, 'utf8'), resolver);
+    assert.deepEqual(resultTargets.missing, []);
+    assert.equal(resultTargets.targets.length, 26);
+
+    const resultEvalSet = await importTargetListFromJson(evalDir, fs.readFileSync(evalSetV1Path, 'utf8'), resolver);
+    assert.deepEqual(resultEvalSet.missing, []);
+    assert.deepEqual(resultEvalSet.targets, resultTargets.targets);
 });
 
 test('R5 target list state persists per canonical project root in workspace state', async () => {

@@ -1,0 +1,491 @@
+{
+  "schemaVersion": "eval-set-v1",
+  "version": "eval-screening-v1",
+  "created": "2026-11-08",
+  "sourceRoot": "eval/eval_screening",
+  "num_ctx": 8192,
+  "contentHash": "0afe8e4d1147920571949cca7faf67d241e4778faa9ef62b1efb7874c6feec14",
+  "totalFiles": 7,
+  "totalTargets": 26,
+  "specSummary": {
+    "withSpec": 18,
+    "withoutSpec": 8
+  },
+  "files": {
+    "bmi.py": {
+      "sha256": "9f833d1e25a8da65222027e9e7ac4e022d0e325e8e2944583972a23b11892c1e",
+      "project": "bmi",
+      "origin": "test/data/bmi.py",
+      "license": "MIT (Repository)",
+      "category": "pure-function",
+      "description": "純函式基準（BMI 計算與體位分類）",
+      "targetCount": 1
+    },
+    "bottle_utils.py": {
+      "sha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "license": "MIT (Marcel Hellkamp, see eval/eval_screening/LICENSES.md)",
+      "category": "pure-function",
+      "description": "Bottle 純工具函式（多數含 docstring）",
+      "targetCount": 8
+    },
+    "validators_basic.py": {
+      "sha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "license": "MIT (Konsta Vesterinen, see eval/eval_screening/LICENSES.md)",
+      "category": "validator",
+      "description": "validators 驗證函式（含 docstring、型別註記與 @validator 裝飾器）",
+      "targetCount": 6
+    },
+    "validators_utils.py": {
+      "sha256": "25856eb084c75b6b7fcfc00352c470b31c75078b6c542b4b4e1c5e65fc612222",
+      "project": "validators",
+      "origin": "validators-master/src/validators/utils.py",
+      "license": "MIT (Konsta Vesterinen, see eval/eval_screening/LICENSES.md)",
+      "category": "decorator",
+      "description": "validators 裝飾器與參數轉字典輔助函式",
+      "targetCount": 2
+    },
+    "vehicle_app_paths.py": {
+      "sha256": "daa828e7ff50fa505ea67606f30189c818efee69f7b9c5537c2ce281f0c87260",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/config.py",
+      "license": "Internal evaluation corpus",
+      "category": "environment",
+      "description": "車輛管理系統路徑與執行環境判斷",
+      "targetCount": 1
+    },
+    "vehicle_db.py": {
+      "sha256": "d2a3c8b96c796bd13eed140a701f6f0f09a8c38b8ce53665318850ff93903b5e",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/database.py",
+      "license": "Internal evaluation corpus",
+      "category": "database",
+      "description": "車輛管理系統 SQLite 資料庫相依函式",
+      "targetCount": 4
+    },
+    "vehicle_time_utils.py": {
+      "sha256": "d19126de44655cc1a57b620f445ac55b4d021785a4b21e4063dcde623e61202b",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/main.py",
+      "license": "Internal evaluation corpus",
+      "category": "time",
+      "description": "車輛管理系統時間解析與格式化函式",
+      "targetCount": 4
+    }
+  },
+  "targets": {
+    "bmi.py": [
+      "calculate_bmi"
+    ],
+    "bottle_utils.py": [
+      "html_escape",
+      "html_quote",
+      "parse_auth",
+      "parse_date",
+      "parse_range_header",
+      "path_shift",
+      "tob",
+      "touni"
+    ],
+    "validators_basic.py": [
+      "_char_value",
+      "_mod_check",
+      "iban",
+      "mac_address",
+      "slug",
+      "uuid"
+    ],
+    "validators_utils.py": [
+      "_func_args_as_dict",
+      "validator"
+    ],
+    "vehicle_app_paths.py": [
+      "get_app_dir"
+    ],
+    "vehicle_db.py": [
+      "_connect",
+      "authenticate_user",
+      "get_destination_minutes",
+      "is_car_allowed_for_destination"
+    ],
+    "vehicle_time_utils.py": [
+      "format_eta_time",
+      "get_remaining_text",
+      "parse_actual_finish_time",
+      "parse_excel_datetime"
+    ]
+  },
+  "entries": [
+    {
+      "id": "bmi.py::calculate_bmi",
+      "file": "bmi.py",
+      "target": "calculate_bmi",
+      "sourceSha256": "9f833d1e25a8da65222027e9e7ac4e022d0e325e8e2944583972a23b11892c1e",
+      "project": "bmi",
+      "origin": "test/data/bmi.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::html_escape",
+      "file": "bottle_utils.py",
+      "target": "html_escape",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::html_quote",
+      "file": "bottle_utils.py",
+      "target": "html_quote",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::parse_auth",
+      "file": "bottle_utils.py",
+      "target": "parse_auth",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::parse_date",
+      "file": "bottle_utils.py",
+      "target": "parse_date",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::parse_range_header",
+      "file": "bottle_utils.py",
+      "target": "parse_range_header",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::path_shift",
+      "file": "bottle_utils.py",
+      "target": "path_shift",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "bottle_utils.py::tob",
+      "file": "bottle_utils.py",
+      "target": "tob",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "bottle_utils.py::touni",
+      "file": "bottle_utils.py",
+      "target": "touni",
+      "sourceSha256": "5e451aafce710cc12394eab44cb7dc48e0f350fef61ed3993337d56ff78b405f",
+      "project": "bottle",
+      "origin": "bottle-main/bottle.py",
+      "category": "pure-function",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "validators_basic.py::_char_value",
+      "file": "validators_basic.py",
+      "target": "_char_value",
+      "sourceSha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "category": "validator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_basic.py::_mod_check",
+      "file": "validators_basic.py",
+      "target": "_mod_check",
+      "sourceSha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "category": "validator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_basic.py::iban",
+      "file": "validators_basic.py",
+      "target": "iban",
+      "sourceSha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "category": "validator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_basic.py::mac_address",
+      "file": "validators_basic.py",
+      "target": "mac_address",
+      "sourceSha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "category": "validator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_basic.py::slug",
+      "file": "validators_basic.py",
+      "target": "slug",
+      "sourceSha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "category": "validator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_basic.py::uuid",
+      "file": "validators_basic.py",
+      "target": "uuid",
+      "sourceSha256": "e2675e90d77ba07f2aa6b9fb7bacb0b7f747d6f7c9e23abba67dcdbe138582ff",
+      "project": "validators",
+      "origin": "validators-master/src/validators/{iban,mac_address,slug,uuid}.py",
+      "category": "validator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_utils.py::_func_args_as_dict",
+      "file": "validators_utils.py",
+      "target": "_func_args_as_dict",
+      "sourceSha256": "25856eb084c75b6b7fcfc00352c470b31c75078b6c542b4b4e1c5e65fc612222",
+      "project": "validators",
+      "origin": "validators-master/src/validators/utils.py",
+      "category": "decorator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "validators_utils.py::validator",
+      "file": "validators_utils.py",
+      "target": "validator",
+      "sourceSha256": "25856eb084c75b6b7fcfc00352c470b31c75078b6c542b4b4e1c5e65fc612222",
+      "project": "validators",
+      "origin": "validators-master/src/validators/utils.py",
+      "category": "decorator",
+      "hasSpec": true,
+      "specSources": [
+        "docstring",
+        "type-annotations"
+      ]
+    },
+    {
+      "id": "vehicle_app_paths.py::get_app_dir",
+      "file": "vehicle_app_paths.py",
+      "target": "get_app_dir",
+      "sourceSha256": "daa828e7ff50fa505ea67606f30189c818efee69f7b9c5537c2ce281f0c87260",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/config.py",
+      "category": "environment",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "vehicle_db.py::_connect",
+      "file": "vehicle_db.py",
+      "target": "_connect",
+      "sourceSha256": "d2a3c8b96c796bd13eed140a701f6f0f09a8c38b8ce53665318850ff93903b5e",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/database.py",
+      "category": "database",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "vehicle_db.py::authenticate_user",
+      "file": "vehicle_db.py",
+      "target": "authenticate_user",
+      "sourceSha256": "d2a3c8b96c796bd13eed140a701f6f0f09a8c38b8ce53665318850ff93903b5e",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/database.py",
+      "category": "database",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "vehicle_db.py::get_destination_minutes",
+      "file": "vehicle_db.py",
+      "target": "get_destination_minutes",
+      "sourceSha256": "d2a3c8b96c796bd13eed140a701f6f0f09a8c38b8ce53665318850ff93903b5e",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/database.py",
+      "category": "database",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "vehicle_db.py::is_car_allowed_for_destination",
+      "file": "vehicle_db.py",
+      "target": "is_car_allowed_for_destination",
+      "sourceSha256": "d2a3c8b96c796bd13eed140a701f6f0f09a8c38b8ce53665318850ff93903b5e",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/database.py",
+      "category": "database",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    },
+    {
+      "id": "vehicle_time_utils.py::format_eta_time",
+      "file": "vehicle_time_utils.py",
+      "target": "format_eta_time",
+      "sourceSha256": "d19126de44655cc1a57b620f445ac55b4d021785a4b21e4063dcde623e61202b",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/main.py",
+      "category": "time",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "vehicle_time_utils.py::get_remaining_text",
+      "file": "vehicle_time_utils.py",
+      "target": "get_remaining_text",
+      "sourceSha256": "d19126de44655cc1a57b620f445ac55b4d021785a4b21e4063dcde623e61202b",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/main.py",
+      "category": "time",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "vehicle_time_utils.py::parse_actual_finish_time",
+      "file": "vehicle_time_utils.py",
+      "target": "parse_actual_finish_time",
+      "sourceSha256": "d19126de44655cc1a57b620f445ac55b4d021785a4b21e4063dcde623e61202b",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/main.py",
+      "category": "time",
+      "hasSpec": false,
+      "specSources": []
+    },
+    {
+      "id": "vehicle_time_utils.py::parse_excel_datetime",
+      "file": "vehicle_time_utils.py",
+      "target": "parse_excel_datetime",
+      "sourceSha256": "d19126de44655cc1a57b620f445ac55b4d021785a4b21e4063dcde623e61202b",
+      "project": "vehicle_management_system",
+      "origin": "vehicle_management_system/main.py",
+      "category": "time",
+      "hasSpec": true,
+      "specSources": [
+        "docstring"
+      ]
+    }
+  ],
+  "plannedExtensions": [
+    {
+      "project": "markupsafe",
+      "scope": "全部公開函式",
+      "purpose": "docstring 完整，主要的規格來源評估",
+      "status": "planned-post-pr2"
+    },
+    {
+      "project": "validators",
+      "scope": "擴充至 30 個公開函式（目前 eval_screening 已含 8 個）",
+      "purpose": "docstring 完整，主要的規格來源評估",
+      "status": "planned-post-pr2"
+    },
+    {
+      "project": "learn-python",
+      "scope": "固定抽樣 20 個函式",
+      "purpose": "教學範例，行為明確",
+      "status": "planned-post-pr2"
+    },
+    {
+      "project": "bottle",
+      "scope": "擴充至 30 個公開函式或方法（目前 eval_screening 已含 8 個）",
+      "purpose": "未見過的真實專案",
+      "status": "planned-post-pr2"
+    },
+    {
+      "project": "add",
+      "scope": "全部函式",
+      "purpose": "純函式基準",
+      "status": "planned-post-pr2"
+    },
+    {
+      "project": "vehicle_management_system",
+      "scope": "主程式約 81 個目標，排除副本與 old backup/（目前 eval_screening 已含 9 個）",
+      "purpose": "資料庫與相依，多數沒有規格來源",
+      "status": "planned-post-pr2"
+    }
+  ]
+}

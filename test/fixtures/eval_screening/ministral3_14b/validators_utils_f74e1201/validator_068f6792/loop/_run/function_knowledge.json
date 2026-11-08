@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2,
+  "runId": "run-min-validator",
+  "sourceHash": "25856eb084c75b6b7fcfc00352c470b31c75078b6c542b4b4e1c5e65fc612222",
+  "target": "validator",
+  "terminalStatus": "failed",
+  "coverage": null,
+  "mutationScore": null
+}

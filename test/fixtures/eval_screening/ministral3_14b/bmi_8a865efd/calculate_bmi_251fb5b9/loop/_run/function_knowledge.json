@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "runId": "run-min-bmi",
+  "sourceHash": "9f833d1e25a8da65222027e9e7ac4e022d0e325e8e2944583972a23b11892c1e",
+  "target": "calculate_bmi",
+  "terminalStatus": "retained-after-failure",
+  "coverage": {
+    "coverageText": "60.00%",
+    "selectedTarget": {
+      "qualifiedName": "calculate_bmi",
+      "executableLines": [8, 11, 14, 15, 16, 17, 18, 19, 21, 23],
+      "missingLines": [16, 17, 18, 19],
+      "branchesCovered": false
+    }
+  },
+  "mutationScore": null
+}

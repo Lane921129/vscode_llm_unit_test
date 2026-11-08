@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "batchId": "e14acb23-e0ae-46af-8b86-c86488cdf945",
+  "startedAt": "2026-11-07T14:18:45.000Z",
+  "finishedAt": "2026-11-07T14:28:45.000Z",
+  "validationMode": "full",
+  "stopPolicy": {
+    "failureLimit": 5,
+    "qualityNoImprovementLimit": 3,
+    "batchFailureLimit": 0
+  },
+  "stopReason": null,
+  "allTargetsExecutionVerified": false,
+  "status": "failed",
+  "complete": false,
+  "allTargetsPassed": false,
+  "preflightBlockedModules": 0,
+  "model": "gpt-oss:20b",
+  "buildTimestamp": "2026-11-07T05:55:55.050Z",
+  "pythonExecutable": "/portable/python",
+  "scope": {
+    "root": "/portable/eval_screening",
+    "knownFiles": [
+      "bmi.py",
+      "bottle_utils.py"
+    ],
+    "selectedFiles": [
+      "bmi.py",
+      "bottle_utils.py"
+    ],
+    "excludedFiles": [],
+    "scopeId": "164a8e50d9d73edaf97781b471156c9e4d47e3fe1502b136463069310acb0df4"
+  },
+  "discoveredFiles": [
+    "bmi.py",
+    "bottle_utils.py"
+  ],
+  "discoveryFailures": [],
+  "expectedTargets": 3,
+  "finishedTargets": 3,
+  "attemptedTargets": 3,
+  "preflightBlockedTargets": 0,
+  "statusCounts": {
+    "passed": 1,
+    "retained-after-failure": 1,
+    "review-blocked": 1
+  },
+  "environmentIssues": [],
+  "rates": {
+    "denominator": 3,
+    "passed": 0.3333333333333333,
+    "blocked": 0,
+    "incomplete": 0.3333333333333333
+  },
+  "cost": {
+    "modelRequests": 23,
+    "transportAttempts": 23,
+    "outputTokens": 28227,
+    "unknownRequestTargets": 0
+  },
+  "modelCapabilitySummary": {
+    "version": "model-capability-summary-v1",
+    "completedTransports": 23,
+    "timedOutTransports": 0,
+    "lengthStoppedTransports": 8,
+    "outputTokens": 28227,
+    "outputEvalMs": 408938.5
+  },
+  "targets": [
+    {
+      "id": 0,
+      "file": "bmi.py",
+      "target": "calculate_bmi",
+      "state": "finished",
+      "reportDirectory": "bmi_8a865efd/calculate_bmi_251fb5b9",
+      "terminalStatus": "retained-after-failure",
+      "category": "validation",
+      "stage": "target-failure-policy",
+      "failureCount": 5,
+      "failureLimit": 5,
+      "stopReason": "failure-limit",
+      "modelRequests": 7,
+      "qualificationRequests": 0,
+      "formalRequests": 7,
+      "transportAttempts": 7,
+      "capabilitySummary": {
+        "version": "model-capability-summary-v1",
+        "completedTransports": 7,
+        "timedOutTransports": 0,
+        "lengthStoppedTransports": 4,
+        "outputTokens": 11175,
+        "outputEvalMs": 162494.9
+      }
+    },
+    {
+      "id": 1,
+      "file": "bottle_utils.py",
+      "target": "tob",
+      "state": "finished",
+      "reportDirectory": "bottle_utils_9e53c6fc/tob_d198608a",
+      "terminalStatus": "passed",
+      "failureCount": 4,
+      "failureLimit": 5,
+      "stopReason": "passed",
+      "modelRequests": 9,
+      "qualificationRequests": 0,
+      "formalRequests": 9,
+      "transportAttempts": 9,
+      "capabilitySummary": {
+        "version": "model-capability-summary-v1",
+        "completedTransports": 9,
+        "timedOutTransports": 0,
+        "lengthStoppedTransports": 3,
+        "outputTokens": 9160,
+        "outputEvalMs": 134004.6
+      }
+    },
+    {
+      "id": 2,
+      "file": "bottle_utils.py",
+      "target": "html_escape",
+      "state": "finished",
+      "reportDirectory": "bottle_utils_9e53c6fc/html_escape_6d4c4a8f",
+      "terminalStatus": "review-blocked",
+      "category": "validation",
+      "stage": "reviewer",
+      "failureCount": 5,
+      "failureLimit": 5,
+      "stopReason": "failure-limit",
+      "modelRequests": 7,
+      "qualificationRequests": 0,
+      "formalRequests": 7,
+      "transportAttempts": 7,
+      "capabilitySummary": {
+        "version": "model-capability-summary-v1",
+        "completedTransports": 7,
+        "timedOutTransports": 0,
+        "lengthStoppedTransports": 1,
+        "outputTokens": 7892,
+        "outputEvalMs": 112439.0
+      }
+    }
+  ]
+}

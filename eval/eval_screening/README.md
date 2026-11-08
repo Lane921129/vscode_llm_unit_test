@@ -27,7 +27,7 @@
 | `vehicle_db.py` | _connect、authenticate_user、get_destination_minutes、is_car_allowed_for_destination | 車輛 database.py | 資料庫相依 |
 | `vehicle_time_utils.py` | format_eta_time、get_remaining_text、parse_actual_finish_time、parse_excel_datetime | 車輛 main.py | 純函式（時間） |
 
-完整清單也在 `targets.json`，之後 PR #2 會用它建立 `eval/eval-set-v1.json`。
+完整清單見 `targets.json` 與 `eval/eval-set-v1.json`；複製自 Bottle 與 validators 的 MIT 授權聲明見本資料夾的 `LICENSES.md`。
 
 ## 注意事項
 
