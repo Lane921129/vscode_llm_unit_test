@@ -62,7 +62,7 @@
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
 | 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02a-target-selection`） | 2026-11-08 Antigravity |
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
-| 3 | 成功分層與批次失敗彙總 | **續接驗證中：舊完成聲明不代表本輪五項已完成** | `pr/03-tiered-success-failure-summary` | 2026-11-08 Codex（GPT-6） |
+| 3 | 成功分層與批次失敗彙總 | **五項皆已驗證，待使用者驗收（未 push）** | `pr/03-tiered-success-failure-summary` | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 未開始（選配；建議延後，待使用者確認） | | |
 | 5 | case-table-v1 結構與驗證 | 未開始 | | |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
@@ -81,7 +81,20 @@
 
 詳細說明：`eval/README.md`、`docs/模型篩選結果_2026_11_08.md`。本節為最新續接狀態；第 6 節保留歷史。
 
-### 2026-11-08 Codex（GPT-6）續接 PR #3（最新狀態）
+### 2026-11-08 22:50 Claude Code 續接 PR #3（最新狀態）
+
+- 開始狀態：分支 `pr/03-tiered-success-failure-summary`，HEAD `1db24e2`；沒有未提交的程式修改，只有使用者原本未追蹤的 `Claude outputs/` 與舊重構計畫（不納入提交）。與本檔描述一致。
+- 本 agent 經由使用者電腦的 Linux VM shell 操作；沒有 AOCI MCP，也沒有 CodeGraph，未呼叫任何 AOCI 工具。本輪**沒有修改任何程式或測試**，也沒有重跑任何測試，只判讀 Codex 已在 Windows 原生完成的背景 integration。
+- **第 4 項完成**：`log/pr3-codex-integration.status.json` 為 `complete`，耗時 3372 秒，`changedSources` 為空。
+  - Node：1053 tests／1036 pass／17 fail（14 leaf＋3 父測試）／0 skip／0 cancelled。
+  - Python：842 tests，OK（4 skips）。
+  - 14 個 leaf 失敗依「檔案＋完整案例名稱」逐一對照第 5 節既有清單：**完全相同，新增失敗 0**。每案的首個斷言與數值也與 PR #1 欄一致（例如 bmiFocused `retained-after-failure` vs `passed`、`4 !== 6`；bmiPreservation `1 !== 2`；mutationImprovement `4 !== 1`；numericSkill `1 !== 2`；parameterFixture `5 !== 3`；reviewerDemo `5 !== 2`；roleOrchestrator `1 !== 3`；writerOutputRecovery repeat-length `5 !== 2`；writerRevision stop／length `11264 !== 8192`、multi-finding `0 !== 1`）。
+  - 與 PR #1 比較：Node tests 1038→1053（PR #2a／#2／#3 新增測試）、Node skip 2→0、Python skip 6→4；跳過數減少，沒有新增跳過或取消。跳過減少的原因未追查。
+  - 來源一致性：`log/pr3-codex-integration.source-after.json` 列出的 629 個原始檔，與目前工作區逐檔 SHA-256 零差異；`8f3d487..HEAD` 只差 `docs/HANDOFF.md`。所以這份結果代表目前 HEAD 的程式。
+- **第 5 項完成**：golden 11/11、五組快照零差異（Codex 19:07 紀錄，`log/pr3-codex-golden.log`），之後沒有程式變動，不重跑。沒有更新任何快照。
+- PR #3 可交使用者驗收；驗收前不 push。
+
+### 2026-11-08 Codex（GPT-6）續接 PR #3
 
 - 開始狀態：分支 `pr/03-tiered-success-failure-summary`，HEAD `8a57e31`；保留 Antigravity 的七個已修改檔與新檔 `src/test/tieredSuccessIntegration.test.ts`。原本未追蹤的 `Claude outputs/` 與舊重構計畫不納入提交。
 - 本次有 CodeGraph MCP，已先查詢候選流程；沒有 AOCI MCP，未呼叫任何 AOCI 工具，收尾待辦見第 4 節。`.codex/`、`.aoci/` 不修改，不 push。
@@ -97,8 +110,8 @@
 - [x] 1. 驗證保留基線量測失敗會寫入 `mutation/retained-measurement-failed`，沒有空 catch。
 - [x] 2. 驗證原迴圈上限與一次格式建議修訂；未核准只可為 `usable`，不得升為 `quality-passed`。
 - [x] 3. 驗證真實保留基線突變分數與 `html_escape` 建議進 Writer 提示兩項整合測試（另含量測失敗測試）。
-- [ ] 4. lint、test:related、test:fast、test:golden 已通過；背景完整 test:integration 執行中，**下一步等完整 Node／Python 結束，逐案比對第 5 節既有 14 個失敗**。目前不得宣稱無新增失敗。
-- [ ] 5. golden 有差異立即停止並列差異，絕不更新快照；否則完成交接供驗收。
+- [x] 4. lint、test:related、test:fast、test:golden 已通過；完整 integration 已結束並逐案比對第 5 節既有 14 個失敗：新增 0（Claude Code 22:50 判讀，見上節）。
+- [x] 5. golden 11/11 零差異，未更新快照；完成交接，待使用者驗收。
 
 | 本輪驗證 | 結果 | 證據 |
 | --- | --- | --- |
@@ -106,7 +119,7 @@
 | related | 最終 45/45 全過；初輪其他相關案例通過紀錄保留 | `log/pr3-codex-fixtures-v4.log`、`log/pr3-codex-related.log` |
 | fast | Node 776/776、Python 48/48，含型別、lint、Webview；退出碼 0 | `log/pr3-codex-fast.log`、`log/pr3-codex-fast.status.json` |
 | golden | 11/11 通過；五組快照零差異，來源雜湊無變更 | `log/pr3-codex-golden.log`、`log/pr3-codex-golden.status.json` |
-| 完整 integration | 背景執行中（PID 14768）；187 個 Node 檔、52 個 Python 檔。Node 若失敗仍補跑完整 Python tier，逐案比對第 5 節既有 14 個失敗 | `log/pr3-codex-integration.log`、`log/pr3-codex-integration.status.json`；來源版本證據 `log/pr3-codex-integration.source-before.json` |
+| 完整 integration | 已結束（3372 秒）：Node 1053 tests／1036 pass／17 fail（14 leaf＋3 父）／0 skip；Python 842 tests OK（4 skips）。14 個 leaf 失敗與第 5 節完全相同，新增 0 | `log/pr3-codex-integration.log`、`log/pr3-codex-integration.status.json`；來源版本證據 `log/pr3-codex-integration.source-before.json` |
 
 ### 2026-11-08 PR #3 歷史完成紀錄（後續五項續接以上節為準）
 
@@ -331,6 +344,7 @@ PR #4 是選配，建議延後，下一步直接做 PR #5（待使用者確認�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-08（Claude Code／PR #3 收尾）：沒有 AOCI MCP，未呼叫。本輪只改 `docs/HANDOFF.md`，受管理檔清單同下方 Codex 那一筆，不需新增。
 - 2026-11-08（Codex／PR #3 續接）：本次工具清單沒有 AOCI MCP，依使用者指示跳過；請具 AOCI 能力的後續 agent 在穩定狀態維護一次。除原 PR #3 清單外，納入 `src/pipeline/targetReport.ts`、`src/test/tieredSuccessIntegration.test.ts` 與本輪三個既有整合測試更新。未修改 `.aoci/` 或 `.codex/`，未假稱已完成維護。
 
 - 2026-11-08（PR #3）：Antigravity 無 AOCI MCP 工具，請 Codex 對 PR #3 新增與修改的受管理檔案執行 `aoci_maintain`：`src/roles/reviewEvidenceBasis.ts`、`src/roles/testReviewer.ts`、`src/roles/reviewContractRepair.ts`、`src/pipeline/testCandidatePipeline.ts`、`src/orchestrator.ts`、`src/pipeline/resultPresentation.ts`、`src/pipeline/batchJournal.ts`、`src/test/reviewContractRepair.test.ts`、`src/test/resultPresentation.test.ts`、`src/test/batchJournal.test.ts`、`test/fixtures/eval_screening/gpt_oss20b/bottle_utils_9e53c6fc/html_escape_6d4c4a8f/reviewer_response_fixture.json`。
@@ -411,6 +425,7 @@ PR #4 是選配，建議延後，下一步直接做 PR #5（待使用者確認�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 22:50 | Claude Code | PR #3 步驟 4、5／收尾 | 判讀背景 integration：Node 1053／1036 pass／17 fail（14 leaf，與既有清單完全相同，新增 0）、Python 842 OK；629 檔來源與 HEAD 零差異；golden 11/11 不重跑。未改程式，PR #3 待驗收 | 本筆 docs commit |
 | 2026-11-08 19:07 | Codex（GPT-6） | PR #3 步驟 4／背景驗證 | golden 11/11 零差異；完整 integration 已背景啟動（PID 14768），輸出寫 log；後續只看摘要與失敗名稱並逐案比對，不改已凍結程式 | `728a674`、`8f3d487`；本筆文件 checkpoint |
 | 2026-11-08 19:03 | Codex（GPT-6） | PR #3 步驟 3 | 正式命令驗證保留基線真突變／usable、html_escape 建議進 Writer 且失敗額度 0、量測失敗事件與報告；相關 45/45，fast 776/48 全過 | `8f3d487` |
 | 2026-11-08 19:02 | Codex（GPT-6） | PR #3 步驟 1、2 | 保留量測失敗 journal／安全診斷；恢復原迴圈條件、Writer 一次建議修訂；修復 artifact hook 誤扣。相關 45/45、fast 通過 | `728a674` |
