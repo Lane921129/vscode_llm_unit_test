@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-08 PR #5（case-table-v1 結構與驗證）
+- 新增 `src/pipeline/caseTable/`：`case-table-v1` 型別、逐行 JSON 解析（壞行只記錄原因並丟棄，不影響其他行）與驗證器請求／結果套用。
+- 解析時檢查必要欄位、`category` 列舉、情境 80 字上限、`mocks` 格式、`<needs-setup: …>` 與需求編號必須存在於需求清單。
+- 新增 `python_scripts/case_row_validator.py`：只解析不執行受測模組，由 AST 重建簽名後以 `literal_eval`＋`inspect.signature().bind` 檢查呼叫，`mocks` 只能使用 AST 相依清單中的名稱。
+- 只建模組與單元測試，未接入 orchestrator、未改 v1 流程與提示詞。
+
 ## 2026-11-08 PR #3（成功分層與批次失敗彙總）
 - 實作終態分層（`quality-passed`、`usable`、`failed`、`environment-blocked`、`tool-blocked`），將隔離通過、呼叫真實目標且完成突變量測的保留基線明確標示為 `usable`。
 - 保留下來的可執行基線（`checkpoints.executable`）於失敗或審查未完成收尾時一律補跑隔離突變測試並記錄 `quality_baseline.json`，Reviewer 僅決定能否升為 `quality-passed`。
