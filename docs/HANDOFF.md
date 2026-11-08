@@ -36,6 +36,11 @@
 5. PR #5 補做架構第 4 節第 2 列的兩項：`case_table.json` 讀寫（`{version: "case-table-v1", target, rows}`，以 `renameAtomicSync` 原子寫入；讀取驗證版本與欄位，壞檔拋出明確錯誤，不回傳空表），以及狀態轉移純函式（只允許 `proposed→invalid|captured|capture-failed`、`captured→test-generated`、`test-generated→test-passed|test-failed`，其他拋錯）。不接 orchestrator。
 6. 有裝飾器的目標維持用 `def` 參數判斷，驗證報告加上 `decorated: true`（不寫入裝飾器名稱）。
 
+**2026-11-08 23:30 監督確認 PR #5 第二版的三項解讀（維持）**：
+7. `decorated` 不計 `staticmethod`／`classmethod`，其他任何裝飾器一律 `true`。
+8. 列轉到 `invalid`／`capture-failed`／`test-failed` 必須給原因碼，否則拋錯；轉到其他狀態清掉舊原因。
+9. `case_table.json` 讀取採嚴格模式（未知欄位拋錯），並以「所有選填欄位＋needsSetup call」的一列做 write→read 往返 deepEqual 測試保護。
+
 **2026-11-08 模型篩選結果（詳見 `docs/模型篩選結果_2026_11_08.md`）**：主力模型 **gpt-oss:20b**（26 個目標中完整通過 6、可執行 25、平均覆蓋率 90%），備援 **ministral-3:14b**。之後的開發驗證與評估都以 gpt-oss:20b 為準。
 - PR #3 追加需求：保留下來的可執行基線也要跑突變測試，不論 Reviewer 是否核准；否則「可用」層幾乎無法達成。
 - PR #3 追加 C 類修正：工具受阻 `Review revision requires the current method inventory.`（篩選中出現 4 次）。
@@ -100,7 +105,7 @@
 - [x] 2. `case_row_validator.py` ＋ `test_case_row_validator.py`（13 tests）
 - [x] 3. 加進 fast（`caseTable`）與 `test:python` 清單；`verificationRunner.test.ts` 的 Python 模組數 57→58、末尾清單補上新模組（與 PR #2 同樣做法）；CHANGELOG 4 行。commit `c7e17fe`
 - [x] 3b. 依第 0 節「PR #5 案例表設計決策」補強（commit `0dcec49`）：args 單元素包裝、`decorated`、`mocks` 安全切段、`case_table.json` 讀寫（`caseTableStore.ts`）、狀態轉移純函式 `transitionCaseRow`。
-- [ ] 4. **待使用者在 Windows 原生執行**（不可視為已通過）：`npm run test:fast` 與 `npm run test:python`，貼摘要（通過／失敗數）。預期 Node fast 比 PR #3 的 776 多出本 PR 的 `caseTable.test.ts`（19 tests），`test:python` 多 1 個模組（19 tests）。全過後交監督驗收。PR #5 完成後不自行開始 PR #6
+- [ ] 4. **待使用者在 Windows 原生執行**（不可視為已通過）：`npm run test:fast` 與 `npm run test:python`，貼摘要（通過／失敗數）。預期 Node fast 比 PR #3 的 776 多出本 PR 的 `caseTable.test.ts`（20 tests），`test:python` 多 1 個模組（19 tests）。全過後交監督驗收。PR #5 完成後不自行開始 PR #6
 
 #### 第二版（`0dcec49`）內容
 
@@ -121,7 +126,9 @@
 | secret scan（tracked files） | 通過 | `log/pr5-v2-secret-scan.log` |
 | golden／integration | 未跑：本 PR 不碰 v1，`test/fixtures/golden/` 無修改 | – |
 
-**待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`（見第 4 步）。VM 的 Python 是 3.10、Windows `.venv` 是 3.13，新驗證器已避開版本差異（stub 用 `ast.unparse` 產生原始碼），但仍需 Windows 實跑確認。
+**第三版（監督 23:30）**：新增「所有選填欄位＋needsSetup call」往返測試，caseTable 20 tests。VM：check-types 0（`log/pr5-v3-check-types.log`）、lint 0／0 warning（`log/pr5-v3-lint.log`）、related 40/40（`log/pr5-v3-related-node.log`）。Python 未改，維持 19/19。**仍不是正式結果。**
+
+**待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`（見第 4 步；Node fast 預期多 20 個 caseTable tests）。VM 的 Python 是 3.10、Windows `.venv` 是 3.13，新驗證器已避開版本差異（stub 用 `ast.unparse` 產生原始碼），但仍需 Windows 實跑確認。
 
 #### 實作內容
 
@@ -493,6 +500,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 - AOCI 有兩個 `aoci.exe --repo ... mcp` 程序（33248／28940），未見獨立 watch 命令。開啟組的五次實驗期間沒有呼叫任何 AOCI 工具／CLI，兩程序的 ReadOperationCount、ReadTransferCount、WriteOperationCount、WriteTransferCount **前後全部不變**，包括 EPERM 的第 3 次。`log/pr1-aoci-idle-io-probe.json` 保存計數；既有 scope 證據中 ignored log 項目 reads_content=false。這次沒有 AOCI 同時掃描內容的證據；I/O 計數不能列出檔案持有者，亦不能永久排除其他時間的掃描。
 - **判斷**：停止組 5/5、開啟組 4/5 且重現相同 EPERM，支持優先懷疑 CodeGraph 監看／其時間效應；樣本有限，尚未取得衝突 handle 的直接證據，不能宣稱已證明唯一肇因。未放寬 `writers >= 2`、未改產品。CodeGraph 已恢復、AOCI 未停用；完整第 4 步仍採逐檔同步的倉庫外隔離副本，並在回報註明此主倉庫環境限制。2026-11-07 已批准並完成有界重試與 daemon 開啟的十連跑，見本節新紀錄；原始監看肇因仍只具相關性證據。
 
+- **CaseRow 欄位與 `case_table.json`（2026-11-08 起）**：之後任何 PR 新增或改名 `CaseRow` 欄位時，必須同時更新 `src/pipeline/caseTable/caseTableStore.ts` 的讀取驗證（嚴格模式會拒絕未知欄位），以及 `src/test/caseTable.test.ts` 中「a row with every optional field … round-trips」的往返測試列。
 - 沙箱執行會出現 EPERM 或 WinError 5，請改用原生權限重跑，不要為此放寬產品的隔離規則。
 - 路徑含中文字，Python 子程序需要 `PYTHONIOENCODING=utf-8`。
 - `test/fixtures/golden/full.json` 有 2.6MB，不要整份開啟，用腳本比對差異。
@@ -505,6 +513,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 00:45 | Claude Code | PR #5 第三版（監督確認三項解讀） | 第 0 節補第 7～9 項；新增全選填欄位往返測試；第 5 節加 CaseRow 欄位維護註記。VM：check-types／lint 0、related 40/40；Windows fast／python 待使用者執行 | 本筆 |
 | 2026-11-09 00:30 | Claude Code | PR #5 第二版（審查決定） | 第 0 節寫入六項決策；args 單元素包裝、decorated、mocks 安全切段、case_table.json 讀寫、狀態轉移。VM：check-types／lint 0、related 39/39、Python 19/19；Windows fast／python 待使用者執行 | `0dcec49`＋本筆 docs |
 | 2026-11-08 23:55 | Claude Code | PR #5 步驟 1～3 | 案例表型別、逐行解析、驗證器與單元測試（Node 13、Python 13）；check-types／lint 0、related 29/29；VM 版 fast 只有 6 個環境失敗。待使用者在 Windows 跑 fast／python | `c7e17fe`＋本筆 docs |
 | 2026-11-08 23:10 | Claude Code | PR #3 合併／PR #5 開始 | 本機 `--no-ff` 合併 PR #3 到 `lane_edition`（`474e4e5`）；VM 連不到 GitHub，push 待使用者在 Windows 執行；開 `pr/05-case-table` | 本筆 docs commit |

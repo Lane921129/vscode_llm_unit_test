@@ -301,3 +301,33 @@ test('damaged or wrong-version case tables throw a clear error instead of an emp
             'an invalid table is never written');
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('a row with every optional field (and a needs-setup call) round-trips through case_table.json unchanged', () => {
+    // Later PRs that add CaseRow fields must update caseTableStore validation and this row together.
+    const full: CaseRow = {
+        id: 'C4', origin: 'quality-analyst', scenario: '已連線資料庫查無車輛', category: 'dependency-failure',
+        call: { needsSetup: '已連線的 sqlite3 Connection，含一筆車輛' },
+        mocks: [{ dependency: 'db.fetchone', behavior: 'return', value: 'None' },
+            { dependency: 'db.commit', behavior: 'raise', value: 'sqlite3.OperationalError' }],
+        requirementId: 'R1',
+        predictions: [
+            { kind: 'raise', value: 'LookupError', basis: 'R1: 查無車輛時拋出 LookupError', basisVerified: true },
+            { kind: 'return', value: 'None', basis: 'function name', basisVerified: false }
+        ],
+        actual: { kind: 'return', value: 'None' },
+        expected: { kind: 'return', value: 'None', source: 'observed', confirmedBySpec: false },
+        oracleStatus: 'needs-review',
+        status: 'test-failed',
+        reason: 'assertion-failed',
+        testMethod: 'test_c4_missing_vehicle',
+        normalizations: ['args-wrapped-single']
+    };
+    const table: CaseTableFile = { version: 'case-table-v1', target: 'Garage.find', rows: [full] };
+    const directory = tempDir();
+    try {
+        writeCaseTable(directory, table);
+        assert.deepStrictEqual(readCaseTable(directory), table);
+        const optional = ['requirementId', 'predictions', 'actual', 'expected', 'oracleStatus', 'reason', 'testMethod', 'normalizations'];
+        assert.deepStrictEqual(optional.filter(key => !(key in readCaseTable(directory).rows[0])), [], 'every optional field survives');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
