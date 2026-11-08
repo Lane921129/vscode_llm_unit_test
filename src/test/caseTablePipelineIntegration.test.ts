@@ -33,7 +33,7 @@ function options(env: ReturnType<typeof fixture>, replies: string[], prompts: { 
             if (reply === undefined) { throw new Error('unexpected model request'); }
             return reply;
         },
-        log: () => undefined, ...overrides
+        log: () => undefined, runRows: false, ...overrides
     };
 }
 

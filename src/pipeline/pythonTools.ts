@@ -38,7 +38,9 @@ export const PYTHON_TOOLS = {
     externalMutation: 'external_mutation_runner.py',
     coverage: 'coverage_read.py',
     caseTableFacts: 'case_table_facts.py',
-    caseRowValidator: 'case_row_validator.py'
+    caseRowValidator: 'case_row_validator.py',
+    caseCapture: 'case_capture_runner.py',
+    caseRowAssertions: 'case_row_assertions.py'
 } as const;
 
 export function pythonToolPath(tool: keyof typeof PYTHON_TOOLS): string {

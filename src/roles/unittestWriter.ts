@@ -720,3 +720,60 @@ export function getUserPrompt(
 
     return prompt;
 }
+
+// === v2 case table: single-row setup (llmUnitTest.pipelineVersion = "v2-case-table" only) ===
+// v1 Writer prompts above are unchanged. Full text: docs/v2_提示詞_待審.md.
+
+export interface RowSetupPromptInput {
+    signature: string;
+    className: string | null;
+    methodKind: 'module' | 'instance' | 'static' | 'class';
+    targetName: string;
+    source: string;
+    scenario: string;
+    setupDescription: string;
+}
+
+export const ROW_SETUP_MAX_LINES = 10;
+
+export function getRowSetupPrompt(input: RowSetupPromptInput): { system: string; user: string } {
+    const system = [
+        'You write setup code for one Python unit test.',
+        'Build only the inputs that are described. Do not call the function under test and do not write assertions.'
+    ].join('\n');
+    const instance = input.methodKind === 'instance';
+    const user = [
+        `Target: ${input.signature}${input.className ? ` (method of class ${input.className})` : ''}`,
+        'Source:',
+        '```python',
+        input.source,
+        '```',
+        '',
+        `Scenario: ${input.scenario}`,
+        `Inputs to build: ${input.setupDescription}`,
+        '',
+        'The module under test is available as target_module, and unittest.mock as mock.',
+        `Write 3 to ${ROW_SETUP_MAX_LINES} lines of Python that define:`,
+        '- args: a tuple of positional arguments',
+        '- kwargs: a dict of keyword arguments ({} when there are none)',
+        ...(instance ? [`- instance: the ${input.className ?? 'class'} object whose method is tested`] : []),
+        `Do not call ${input.targetName}, do not open files or use the network, and do not write assertions.`,
+        'Example:',
+        '```python',
+        'item = target_module.Item(name="a", size=2)',
+        'args = (item, 3)',
+        'kwargs = {}',
+        '```',
+        'Output only one ```python block containing the setup lines.'
+    ].join('\n');
+    return { system, user };
+}
+
+/** Extract setup lines from a reply; null when there is no usable block or it exceeds the line limit. */
+export function parseRowSetupResponse(response: string): string | null {
+    const fenced = /```(?:python|py)?[^\n]*\n([\s\S]*?)```/i.exec(response);
+    const code = (fenced ? fenced[1] : response).replace(/\r\n?/g, '\n').trim();
+    const lines = code.split('\n').filter(line => line.trim() && !line.trim().startsWith('#'));
+    if (!lines.length || lines.length > ROW_SETUP_MAX_LINES || !/^\s*args\s*=/m.test(code)) { return null; }
+    return code;
+}

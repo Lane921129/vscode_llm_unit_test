@@ -392,3 +392,59 @@ function parsePythonReplacement(raw: string, method: string): BugFixReplacement 
     return { method, replacement: lines.slice(start).join('\n'), imports };
 }
 import { dependencyContextsForPrompt, observationsForPrompt } from '../pipeline/evidenceContracts';
+
+// === v2 case table: single-row fix (llmUnitTest.pipelineVersion = "v2-case-table" only) ===
+// v1 Bug Fixer prompts above are unchanged. Full text: docs/v2_提示詞_待審.md.
+
+/** Architecture section 4 row 9: at most two fix attempts per row. */
+export const ROW_FIX_MAX_ATTEMPTS = 2;
+
+export interface RowFixPromptInput {
+    signature: string;
+    scenario: string;
+    methodName: string;
+    method: string;
+    error: string;
+}
+
+export function getRowFixPrompt(input: RowFixPromptInput): { system: string; user: string } {
+    const system = [
+        'You fix one failing Python unittest method.',
+        'Keep the method name and keep every expected value in the assertions exactly as it is.'
+    ].join('\n');
+    const error = input.error.length > 1500 ? input.error.slice(input.error.length - 1500) : input.error;
+    const user = [
+        `Function under test: ${input.signature}`,
+        `Scenario: ${input.scenario}`,
+        '',
+        'Failing method:',
+        '```python',
+        input.method,
+        '```',
+        '',
+        'Error:',
+        '```text',
+        error,
+        '```',
+        '',
+        'Fix only what makes this method fail. Do not change expected values, the asserted exception, or the arguments of the call under test.',
+        'Example of the expected reply shape:',
+        '```python',
+        `    def ${input.methodName}(self):`,
+        '        ...',
+        '```',
+        `Output only the complete corrected ${input.methodName} method in one \`\`\`python block.`
+    ].join('\n');
+    return { system, user };
+}
+
+/** Extract the corrected method; null when the reply has no method with the same name. */
+export function parseRowFixResponse(response: string, methodName: string): string | null {
+    const fenced = /```(?:python|py)?[^\n]*\n([\s\S]*?)```/i.exec(response);
+    const code = (fenced ? fenced[1] : response).replace(/\r\n?/g, '\n').replace(/\s+$/, '');
+    const header = new RegExp(`^(\\s*)def ${methodName}\\(self\\)\\s*:`, 'm').exec(code);
+    if (!header) { return null; }
+    const lines = code.slice(header.index).split('\n');
+    const base = header[1].length;
+    return lines.map(line => line.trim() ? '    ' + line.slice(Math.min(base, line.length - line.trimStart().length)) : '').join('\n');
+}
