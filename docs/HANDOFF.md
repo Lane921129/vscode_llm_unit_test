@@ -77,7 +77,7 @@
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
 | 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
-| 5 | case-table-v1 結構與驗證 | **第二版完成（`0dcec49`，依審查決定補強）；待使用者在 Windows 跑 `test:fast`／`test:python` 後驗收** | `pr/05-case-table` | 2026-11-08 Claude Code |
+| 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | 未開始 | | |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | 未開始 | | |
@@ -105,7 +105,7 @@
 - [x] 2. `case_row_validator.py` ＋ `test_case_row_validator.py`（13 tests）
 - [x] 3. 加進 fast（`caseTable`）與 `test:python` 清單；`verificationRunner.test.ts` 的 Python 模組數 57→58、末尾清單補上新模組（與 PR #2 同樣做法）；CHANGELOG 4 行。commit `c7e17fe`
 - [x] 3b. 依第 0 節「PR #5 案例表設計決策」補強（commit `0dcec49`）：args 單元素包裝、`decorated`、`mocks` 安全切段、`case_table.json` 讀寫（`caseTableStore.ts`）、狀態轉移純函式 `transitionCaseRow`。
-- [ ] 4. **待使用者在 Windows 原生執行**（不可視為已通過）：`npm run test:fast` 與 `npm run test:python`，貼摘要（通過／失敗數）。預期 Node fast 比 PR #3 的 776 多出本 PR 的 `caseTable.test.ts`（20 tests），`test:python` 多 1 個模組（19 tests）。全過後交監督驗收。PR #5 完成後不自行開始 PR #6
+- [ ] 4. **Windows 原生驗證**：`npm run test:fast` ✅ 2026-11-08 23:37 使用者執行，結束時印出 `Selected scope passed`：check-types、lint、compile、Node 796 tests／796 pass／0 fail／0 skip（比 PR #3 的 776 多出 caseTable 20 個）、Webview 語法、Python fast 48/48 OK（`log/pr5-fast-windows.log`）。`npm run test:python` ❌ 尚未執行（指令誤貼成 `test:pythonnpm`，npm 回報 Missing script），**仍待使用者執行**。原文：`npm run test:fast` 與 `npm run test:python`，貼摘要（通過／失敗數）。預期 Node fast 比 PR #3 的 776 多出本 PR 的 `caseTable.test.ts`（20 tests），`test:python` 多 1 個模組（19 tests）。全過後交監督驗收。PR #5 完成後不自行開始 PR #6
 
 #### 第二版（`0dcec49`）內容
 
@@ -513,6 +513,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-08 23:40 | Claude Code | PR #5 第 4 步（記錄 Windows 結果） | 使用者 Windows `test:fast` 通過：Node 796/796、Python fast 48/48；`test:python` 指令誤貼未執行，仍待使用者 | 本筆 |
 | 2026-11-09 00:45 | Claude Code | PR #5 第三版（監督確認三項解讀） | 第 0 節補第 7～9 項；新增全選填欄位往返測試；第 5 節加 CaseRow 欄位維護註記。VM：check-types／lint 0、related 40/40；Windows fast／python 待使用者執行 | 本筆 |
 | 2026-11-09 00:30 | Claude Code | PR #5 第二版（審查決定） | 第 0 節寫入六項決策；args 單元素包裝、decorated、mocks 安全切段、case_table.json 讀寫、狀態轉移。VM：check-types／lint 0、related 39/39、Python 19/19；Windows fast／python 待使用者執行 | `0dcec49`＋本筆 docs |
 | 2026-11-08 23:55 | Claude Code | PR #5 步驟 1～3 | 案例表型別、逐行解析、驗證器與單元測試（Node 13、Python 13）；check-types／lint 0、related 29/29；VM 版 fast 只有 6 個環境失敗。待使用者在 Windows 跑 fast／python | `c7e17fe`＋本筆 docs |
