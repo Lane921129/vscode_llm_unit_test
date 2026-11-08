@@ -28,6 +28,12 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-08 23:50 使用者授權：PR #6～#8 連續進行（疊加分支）**：
+- 可以不等驗收，連續做完 PR #6、#7、#8。分支疊加：`pr/06-v2-scenario` 從 `pr/05-case-table` 開，`pr/07-capture-rows` 從 `pr/06` 開，`pr/08-spec-oracle` 從 `pr/07` 開。不合併到 `lane_edition`，不 push。PR #8 完成後不開始 PR #9～#12。
+- 提示詞授權：可依架構第 5 節自行撰寫 v2 新提示詞（Analyst-情境、單列 setup、單列 Bug Fixer、Analyst-規格），但只能放在新的 v2 函式；`llmUnitTest.pipelineVersion` 預設 `"v1"`。每份提示詞全文（system＋user 範本＋唯一範例）整理到 `docs/v2_提示詞_待審.md`，註明檔案與函式名稱；使用者審閱前不可用於實驗室。
+- 架構文件已寫明的數值視為已核准：最多 8 列、規格預測 k=3、單列 Bug Fixer 最多 2 次、格式錯誤只針對那一行重問 1 次。
+- 仍然禁止：修改 v1 的提示詞、預算、重試、停止條件、通過標準或預設值；更新 v1 golden（`test/fixtures/golden/*.json`）；在 `src/orchestrator.ts` 加入「依 `pipelineVersion` 分流」以外的邏輯。
+
 **2026-11-08 PR #5 案例表設計決策（監督審查 `c7e17fe` 後決定）**：
 1. `kwargs`、`mocks`、`requirement` 可空；`scenario`、`category`、`args` 必填。維持。
 2. **（使用者 11/08 核准，B 類）** `args` 解析出來不是 tuple 時，由驗證器包成單元素 tuple 再做簽名綁定。驗證結果回傳 `normalizedArgs`（例如 `"(70,)"`）與 `normalizations: ["args-wrapped-single"]`；TS 端套用到 `CaseRow.call.args`，並在列上保留 `normalizations`。tuple 照舊不動；不是字面值的仍拒為 `args-not-literal`。
