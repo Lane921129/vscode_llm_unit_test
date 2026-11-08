@@ -1,0 +1,77 @@
+{
+  "scenario": "database",
+  "terminal": "usable",
+  "reasonCode": "usable",
+  "modelRequests": 1,
+  "rows": [
+    {
+      "id": "C1",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "return",
+        "value": "{'login_account': 'amy', 'display_name': 'Amy', 'role': 'admin'}"
+      },
+      "expected": {
+        "kind": "return",
+        "value": "{'login_account': 'amy', 'display_name': 'Amy', 'role': 'admin'}",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c1"
+    },
+    {
+      "id": "C2",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "return",
+        "value": "None"
+      },
+      "expected": {
+        "kind": "return",
+        "value": "None",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c2"
+    },
+    {
+      "id": "C3",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "raise",
+        "value": "OperationalError"
+      },
+      "expected": {
+        "kind": "raise",
+        "value": "OperationalError",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c3"
+    },
+    {
+      "id": "C4",
+      "status": "capture-failed",
+      "reason": "isolation-blocked",
+      "actual": null,
+      "expected": null,
+      "oracleStatus": null,
+      "testMethod": null
+    }
+  ],
+  "testFile": "import unittest\nfrom unittest import mock\nimport vehicle_db as target_module\n\n\nclass TestCaseTable(unittest.TestCase):\n    def test_c1(self):\n        \"\"\"C1 normal: 帳密正確\"\"\"\n        with mock.patch.object(target_module, '_connect') as mock_0:\n            mock_0.return_value.cursor.return_value.fetchone.return_value = (\"amy\", \"Amy\", \"admin\")\n            result = target_module.authenticate_user(*(\"amy\", \"pw\"), **{})\n        self.assertEqual(result, {'login_account': 'amy', 'display_name': 'Amy', 'role': 'admin'})\n\n    def test_c2(self):\n        \"\"\"C2 dependency-failure: 查無使用者\"\"\"\n        with mock.patch.object(target_module, '_connect') as mock_0:\n            mock_0.return_value.cursor.return_value.fetchone.return_value = None\n            result = target_module.authenticate_user(*(\"amy\", \"bad\"), **{})\n        self.assertEqual(result, None)\n\n    def test_c3(self):\n        \"\"\"C3 dependency-failure: 資料庫錯誤\"\"\"\n        with mock.patch.object(target_module, '_connect') as mock_0:\n            mock_0.side_effect = target_module.sqlite3.OperationalError\n            with self.assertRaises(target_module.sqlite3.OperationalError):\n                target_module.authenticate_user(*(\"amy\", \"pw\"), **{})\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
+  "mutation": {
+    "engine": "builtin",
+    "selected": 34,
+    "executed": 34,
+    "killed": 27,
+    "survived": 7,
+    "score": 79.41176470588235
+  }
+}

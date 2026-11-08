@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-09 PR #7（v2 逐列 capture、程式產生測試與突變）
+- 新增 `case_capture_runner.py`：每列一個行程，在 `guarded_runtime` 隔離內依 facts 在目標模組查找位置 patch（區域呼叫鏈以 MagicMock 設定），記錄回傳值或例外；未 mock 而碰到外部資源只讓該列 `capture-failed`。
+- `rowToTest.ts` 由程式寫出每列一個測試方法（預期值暫為 observed）；只有 needs-setup 或實例方法才請 Writer 寫 3～10 行 setup；`rowExecution.ts` 逐方法用既有 runner 執行，通過者合併後以既有突變引擎量測，終態 usable／failed。
+- 單列 Bug Fixer 每列最多 2 次，`case_row_assertions.py` 以 AST 檢查修正不得改動任何斷言預期值；新提示詞列入 `docs/v2_提示詞_待審.md`。
+- 新增獨立的 v2 golden（`test/fixtures/golden/v2/` 的 BMI 與資料庫 fixture，皆 usable 且有突變分數）；只能用 `UPDATE_CASE_TABLE_GOLDEN=1` 錄製，v1 golden 未改。
+
 ## 2026-11-09 PR #6（v2 設定分流與 Analyst-情境）
 - 新增設定 `llmUnitTest.pipelineVersion`（v1／v2-case-table，預設 v1）、`specOracle`（auto／off）、`requirementsFile`，側欄可切換與選擇需求檔；orchestrator 只加入依設定分流到 `runCaseTablePipeline` 的分支。
 - 新增 `case_table_facts.py`（靜態擷取簽名、docstring、分支條件、可 patch 的相依與鏈）；`semanticAnalyzer.ts` 新增 v2 的 `getCaseScenarioPrompt`／`getCaseRowCorrectionPrompt`／`parseCaseRows`（最多 8 列，超過記錄 row-limit）。
