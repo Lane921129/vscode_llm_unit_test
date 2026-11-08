@@ -10,7 +10,8 @@ import { getWebviewContent } from './webviewContent';
 import { initI18n, t } from '../i18n';
 import { extractFunctionsWithAst, findPythonFilesInDir } from '../utils/utils';
 import { BatchScopeController } from './BatchScopeController';
-import { BatchScopeSelection } from '../pipeline/batchScope';
+import { BatchScopeSelection, buildBatchScopeTargetCandidates } from '../pipeline/batchScope';
+import { compareCaseInsensitive, deduplicateTargetList, defaultFunctionInventoryResolver, importTargetListFromJson, loadTargetListState, saveTargetListState, serializeTargetListJson, sortFunctionNames, TargetListItem } from '../pipeline/targetList';
 import { buildGoogleGenerateContentRequest, buildGoogleListModelsRequest, getGenerateContentModelNames, getGoogleGeneratedText, getGoogleModelConnectionMetadata, googleThinkingSession, normalizeGoogleModelName } from '../llm/cloudApi';
 import { CloudCredential, normalizeCloudCredentials, toCloudCredentialOptions } from '../llm/cloudCredentials';
 import { formatModelQualificationLog, LOCAL_RUNTIME_QUALIFICATION_VERSION, ModelQualificationProfile, QUALIFICATION_VERSION, qualificationEndpointKey } from '../llm/modelQualification';
@@ -190,6 +191,18 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         await this.uiState.update(`llmUnitTest.lastFolders.v1.${kind}`, folder);
     }
 
+    private loadSavedTargetList(root: string): TargetListItem[] {
+        if (!root) { return []; }
+        try { return loadTargetListState(this.uiState, root); }
+        catch { return []; }
+    }
+
+    private async saveTargetListForRoot(root: string, items: readonly TargetListItem[]): Promise<TargetListItem[]> {
+        if (!root) { return deduplicateTargetList(items); }
+        try { return await saveTargetListState(this.uiState, root, items); }
+        catch { return deduplicateTargetList(items); }
+    }
+
     private async rememberRunPreference(config: vscode.WorkspaceConfiguration, key: string, value: unknown): Promise<void> {
         const setting = config.inspect?.(key);
         const target = setting?.workspaceFolderValue !== undefined ? vscode.ConfigurationTarget.WorkspaceFolder
@@ -287,6 +300,12 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     }
                     const files = await this.findPythonFiles(savedProjPath);
                     this.webview?.postMessage({ command: 'setFiles', projectPath: savedProjPath, files });
+                    if (savedProjPath) {
+                        const savedTargets = this.loadSavedTargetList(savedProjPath);
+                        if (savedTargets.length > 0) {
+                            this.webview?.postMessage({ command: 'targetListUpdated', projectRoot: savedProjPath, targets: savedTargets });
+                        }
+                    }
 
                     // Background fetch for local models
                     this.fetchLocalModels().then(models => {
@@ -382,6 +401,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const files = await this.findPythonFiles(projectPath);
                         if (revision !== this.projectRevision) { break; }
                         this.webview?.postMessage({ command: 'setFiles', projectPath, files });
+                        const savedTargets = this.loadSavedTargetList(projectPath);
+                        this.webview?.postMessage({ command: 'targetListUpdated', projectRoot: projectPath, targets: savedTargets });
                         
                         if (files.length === 0) {
                             vscode.window.showWarningMessage(localize("在選擇的資料夾中沒有找到任何 .py 檔案。"));
@@ -438,10 +459,103 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                 }
 
                 case 'getFunctions': {
+                    const projectRoot = this.lastFolder('project', config.get<string>('projectPath', ''));
                     this.webview?.postMessage({ command: 'pythonEnvironmentSelection',
-                        python: configuredPythonForResource(message.filePath, this.lastFolder('project')) });
+                        python: configuredPythonForResource(message.filePath, projectRoot) });
                     const funcs = await this.findPythonFunctions(message.filePath);
-                    this.webview?.postMessage({ command: 'setFunctions', filePath: message.filePath, funcs });
+                    const relativeFile = projectRoot && typeof message.filePath === 'string'
+                        ? path.relative(projectRoot, message.filePath).replace(/\\/g, '/')
+                        : typeof message.filePath === 'string' ? path.basename(message.filePath) : '';
+                    this.webview?.postMessage({ command: 'setFunctions', filePath: message.filePath, relativeFile, funcs });
+                    break;
+                }
+
+                case 'saveTargetList': {
+                    if (this.activeAnalysis) { break; }
+                    const root = typeof message.projectRoot === 'string' && message.projectRoot
+                        ? message.projectRoot : this.lastFolder('project', config.get<string>('projectPath', ''));
+                    const items = Array.isArray(message.targets) ? deduplicateTargetList(message.targets) : [];
+                    await this.saveTargetListForRoot(root, items);
+                    break;
+                }
+
+                case 'exportTargetList': {
+                    const root = typeof message.projectRoot === 'string' && message.projectRoot
+                        ? message.projectRoot : this.lastFolder('project', config.get<string>('projectPath', ''));
+                    const items = Array.isArray(message.targets)
+                        ? deduplicateTargetList(message.targets)
+                        : this.loadSavedTargetList(root);
+                    let targetUri: { fsPath: string } | undefined;
+                    if (typeof message.filePath === 'string' && message.filePath.trim()) {
+                        targetUri = { fsPath: message.filePath.trim() };
+                    } else if (typeof (vscode.window as any).showSaveDialog === 'function') {
+                        targetUri = await (vscode.window as any).showSaveDialog({
+                            defaultUri: root ? vscode.Uri.file(path.join(root, 'targets.json')) : undefined,
+                            filters: { JSON: ['json'] },
+                            saveLabel: t('ui.exportTargets')
+                        });
+                    }
+                    if (targetUri?.fsPath) {
+                        fs.writeFileSync(targetUri.fsPath, serializeTargetListJson(items), 'utf8');
+                        const statusText = t('ui.targetListExportSuccess', items.length, targetUri.fsPath);
+                        this.webview?.postMessage({ command: 'targetListExported', filePath: targetUri.fsPath, count: items.length, statusText });
+                        vscode.window.showInformationMessage?.(statusText);
+                    }
+                    break;
+                }
+
+                case 'importTargetList': {
+                    if (this.activeAnalysis) { break; }
+                    const root = typeof message.projectRoot === 'string' && message.projectRoot
+                        ? message.projectRoot : this.lastFolder('project', config.get<string>('projectPath', ''));
+                    if (!root || !fs.existsSync(root)) {
+                        await vscode.window.showWarningMessage(t('ui.selectProject'));
+                        break;
+                    }
+                    let rawContent: string | undefined;
+                    if (typeof message.rawJson === 'string') {
+                        rawContent = message.rawJson;
+                    } else {
+                        let importFile = typeof message.filePath === 'string' && message.filePath.trim() ? message.filePath.trim() : undefined;
+                        if (!importFile) {
+                            const picked = await vscode.window.showOpenDialog({
+                                canSelectFiles: true,
+                                canSelectFolders: false,
+                                canSelectMany: false,
+                                defaultUri: vscode.Uri.file(root),
+                                filters: { JSON: ['json'] },
+                                openLabel: t('ui.importTargets')
+                            });
+                            importFile = picked?.[0]?.fsPath;
+                        }
+                        if (!importFile) { break; }
+                        rawContent = fs.readFileSync(importFile, 'utf8');
+                    }
+                    try {
+                        const python = configuredPythonForResource(root, root);
+                        const result = await importTargetListFromJson(root, rawContent, defaultFunctionInventoryResolver(python));
+                        await this.saveTargetListForRoot(root, result.targets);
+                        const missingLabels = result.missing.map(item => item.target ? `${item.file}:${item.target}` : item.file);
+                        const statusText = missingLabels.length > 0
+                            ? t('ui.targetListImportMissing', result.targets.length, missingLabels.length, missingLabels.join(', '))
+                            : t('ui.targetListImportSuccess', result.targets.length);
+                        this.webview?.postMessage({
+                            command: 'targetListUpdated',
+                            projectRoot: root,
+                            targets: result.targets,
+                            missing: result.missing,
+                            statusText
+                        });
+                        if (missingLabels.length > 0) {
+                            await vscode.window.showWarningMessage(statusText);
+                        } else {
+                            vscode.window.showInformationMessage?.(statusText);
+                        }
+                    } catch (error: any) {
+                        const errMsg = t('ui.targetListImportInvalid', error?.message || String(error));
+                        this.webview?.postMessage({ command: 'targetListImportFailed', projectRoot: root, statusText: errMsg });
+                        await vscode.window.showWarningMessage(errMsg);
+                    }
                     break;
                 }
 
@@ -472,8 +586,23 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         if (revision !== this.projectRevision) { break; }
                         const selection = await this.previewBatchScope(root, files);
                         if (selection && revision === this.projectRevision) {
-                            this.webview?.postMessage({ command: 'batchScopeSelected', projectRoot: root,
-                                text: t('ui.batchScopeSelected', selection.selectedFiles.length, selection.knownFiles.length) });
+                            const fileFunctions = new Map<string, string[]>();
+                            for (const relFile of selection.selectedFiles) {
+                                const funcs = await this.findPythonFunctions(path.join(root, relFile));
+                                if (revision !== this.projectRevision) { break; }
+                                fileFunctions.set(relFile, funcs);
+                            }
+                            if (revision === this.projectRevision) {
+                                const candidates = buildBatchScopeTargetCandidates(selection, fileFunctions);
+                                await this.saveTargetListForRoot(root, candidates.map(({ file, target }) => ({ file, target })));
+                                this.webview?.postMessage({
+                                    command: 'batchScopeSelected',
+                                    projectRoot: root,
+                                    text: t('ui.batchScopeSelected', selection.selectedFiles.length, selection.knownFiles.length),
+                                    selectedFiles: selection.selectedFiles,
+                                    targets: candidates
+                                });
+                            }
                         }
                     } catch {
                         if (revision === this.projectRevision) { await vscode.window.showWarningMessage(t('ui.batchScopeScanFailed')); }
@@ -613,6 +742,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         if (revision !== this.projectRevision) {
                             this.webview?.postMessage({ command: 'analysisFinished' });
                             break;
+                        }
+                        if (params.command === 'startBatchAnalysis' && Array.isArray(params.targets) && params.targets.length > 0) {
+                            params.targets = deduplicateTargetList(params.targets);
                         }
                         void vscode.commands.executeCommand(params.command === 'startBatchAnalysis'
                             ? 'llm-unit-test.runBatchAnalysis' : 'llm-unit-test.runCaptureAndTest', params);
@@ -979,7 +1111,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                                     if (dirent.isDirectory()) {
                                         dirQueue.push(fullPath);
                                     } else if (file.endsWith('.py')) {
-                                        files.push({ name: path.relative(rootPath, fullPath), path: fullPath });
+                                        files.push({ name: path.relative(rootPath, fullPath).replace(/\\/g, '/'), path: fullPath });
                                     }
                                 }
                             })
@@ -997,7 +1129,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         } catch (e) {
             console.error(localize("掃描專案檔案失敗"), e);
         }
-        return files.sort((left, right) => left.name.localeCompare(right.name));
+        return files.sort((left, right) => compareCaseInsensitive(left.name, right.name));
     }
 
     private async findPythonFunctions(filePath: string): Promise<string[]> {
@@ -1005,7 +1137,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         if (!releasePython) { return []; }
         try {
             const infos = await extractFunctionsWithAst(filePath, configuredPythonForResource(filePath, this.lastFolder('project')));
-            return infos.map(f => f.fullName);
+            return sortFunctionNames(infos.map(f => f.fullName));
         } finally { releasePython(); }
     }
 

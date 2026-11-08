@@ -371,12 +371,43 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
     <details open>
         <summary>${t('ui.testTarget')}</summary>
         <div class="content">
-            <label>${t('ui.file')}</label>
-            <select id="file-select"><option value="">${t('ui.allFiles')}</option></select>
-            
-            <label style="margin-top:8px;">${t('ui.function')}</label>
-            <select id="func-select" disabled><option value="">all</option></select>
+            <div id="single-target-controls">
+                <label>${t('ui.file')}</label>
+                <select id="file-select"><option value="">${t('ui.allFiles')}</option></select>
 
+                <label style="margin-top:8px;">${t('ui.function')}</label>
+                <select id="func-select" disabled><option value="">all</option></select>
+
+                <div id="func-checkbox-controls" style="display:flex; gap:6px; margin-top:6px;">
+                    <button type="button" id="btn-func-select-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;" disabled>${t('ui.selectAll')}</button>
+                    <button type="button" id="btn-func-deselect-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;" disabled>${t('ui.deselectAll')}</button>
+                    <button type="button" id="btn-add-targets" style="flex:1.4; margin:0; padding:4px 8px; font-size:11px;" disabled>${t('ui.addTargets')}</button>
+                </div>
+                <div id="func-checkbox-list" style="max-height:140px; overflow-y:auto; margin-top:6px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; padding:4px 6px; display:none;"></div>
+            </div>
+
+            <div id="batch-scope-targets-panel" style="display:none; margin-top:6px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; padding:6px;">
+                <p id="batch-scope-targets-hint" style="margin:0 0 6px 0;">${t('ui.batchScopeTargetsHint')}</p>
+                <div style="display:flex; gap:6px; margin-bottom:6px;">
+                    <button type="button" id="btn-batch-func-select-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.selectAll')}</button>
+                    <button type="button" id="btn-batch-func-deselect-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.deselectAll')}</button>
+                    <button type="button" id="btn-exit-batch-scope" style="flex:1.4; margin:0; padding:4px 8px; font-size:11px;">${t('ui.exitBatchScopeMode')}</button>
+                </div>
+                <div id="batch-scope-targets-list" style="max-height:160px; overflow-y:auto;"></div>
+            </div>
+
+            <div id="target-list-section" style="margin-top:10px; border-top:1px solid var(--vscode-editorGroup-border); padding-top:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+                    <p id="target-list-count" style="margin:0; font-weight:600; color:var(--vscode-foreground);">${t('ui.targetListCount', 0)}</p>
+                    <button type="button" id="btn-clear-targets" style="width:auto; margin:0; padding:3px 8px; font-size:11px;" disabled>${t('ui.clearTargets')}</button>
+                </div>
+                <div id="target-list-container" style="max-height:160px; overflow-y:auto; margin-top:6px; display:flex; flex-direction:column; gap:4px;"></div>
+                <div class="flex-row" style="margin-top:6px; gap:6px;">
+                    <button type="button" id="btn-export-targets" style="flex:1; margin:0; padding:4px 8px; font-size:11px;" disabled>${t('ui.exportTargets')}</button>
+                    <button type="button" id="btn-import-targets" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.importTargets')}</button>
+                </div>
+                <p id="target-list-status" role="status" aria-live="polite" style="margin-top:4px;"></p>
+            </div>
             
             <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
                 <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
@@ -525,8 +556,220 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         updateExecutionTimingStatus();
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
+
+        const fileRelativeNameByPath = new Map();
+        let currentFileRelative = '';
+        let currentFileFunctions = [];
+        const checkedFileFunctions = new Set();
+        let batchScopeMode = false;
+        let batchScopeCandidates = [];
+        let targetList = [];
+
+        function compareCaseInsensitive(left, right) {
+            const a = String(left).toLowerCase();
+            const b = String(right).toLowerCase();
+            if (a !== b) return a < b ? -1 : 1;
+            return left < right ? -1 : left > right ? 1 : 0;
+        }
+
+        function compareTargetItems(left, right) {
+            const a = String(left.target).toLowerCase();
+            const b = String(right.target).toLowerCase();
+            if (a !== b) return a < b ? -1 : 1;
+            const fileCmp = compareCaseInsensitive(String(left.file).replace(/\\\\/g, '/'), String(right.file).replace(/\\\\/g, '/'));
+            if (fileCmp !== 0) return fileCmp;
+            return left.target < right.target ? -1 : left.target > right.target ? 1 : 0;
+        }
+
+        function targetIdentityKey(file, target) {
+            return String(file).replace(/\\\\/g, '/').toLowerCase() + '\\0' + String(target);
+        }
+
+        function resolveRelativeFile(filePath, explicitRelative) {
+            if (explicitRelative) return String(explicitRelative).replace(/\\\\/g, '/');
+            if (fileRelativeNameByPath.has(filePath)) return fileRelativeNameByPath.get(filePath);
+            const projEl = document.getElementById('project-path');
+            const proj = (projEl ? projEl.value : '').replace(/\\\\/g, '/').replace(/\\/+$/, '');
+            const norm = String(filePath || '').replace(/\\\\/g, '/');
+            if (proj && norm.toLowerCase().startsWith((proj + '/').toLowerCase())) {
+                return norm.slice(proj.length + 1);
+            }
+            const slash = norm.lastIndexOf('/');
+            return slash >= 0 ? norm.slice(slash + 1) : norm;
+        }
+
+        function persistTargetList() {
+            const projEl = document.getElementById('project-path');
+            const projectRoot = projEl ? projEl.value : '';
+            vscode.postMessage({
+                command: 'saveTargetList',
+                projectRoot,
+                targets: targetList.map(item => ({ file: item.file, target: item.target }))
+            });
+        }
+
+        function updateTargetSelectionControlStates() {
+            const frozen = analysisRunning || environmentBusy;
+            const hasFuncs = currentFileFunctions.length > 0;
+            for (const id of ['btn-func-select-all', 'btn-func-deselect-all', 'btn-add-targets']) {
+                const btn = document.getElementById(id);
+                if (btn) btn.disabled = frozen || !hasFuncs;
+            }
+            for (const id of ['btn-batch-func-select-all', 'btn-batch-func-deselect-all', 'btn-exit-batch-scope', 'btn-import-targets']) {
+                const btn = document.getElementById(id);
+                if (btn) btn.disabled = frozen;
+            }
+            for (const id of ['btn-clear-targets', 'btn-export-targets']) {
+                const btn = document.getElementById(id);
+                if (btn) btn.disabled = frozen || targetList.length === 0;
+            }
+        }
+
+        function renderFunctionCheckboxes() {
+            updateTargetSelectionControlStates();
+            const container = document.getElementById('func-checkbox-list');
+            if (!container) return;
+            container.style.display = currentFileFunctions.length > 0 ? 'block' : 'none';
+            container.innerHTML = '';
+            if (typeof document.createElement !== 'function') return;
+            for (const fn of currentFileFunctions) {
+                const row = document.createElement('label');
+                row.className = 'func-checkbox-row';
+                row.style.display = 'flex';
+                row.style.alignItems = 'center';
+                row.style.gap = '6px';
+                row.style.margin = '2px 0';
+                row.style.fontWeight = 'normal';
+                row.style.cursor = 'pointer';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'func-check';
+                cb.value = fn;
+                cb.checked = checkedFileFunctions.has(fn);
+                cb.disabled = analysisRunning || environmentBusy;
+                cb.style.width = 'auto';
+                cb.style.margin = '0';
+                cb.onchange = () => {
+                    if (cb.checked) checkedFileFunctions.add(fn);
+                    else checkedFileFunctions.delete(fn);
+                };
+                const span = document.createElement('span');
+                span.textContent = fn + '()';
+                row.appendChild(cb);
+                row.appendChild(span);
+                container.appendChild(row);
+            }
+        }
+
+        function renderBatchScopeCandidates() {
+            const singleControls = document.getElementById('single-target-controls');
+            const batchPanel = document.getElementById('batch-scope-targets-panel');
+            if (singleControls) singleControls.style.display = batchScopeMode ? 'none' : 'block';
+            if (batchPanel) batchPanel.style.display = batchScopeMode ? 'block' : 'none';
+            const listEl = document.getElementById('batch-scope-targets-list');
+            if (!listEl) return;
+            listEl.innerHTML = '';
+            if (!batchScopeMode || typeof document.createElement !== 'function') return;
+            for (const candidate of batchScopeCandidates) {
+                const row = document.createElement('label');
+                row.className = 'batch-func-checkbox-row';
+                row.style.display = 'flex';
+                row.style.alignItems = 'center';
+                row.style.gap = '6px';
+                row.style.margin = '2px 0';
+                row.style.fontWeight = 'normal';
+                row.style.cursor = 'pointer';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.className = 'batch-func-check';
+                cb.value = candidate.file + '::' + candidate.target;
+                cb.checked = !!candidate.selected;
+                cb.disabled = analysisRunning || environmentBusy;
+                cb.style.width = 'auto';
+                cb.style.margin = '0';
+                cb.onchange = () => {
+                    candidate.selected = cb.checked;
+                    targetList = batchScopeCandidates
+                        .filter(item => item.selected)
+                        .map(item => ({ file: item.file, target: item.target }));
+                    renderTargetList();
+                    persistTargetList();
+                };
+                const span = document.createElement('span');
+                span.textContent = candidate.file + ' :: ' + candidate.target + '()';
+                row.appendChild(cb);
+                row.appendChild(span);
+                listEl.appendChild(row);
+            }
+        }
+
+        function removeTargetAt(index) {
+            if (analysisRunning || environmentBusy || index < 0 || index >= targetList.length) return;
+            const removed = targetList[index];
+            targetList.splice(index, 1);
+            if (batchScopeMode && removed) {
+                const key = targetIdentityKey(removed.file, removed.target);
+                for (const candidate of batchScopeCandidates) {
+                    if (targetIdentityKey(candidate.file, candidate.target) === key) {
+                        candidate.selected = false;
+                    }
+                }
+                renderBatchScopeCandidates();
+            }
+            renderTargetList();
+            persistTargetList();
+        }
+
+        function renderTargetList() {
+            const countEl = document.getElementById('target-list-count');
+            if (countEl) countEl.textContent = message('targetListCount', targetList.length);
+            updateTargetSelectionControlStates();
+            const container = document.getElementById('target-list-container');
+            if (!container) return;
+            container.innerHTML = '';
+            if (targetList.length === 0) {
+                container.innerHTML = '<div style="opacity:0.65; font-size:11px;">' + escapeHtml(i18n.targetListEmpty) + '</div>';
+                return;
+            }
+            if (typeof document.createElement !== 'function') return;
+            targetList.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = 'target-list-item';
+                row.dataset.file = item.file;
+                row.dataset.target = item.target;
+                row.style.display = 'flex';
+                row.style.justifyContent = 'space-between';
+                row.style.alignItems = 'center';
+                row.style.gap = '6px';
+                row.style.padding = '3px 6px';
+                row.style.background = 'var(--vscode-editor-inactiveSelectionBackground)';
+                row.style.borderRadius = '3px';
+                row.style.fontSize = '11px';
+
+                const label = document.createElement('span');
+                label.className = 'target-list-label';
+                label.textContent = item.file + ' :: ' + item.target + '()';
+
+                const removeBtn = document.createElement('button');
+                removeBtn.type = 'button';
+                removeBtn.className = 'btn-remove-target';
+                removeBtn.textContent = '✕';
+                removeBtn.title = i18n.removeTarget;
+                removeBtn.disabled = analysisRunning || environmentBusy;
+                removeBtn.style.width = 'auto';
+                removeBtn.style.margin = '0';
+                removeBtn.style.padding = '1px 6px';
+                removeBtn.style.fontSize = '10px';
+                removeBtn.onclick = () => removeTargetAt(index);
+
+                row.appendChild(label);
+                row.appendChild(removeBtn);
+                container.appendChild(row);
+            });
+        }
+        renderTargetList();
 
         vscode.postMessage({ command: 'getInitialData' });
 
@@ -801,23 +1044,41 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     document.getElementById('api-key-select').value = msg.keyName || '';
                     saveUiState({ cloudKeyName: msg.keyName || '' });
                     break;
-                case 'setFiles':
+                case 'setFiles': {
                     if (msg.projectPath !== document.getElementById('project-path').value) break;
-                    document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>' + msg.files.map(f => \`<option value="\${escapeHtml(f.path)}">\${escapeHtml(f.name)}</option>\`).join('');
+                    fileRelativeNameByPath.clear();
+                    const sortedFiles = [...(msg.files || [])].sort((left, right) => compareCaseInsensitive(left.name, right.name));
+                    for (const f of sortedFiles) {
+                        fileRelativeNameByPath.set(f.path, String(f.name).replace(/\\\\/g, '/'));
+                    }
+                    document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>' + sortedFiles.map(f => \`<option value="\${escapeHtml(f.path)}">\${escapeHtml(f.name)}</option>\`).join('');
                     document.getElementById('file-select').value = '';
                     resetFunctionSelection();
                     break;
-                case 'setFunctions':
+                }
+                case 'setFunctions': {
                     if (!msg.filePath || msg.filePath !== document.getElementById('file-select').value) break;
-                    document.getElementById('func-select').innerHTML = '<option value="">all</option>' + msg.funcs.map(f => \`<option value="\${escapeHtml(f)}">\${escapeHtml(f)}()</option>\`).join('');
+                    const sortedFuncs = [...(msg.funcs || [])].sort(compareCaseInsensitive);
+                    currentFileRelative = resolveRelativeFile(msg.filePath, msg.relativeFile);
+                    currentFileFunctions = sortedFuncs;
+                    checkedFileFunctions.clear();
+                    for (const fn of sortedFuncs) checkedFileFunctions.add(fn);
+                    document.getElementById('func-select').innerHTML = '<option value="">all</option>' + sortedFuncs.map(f => \`<option value="\${escapeHtml(f)}">\${escapeHtml(f)}()</option>\`).join('');
                     document.getElementById('func-select').disabled = false;
+                    renderFunctionCheckboxes();
                     break;
+                }
                 case 'setProjectPath':
                     document.getElementById('project-path').value = msg.path;
                     document.getElementById('batch-scope-status').textContent = i18n.batchScopeGuide;
                     document.getElementById('file-select').innerHTML = '<option value="">' + escapeHtml(i18n.allFiles) + '</option>';
                     document.getElementById('file-select').value = '';
+                    batchScopeMode = false;
+                    batchScopeCandidates = [];
+                    targetList = [];
+                    renderBatchScopeCandidates();
                     resetFunctionSelection();
+                    renderTargetList();
                     break;
                 case 'setOutputPath': document.getElementById('output-path').value = msg.path; break;
                 case 'appendLog': const log = document.getElementById('log-area'); log.value += (log.value ? '\\n' : '') + msg.text; log.scrollTop = log.scrollHeight; break;
@@ -883,8 +1144,54 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'batchScopeSelected':
                     if (msg.projectRoot === document.getElementById('project-path').value) {
                         document.getElementById('batch-scope-status').textContent = msg.text;
+                        if (Array.isArray(msg.targets)) {
+                            batchScopeMode = true;
+                            batchScopeCandidates = [...msg.targets]
+                                .map(item => ({
+                                    file: String(item.file).replace(/\\\\/g, '/'),
+                                    target: String(item.target),
+                                    selected: item.selected !== false
+                                }))
+                                .sort(compareTargetItems);
+                            document.getElementById('file-select').value = '';
+                            resetFunctionSelection();
+                            targetList = batchScopeCandidates
+                                .filter(item => item.selected)
+                                .map(item => ({ file: item.file, target: item.target }));
+                            renderBatchScopeCandidates();
+                            renderTargetList();
+                        }
                     }
                     break;
+                case 'targetListUpdated':
+                    if (msg.projectRoot === document.getElementById('project-path').value) {
+                        const seen = new Set();
+                        targetList = [];
+                        for (const item of (msg.targets || [])) {
+                            if (!item || !item.file || !item.target) continue;
+                            const file = String(item.file).replace(/\\\\/g, '/');
+                            const target = String(item.target);
+                            const key = targetIdentityKey(file, target);
+                            if (!seen.has(key)) {
+                                seen.add(key);
+                                targetList.push({ file, target });
+                            }
+                        }
+                        const statusEl = document.getElementById('target-list-status');
+                        if (statusEl && msg.statusText !== undefined) {
+                            statusEl.textContent = msg.statusText;
+                        }
+                        renderTargetList();
+                    }
+                    break;
+                case 'targetListExported':
+                case 'targetListImportFailed': {
+                    const statusEl = document.getElementById('target-list-status');
+                    if (statusEl && msg.statusText !== undefined) {
+                        statusEl.textContent = msg.statusText;
+                    }
+                    break;
+                }
                 case 'environmentPreparation':
                     environmentBusy = !!msg.busy;
                     document.getElementById('python-environment-status').value = msg.text;
@@ -946,6 +1253,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             for (const id of ['runtime-context-tokens', 'btn-save-runtime-context']) {
                 document.getElementById(id).disabled = frozen || noSelection || !runtimeContextEndpointKey;
             }
+            updateTargetSelectionControlStates();
+            renderFunctionCheckboxes();
+            renderBatchScopeCandidates();
+            renderTargetList();
         }
         function clearLocalRuntimeContext() {
             runtimeContextRevision++;
@@ -1048,10 +1359,86 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             functions.innerHTML = '<option value="">all</option>';
             functions.value = '';
             functions.disabled = true;
+            currentFileRelative = '';
+            currentFileFunctions = [];
+            checkedFileFunctions.clear();
+            renderFunctionCheckboxes();
         }
         document.getElementById('file-select').onchange = (e) => { 
             resetFunctionSelection();
             if(e.target.value) vscode.postMessage({ command: 'getFunctions', filePath: e.target.value }); 
+        };
+
+        document.getElementById('btn-func-select-all').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            for (const fn of currentFileFunctions) checkedFileFunctions.add(fn);
+            renderFunctionCheckboxes();
+        };
+        document.getElementById('btn-func-deselect-all').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            checkedFileFunctions.clear();
+            renderFunctionCheckboxes();
+        };
+        document.getElementById('btn-add-targets').onclick = () => {
+            if (analysisRunning || environmentBusy || !currentFileRelative || currentFileFunctions.length === 0) return;
+            const seen = new Set(targetList.map(item => targetIdentityKey(item.file, item.target)));
+            for (const fn of currentFileFunctions) {
+                if (!checkedFileFunctions.has(fn)) continue;
+                const key = targetIdentityKey(currentFileRelative, fn);
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    targetList.push({ file: currentFileRelative, target: fn });
+                }
+            }
+            renderTargetList();
+            persistTargetList();
+        };
+        document.getElementById('btn-batch-func-select-all').onclick = () => {
+            if (analysisRunning || environmentBusy || !batchScopeMode) return;
+            for (const candidate of batchScopeCandidates) candidate.selected = true;
+            targetList = batchScopeCandidates.map(item => ({ file: item.file, target: item.target }));
+            renderBatchScopeCandidates();
+            renderTargetList();
+            persistTargetList();
+        };
+        document.getElementById('btn-batch-func-deselect-all').onclick = () => {
+            if (analysisRunning || environmentBusy || !batchScopeMode) return;
+            for (const candidate of batchScopeCandidates) candidate.selected = false;
+            targetList = [];
+            renderBatchScopeCandidates();
+            renderTargetList();
+            persistTargetList();
+        };
+        document.getElementById('btn-exit-batch-scope').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            batchScopeMode = false;
+            batchScopeCandidates = [];
+            renderBatchScopeCandidates();
+        };
+        document.getElementById('btn-clear-targets').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            targetList = [];
+            if (batchScopeMode) {
+                for (const candidate of batchScopeCandidates) candidate.selected = false;
+                renderBatchScopeCandidates();
+            }
+            renderTargetList();
+            persistTargetList();
+        };
+        document.getElementById('btn-export-targets').onclick = () => {
+            if (analysisRunning || environmentBusy || targetList.length === 0) return;
+            vscode.postMessage({
+                command: 'exportTargetList',
+                projectRoot: document.getElementById('project-path').value,
+                targets: targetList.map(item => ({ file: item.file, target: item.target }))
+            });
+        };
+        document.getElementById('btn-import-targets').onclick = () => {
+            if (analysisRunning || environmentBusy) return;
+            vscode.postMessage({
+                command: 'importTargetList',
+                projectRoot: document.getElementById('project-path').value
+            });
         };
 
         document.getElementById('btn-save-key').onclick = () => {
@@ -1210,12 +1597,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 vscode.postMessage({ command: 'appendLog', text: ${JSON.stringify(localize('停止政策必須是有效整數；單目標失敗上限至少 1，其餘至少 0。'))} });
                 return;
             }
+            const hasTargetList = targetList.length > 0;
+            if (batchScopeMode && !hasTargetList) {
+                vscode.postMessage({ command: 'appendLog', text: 'Please select at least one target function.' });
+                return;
+            }
             if(!envType || !modelName || (!filePath && !batchPath) || (envType === 'cloud' && !cloudKeyName)) {
                 vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
                 return;
             }
 
-            setRunningState(!filePath);
+            setRunningState(hasTargetList || !filePath);
 
             const currentProj = document.getElementById('project-path').value;
             if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
@@ -1225,6 +1617,16 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 renderDashboard();
             }
             lastTestedProjectPath = currentProj;
+
+            if (hasTargetList) {
+                vscode.postMessage({
+                    command: 'startBatchAnalysis',
+                    envType, modelName, cloudKeyName, batchPath: batchPath || filePath,
+                    targets: targetList.map(item => ({ file: item.file, target: item.target })),
+                    ...getCommonExecutionOptions()
+                });
+                return;
+            }
 
             if (!filePath) {
                 vscode.postMessage({

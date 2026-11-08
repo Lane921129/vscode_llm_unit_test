@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-08 PR #2a（側欄目標選擇改善）
+- 實作檔案與函式名稱不分大小寫字母排序（R1），並新增跨檔案目標清單多選累加、去重、單項移除、清空與專案根狀態保存（R2、R5）。
+- 批次範圍預覽連動測試目標區並自動列出已選檔案全部函式（預設全選、可取消勾選），同時隱藏單檔下拉控制項避免並存衝突（R3）。
+- 新增 `eval-screening-v1` 目標清單 JSON 匯出入與存在性檢查，匯入 `eval_screening/targets.json` 驗證 26 個目標、0 個缺漏（R4）。
+- 批次模式依目標清單順序逐一排程並沿用既有 `BatchJournal` 與隔離政策；`test:webview`、`test:fast`（774/774、44/44）與 `test:golden`（11/11）全過。
+
 ## 2026-11-07 PR #1（三週改版）
 - 保留已批准的停止政策與 probe 綁定；修復 runner 證據干擾、迴圈 target 綁定、初始化回傳值使用及 provider envelope 誤重問，補足 fixture 與回歸。
 - Windows 原子改名只對 EPERM／EACCES／EBUSY 作最多五次總嘗試，四段退避共300ms、不延長原期限，記錄獨立 I/O journal 並原樣拋出最終錯誤；daemon 開啟的 writer-failure 10/10。

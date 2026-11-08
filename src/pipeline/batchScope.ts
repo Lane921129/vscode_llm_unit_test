@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { existingRealPath } from '../utils/fileIdentity';
+import { compareTargetItems, deduplicateTargetList, TargetListItem } from './targetList';
 
 export interface SavedBatchScope { knownFiles: string[]; selectedFiles: string[] }
 export interface BatchScopeSelection extends SavedBatchScope {
@@ -10,6 +11,7 @@ export interface BatchScopeSelection extends SavedBatchScope {
     scopeId: string;
 }
 export interface BatchScopeItem { file: string; selected: boolean; added: boolean; hint?: 'backup' | 'test-fixture' }
+export interface BatchScopeTargetCandidate extends TargetListItem { selected: boolean }
 
 export function canonicalScopeRoot(root: string): string {
     const canonical = existingRealPath(root);
@@ -75,4 +77,46 @@ export function deduplicateTargets<T extends { fullName: string }>(definitions: 
     }
     return { targets: [...grouped.values()].filter(group => group.length === 1).map(group => group[0]),
         ambiguousTargets: [...grouped].filter(([, group]) => group.length > 1).map(([name]) => name) };
+}
+
+/** R3: Build sorted target candidates (default all selected) for files in the confirmed batch scope. */
+export function buildBatchScopeTargetCandidates(
+    selection: Pick<BatchScopeSelection, 'selectedFiles'>,
+    fileFunctions: ReadonlyMap<string, readonly string[]> | Record<string, readonly string[]>
+): BatchScopeTargetCandidate[] {
+    const identity = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value).replace(/\\/g, '/');
+    const selectedSet = new Map<string, string>();
+    for (const file of selection.selectedFiles) {
+        const normalized = file.replace(/\\/g, '/');
+        selectedSet.set(identity(normalized), normalized);
+    }
+    const rawItems: TargetListItem[] = [];
+    const entries = fileFunctions instanceof Map ? [...fileFunctions.entries()] : Object.entries(fileFunctions);
+    for (const [rawFile, funcs] of entries) {
+        const matchedFile = selectedSet.get(identity(rawFile));
+        if (!matchedFile || !Array.isArray(funcs)) { continue; }
+        for (const func of funcs) {
+            if (typeof func === 'string' && func.trim()) {
+                rawItems.push({ file: matchedFile, target: func.trim() });
+            }
+        }
+    }
+    const deduplicated = deduplicateTargetList(rawItems);
+    return [...deduplicated]
+        .sort(compareTargetItems)
+        .map(item => ({ ...item, selected: true }));
+}
+
+/** R3: Filter batch scope candidates to checked functions within the confirmed batch scope. */
+export function resolveBatchScopeTargets(
+    selection: Pick<BatchScopeSelection, 'selectedFiles'>,
+    candidates: readonly BatchScopeTargetCandidate[]
+): TargetListItem[] {
+    const identity = (value: string) => (process.platform === 'win32' ? value.toLowerCase() : value).replace(/\\/g, '/');
+    const allowedFiles = new Set(selection.selectedFiles.map(identity));
+    return deduplicateTargetList(
+        candidates
+            .filter(candidate => candidate.selected && allowedFiles.has(identity(candidate.file)))
+            .map(candidate => ({ file: candidate.file, target: candidate.target }))
+    );
 }

@@ -107,7 +107,7 @@ export class BatchJournal {
     private readonly preflightEvents: Array<{ at: string; phase: 'initial' | 'setup' | 'decision'; status: string;
         fixtureId?: string | null; resourceCount?: number; blockedModules?: number; report?: string }> = [];
     private readonly targets: BatchTarget[] = [];
-    private readonly discoveryFailures: Array<{ file: string; stage: string }> = [];
+    private readonly discoveryFailures: Array<{ file: string; stage: string; target?: string }> = [];
     private readonly files: string[] = [];
     private readonly reportSummaries = new Map<number, TargetReportSummary>();
     private scope?: BatchScopeSelection;
@@ -142,12 +142,14 @@ export class BatchJournal {
         if (this.scope && !this.scope.selectedFiles.some(selected => identity(selected) === identity(relative))) {
             throw new Error('Batch source was excluded from the confirmed scope');
         }
-        this.files.push(relative);
+        if (!this.files.some(existing => identity(existing) === identity(relative))) {
+            this.files.push(relative);
+        }
         for (const target of targets) { this.targets.push({ id: this.targets.length, file: relative, target, state: 'pending' }); }
         this.save();
     }
-    discoveryFailed(file: string, stage: string): void {
-        this.discoveryFailures.push({ file: this.relative(file), stage }); this.save();
+    discoveryFailed(file: string, stage: string, target?: string): void {
+        this.discoveryFailures.push({ file: this.relative(file), stage, ...(target ? { target } : {}) }); this.save();
     }
     start(): void { this.status = 'running'; this.save(); }
     preflight(blockedModules: number): void { this.blockedModules = blockedModules; this.save(); }
@@ -429,12 +431,15 @@ export class BatchJournal {
             localize("缺套件：依被測專案的 requirements／lockfile，在上述 Python 環境安裝相依；套件匯入名稱不一定是安裝名稱，請勿猜測版本。"),
             localize("匯入副作用：在測試工具設定 llmUnitTest.importFixtures，明確模擬初始化相依，保持受測原檔不變。安裝套件不能解決目錄建立等副作用；API 不相容須核對原專案版本宣告。"), '',
             localize("## 未完成與略過"), '',
-            ...this.discoveryFailures.map(item => localize("- 無法掃描 {0}：{1}", safe(item.file), safe(item.stage))),
+            ...this.discoveryFailures.map(item => item.target
+                ? localize("- 無法掃描 {0} :: {1}：{2}", safe(item.file), safe(item.target), safe(item.stage))
+                : localize("- 無法掃描 {0}：{1}", safe(item.file), safe(item.stage))),
             ...this.targets.filter(t => t.state !== 'finished').map(t => `- ${safe(t.file)} :: ${safe(t.target)}：${t.terminalStatus || t.state}`),
             localize("Dummy／Stub、審查未完成、品質不足及缺報告皆不計為通過。逐目標輸出與模型請求數見 batch_manifest.json。"), ''].join('\n');
         // The audit inventory stays complete; the user-facing result list contains only attempted test targets.
         fs.writeFileSync(path.join(this.directory, 'batch_workflow.md'), report, 'utf8');
         const visible = this.targets.filter(t => t.state !== 'pending' && t.terminalStatus !== 'environment-blocked' && !isReportExcluded(t.terminalStatus));
+        const missingTargets = this.discoveryFailures.filter(item => item.stage === 'target-missing');
         const failureTargets = visible.filter(t => t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'failure_report.md')));
         const failures = this.discoveryFailures.length > 0 || ['cancelled', 'failed', 'incomplete', 'environment-blocked', 'partial'].includes(this.status)
             || visible.some(t => t.terminalStatus && !['passed', 'execution-passed'].includes(t.terminalStatus)) || failureTargets.length > 0;
@@ -446,7 +451,10 @@ export class BatchJournal {
                 const link = t.reportDirectory && fs.existsSync(path.join(this.directory, t.reportDirectory, 'final_report.md'))
                     ? `[${localize('查看結果')}](${reportLink(t.reportDirectory + '/final_report.md')})` : '—';
                 return `| ${reportCell(t.file)} :: ${reportCell(t.target)} | ${reportCell(summary ? `${summary.outcome} / ${conciseReason(summary.reason)}` : t.terminalStatus || t.state)} | ${summary?.coverage || 'N/A'} | ${summary?.mutation || 'N/A'} | ${link} |`;
-            }), '', ...(visible.length ? [] : [localize('本次沒有可列入的測試目標。'), '']),
+            }),
+            ...missingTargets.map(item =>
+                `| ${reportCell(item.file)} :: ${reportCell(item.target || '')} | ${reportCell(item.stage)} | N/A | N/A | — |`
+            ), '', ...((visible.length || missingTargets.length) ? [] : [localize('本次沒有可列入的測試目標。'), '']),
             ...(failures ? [localize('[失敗報告與完整流程](failure_report.md)'), ''] : [])].join('\n');
         fs.writeFileSync(path.join(this.directory, 'batch_summary.md'), concise, 'utf8');
         if (failures) {
