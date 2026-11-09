@@ -28,6 +28,11 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-09 使用者決定**：
+- 21:17 使用者已審閱並**核准 v2 提示詞用於實驗室**（`docs/v2_提示詞_待審.md`，檔名不改，開頭狀態已改為「已核准（2026-11-09 使用者）」）。
+- 22:15 使用者驗收 PR #5～#8；監督已在本機以四個 no-ff 等效合併 commit 併入 `lane_edition`：#5 `29b4c9d`、#6 `674dab1`、#7 `a52900f`、#8 `8126f94`（內容等於 `d79f3fa`），並刪除已合併的本機 `pr/*` 分支。
+- 實驗室的 v1／v2 比較**依序執行、不並行**。
+
 **2026-11-09 監督核對 PR #6～#8 後的決定（在 `pr/08-spec-oracle` 上修正）**：
 1. （C 類）單列 Bug Fixer 修正後必須同時滿足：(a) 對被測目標的每一次呼叫（名稱與全部參數）與修正前 AST 相同；(b) 每個 `self.assert*` 呼叫整個（含第一個參數）與修正前 AST 相同、數量相同；(c) 所有 patch／mock 設定相同；(d) 不可新增包住被測呼叫或斷言的 try／except、if 或 return。只允許改 setup、import 等周邊程式；違反任一項就拒絕，照舊算在 2 次額度內。
 2. （B 類，使用者 11/09 核准）規格預測請求使用 temperature 0.7，其他角色維持原本設定；`requestModel` 可帶單次請求選項，v1 呼叫路徑與預設值不變。
@@ -101,10 +106,10 @@
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
 | 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
-| 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
-| 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；Windows fast／python／golden／integration（無新增失敗）通過，待驗收** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
-| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；Windows fast／python／golden／integration（無新增失敗）通過，待驗收** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
-| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **實作完成；Windows fast／python／golden／integration（無新增失敗）通過，待驗收** | `pr/08-spec-oracle`（疊在 pr/07 上） | 2026-11-09 Claude Code |
+| 5 | case-table-v1 結構與驗證 | **完成：使用者驗收（11/09 22:15），已合併主線（`29b4c9d`）** | `lane_edition` | 2026-11-09 監督 |
+| 6 | 設定分流、Analyst-情境提示、UI 設定 | **完成：使用者驗收（11/09 22:15），已合併主線（`674dab1`）** | `lane_edition` | 2026-11-09 監督 |
+| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **完成：使用者驗收（11/09 22:15），已合併主線（`a52900f`）** | `lane_edition` | 2026-11-09 監督 |
+| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **完成：使用者驗收（11/09 22:15），已合併主線（`8126f94`）** | `lane_edition` | 2026-11-09 監督 |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
@@ -682,6 +687,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 22:20 | Claude Code | 記錄 PR #5～#8 驗收與合併、v2 提示詞核准；開 `pr/12a-eval-recording` | 由監督完成合併；本筆只更新文件 | 本筆 |
 | 2026-11-09 19:20 | Claude Code | PR #6～#8 記錄 Windows integration | Node 1065／1048 pass／17 fail（14 葉＋3 父），與第 5 節既有清單逐案相同，新增 0；v2 整合 10 項全過；Python integration 因 runner 在 Node 失敗後停止而未跑（test:python 全量已於 7fe7530 通過） | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 記錄 Windows related | 使用者 Windows：5 個 v2 Python 模組單獨 related 50/50 OK。待 integration | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 Windows 結果與 Python 測試路徑 | Windows golden v1 11/11、v2 2/2（覆蓋率成功路徑通過）；related 單獨跑失敗→五個 v2 Python 測試補 sys.path，VM 單獨與合併執行皆通過。待使用者重跑 related 與 integration | 本筆 |
