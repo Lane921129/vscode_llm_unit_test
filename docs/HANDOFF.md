@@ -183,6 +183,14 @@
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr8-check-types.log`）、lint 0／0 warning（`log/pr8-lint.log`）、related 70 個中 69 個通過（`log/pr8-related-node.log`）；唯一失敗是 v1 的 `batchJournalIntegration`「real batch command…」，原因是 VM 的 Python 沒有 `coverage`（`coverage-preflight`／environment），與本 PR 無關，須在 Windows 重跑確認。規格整合測試 3/3（`log/pr8-spec-integration-vm.log`）、Python 五個 v2 模組全過（`log/pr8-python-vm.log`）、v2 golden＋row stage 4/4（`log/pr8-v2-golden-and-rows-vm.log`；v2 golden 用 `specOracle: 'off'`，所以不受影響）。v1 golden 檔案未改。
 - **待使用者在 Windows 執行**（PR #6～#8 一起）：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異，v2 必須通過）；時間足夠時背景跑 `npm run test:integration`，逐案比對第 5 節既有的 14 個失敗。
 
+### 2026-11-09 15:00 Windows 結果與 Python 測試單獨執行修正（`pr/08-spec-oracle`，Claude Code，test(pr07)）
+
+- **使用者 Windows `npm run test:golden`（`aa9d619`）**：v1 11/11（五個情境皆 passed），v2 2/2。Windows `.venv` 有 coverage，輸出中沒有「未驗證」提示行，而 v2 golden 仍通過，表示 bmi 與 database 都通過 `coverage.available === true`、`linePercent` 在 0～100、`executableLines > 0` 的斷言：**v2 覆蓋率成功路徑已在 Windows 驗證**。
+- **使用者 Windows `npm run test:related -- --python test_case_row_assertions` 失敗**：`ModuleNotFoundError: No module named 'case_row_assertions'`。原因是 v2 新增的五個 Python 測試模組沒有把 `python_scripts` 加入 `sys.path`；既有測試模組都會自己加。在完整 `test:python` 中能通過，只是因為同一行程中較早的模組已經加過路徑。屬於測試檔的 C 類問題，產品程式不受影響。
+- **修正**：`test_case_row_validator.py`、`test_case_table_facts.py`、`test_case_capture_runner.py`、`test_case_row_assertions.py`、`test_case_oracle_compare.py` 都在 import 前加入 `sys.path.insert(0, <本檔所在目錄>)`，比照既有模組。
+- **驗證（Linux VM，不是正式結果）**：五個模組各自在 repo 根目錄、不設 `PYTHONPATH` 單獨執行全部通過（19、5、9、13、4 項；`log/pr7f-<模組>-alone.log`）；五個一起執行 50 項通過（`log/pr7f-python-together-vm.log`）。
+- **待使用者在 Windows 重跑 `npm run test:related -- --python test_case_row_assertions`**（也可以把其他四個模組一起加上 `--python`）；完整 `npm run test:integration` 仍待執行。
+
 ### 2026-11-09 14:45 v2 golden 強制驗證覆蓋率成功路徑（`pr/08-spec-oracle`，Claude Code，test(pr07)）
 
 - 監督核對：`caseRowStageIntegration` 對覆蓋率只斷言「available 或有原因碼」，v2 golden 不記錄覆蓋率，VM 也沒有 coverage 套件，所以 v2 覆蓋率的成功路徑從未被驗證過。
@@ -651,6 +659,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 15:05 | Claude Code | PR #7 Windows 結果與 Python 測試路徑 | Windows golden v1 11/11、v2 2/2（覆蓋率成功路徑通過）；related 單獨跑失敗→五個 v2 Python 測試補 sys.path，VM 單獨與合併執行皆通過。待使用者重跑 related 與 integration | 本筆 |
 | 2026-11-09 14:50 | Claude Code | PR #7 v2 golden 覆蓋率斷言 | 有 coverage 時強制斷言成功路徑，沒有時印出未驗證提示；VM：check-types／lint 0、v2 golden 2/2 並印出提示。待使用者在 Windows 跑 test:golden 與 test:related -- --python test_case_row_assertions | 本筆 |
 | 2026-11-09 13:55 | Claude Code | PR #7 別名規則 | target-rebound 加別名檢查；VM：Python 50 項、row stage＋v2 golden 5/5 無差異。待使用者在 Windows 跑 test:integration | 本筆 |
 | 2026-11-09 13:40 | Claude Code | PR #6～#8 記錄 Windows 結果 | 使用者 Windows：fast Node 811/811、Python fast 48/48；test:python 939 OK（4 skips）＋secret scan；golden v1 11/11、v2 2/2。integration 尚未執行 | 本筆 |
