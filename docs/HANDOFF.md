@@ -100,9 +100,9 @@
 | 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
 | 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
-| 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；VM 驗證通過，Windows 驗證待執行** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
-| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；VM 驗證通過（含 v2 golden 錄製），Windows 驗證待執行** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
-| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **實作完成；VM 驗證通過，Windows 驗證待執行** | `pr/08-spec-oracle`（疊在 pr/07 上） | 2026-11-09 Claude Code |
+| 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；Windows fast／python／golden 通過（11/09），待驗收** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
+| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；Windows fast／python／golden 通過（11/09，v2 golden 在 3.13 上無差異），待驗收** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
+| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **實作完成；Windows fast／python／golden 通過（11/09），待驗收** | `pr/08-spec-oracle`（疊在 pr/07 上） | 2026-11-09 Claude Code |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
@@ -113,6 +113,19 @@
 ---
 
 ## 2. PR #6～#8 進度（最新；疊加分支，見第 0 節 23:50 授權）
+
+### 2026-11-09 13:33 Windows 原生驗證結果（使用者執行，`pr/08-spec-oracle`）
+
+證據：`log/pr6-8-windows-fast-python-golden.log`（使用者貼上的完整輸出）。log 本身沒有印出 commit；執行時分支最新 commit 是 `7fe7530`，盤點數量（Node 101/292、Python 62 個檔）也和該版本一致。
+
+| 指令 | 結果 |
+| --- | --- |
+| `npm run test:fast` | check-types、lint、compile 通過；Node 811 tests／811 pass／0 fail／0 skip（776＋v2 fast 測試 35：caseTable 20、caseScenarioPrompt 6、caseRowTests 6、specPromptBlindness 3）；Webview 語法通過；Python fast 48/48；結尾印出 `Selected scope passed` |
+| `npm run test:python` | 62 個檔、939 tests，OK（4 skips）；history secret scan 通過 |
+| `npm run test:golden` | **v1 11/11**（full、execution、writer-failure、stub、batch 五個情境皆 passed，快照零差異）；**v2 2/2**（bmi、database 在 Windows Python 3.13 上與 VM 錄製的快照一致，未重錄） |
+
+仍待執行：完整 `npm run test:integration`，跑完後逐案比對第 5 節既有的 14 個失敗；v2 覆蓋率成功路徑也要在 Windows 確認（`caseRowStageIntegration` 屬於 integration，這次沒有跑）。
+
 
 ### PR #6 `pr/06-v2-scenario`（2026-11-09 Claude Code）
 
@@ -618,6 +631,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 13:40 | Claude Code | PR #6～#8 記錄 Windows 結果 | 使用者 Windows：fast Node 811/811、Python fast 48/48；test:python 939 OK（4 skips）＋secret scan；golden v1 11/11、v2 2/2。integration 尚未執行 | 本筆 |
 | 2026-11-09 14:00 | Claude Code | PR #7 單列修正契約加嚴 | post-call-changed、target-rebound；確認 targetObserved 已強制並補測試；VM：check-types／lint 0、related 45/45、Python 49 項、row stage 3/3、v2 golden 2/2 無差異。Windows 待執行 | 本筆 |
 | 2026-11-09 13:30 | Claude Code | PR #7／#8 監督核對後修正 | Bug Fixer AST 契約、規格 temperature 0.7、拿掉情境、一般呼叫寫法、v2 覆蓋率、結果卡片、patch 位置測試；VM：check-types／lint 0、related 95/95、整合 5/5、Python 全過、v2 golden 2/2 未變。Windows 待執行；不開始 PR #9 | 本筆（pr07＋pr08 兩筆） |
 | 2026-11-09 04:30 | Claude Code | PR #8 完成 | 規格來源、Analyst-規格（k=3）、分級、規格不符報告與測試檔、批次累加；VM：check-types／lint 0、related 69/70（唯一失敗是 VM 缺 coverage）、規格整合 3/3、Python 全過、v2 golden 2/2。Windows 待執行；不開始 PR #9 | 本筆 |
