@@ -183,6 +183,16 @@
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr8-check-types.log`）、lint 0／0 warning（`log/pr8-lint.log`）、related 70 個中 69 個通過（`log/pr8-related-node.log`）；唯一失敗是 v1 的 `batchJournalIntegration`「real batch command…」，原因是 VM 的 Python 沒有 `coverage`（`coverage-preflight`／environment），與本 PR 無關，須在 Windows 重跑確認。規格整合測試 3/3（`log/pr8-spec-integration-vm.log`）、Python 五個 v2 模組全過（`log/pr8-python-vm.log`）、v2 golden＋row stage 4/4（`log/pr8-v2-golden-and-rows-vm.log`；v2 golden 用 `specOracle: 'off'`，所以不受影響）。v1 golden 檔案未改。
 - **待使用者在 Windows 執行**（PR #6～#8 一起）：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異，v2 必須通過）；時間足夠時背景跑 `npm run test:integration`，逐案比對第 5 節既有的 14 個失敗。
 
+### 2026-11-09 14:45 v2 golden 強制驗證覆蓋率成功路徑（`pr/08-spec-oracle`，Claude Code，test(pr07)）
+
+- 監督核對：`caseRowStageIntegration` 對覆蓋率只斷言「available 或有原因碼」，v2 golden 不記錄覆蓋率，VM 也沒有 coverage 套件，所以 v2 覆蓋率的成功路徑從未被驗證過。
+- `src/test/caseTableGolden.test.ts`：先用 pipeline 同一個直譯器（`resolvePythonExecutable`）執行 `python -c "import coverage"`。
+  - 成功時（例如 Windows `.venv` 的 coverage 7.16.0），bmi 與 database 兩個情境都必須 `coverage.available === true`、`linePercent` 在 0～100、`executableLines > 0`；不符合就失敗，訊息會印出 `reasonCode`。
+  - 失敗時（VM），照常比對快照，並以 `console.log` 與 test diagnostic 印出「[v2 golden] coverage 套件不存在，覆蓋率成功路徑未驗證」。
+  - 覆蓋率數值不寫入快照，快照未重錄。
+- **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr7e-check-types.log`）、lint 0／0 warning（`log/pr7e-lint.log`）、v2 golden 2/2，有印出提示行（`log/pr7e-v2-golden-vm.log`）。v1 golden 未動。
+- **待使用者在 Windows 跑 `npm run test:golden` 與 `npm run test:related -- --python test_case_row_assertions`**。Windows 有 coverage，`test:golden` 這次會真正斷言 v2 覆蓋率成功路徑。如果因為覆蓋率而失敗，表示 v2 的覆蓋率程式本身有問題（請貼出訊息裡的 `reasonCode`），**不要放寬斷言**，改列入第 3 節處理。完整 `npm run test:integration` 也仍待執行。
+
 ### 2026-11-09 13:50 別名規則（`pr/08-spec-oracle`，Claude Code，fix(pr07)）
 
 - `case_row_assertions.py` 的 `target-rebound` 新增別名檢查：呼叫前 setup 的綁定來源（`=`、註記指定、`+=`、walrus、`for`／comprehension 的 iter、有 `as` 的 with、函式與 lambda 的預設值）只要**運算結果就是受保護物件本身**就拒絕。受保護物件包括：`target_module`、受測模組別名、從受測模組 import 的名稱、被測函式名稱與類別名稱、`X.<目標名稱|類別名稱|__dict__>`（X 為上述根名稱或 `instance`）、`getattr`／`vars` 套在受保護物件上的結果、以及包含它們的 tuple／list／set／dict／條件運算式。只是「使用」模組的運算式不算別名，例如 `target_module.Helper(scale=2)`、`target_module.LIMIT`。
@@ -641,6 +651,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 14:50 | Claude Code | PR #7 v2 golden 覆蓋率斷言 | 有 coverage 時強制斷言成功路徑，沒有時印出未驗證提示；VM：check-types／lint 0、v2 golden 2/2 並印出提示。待使用者在 Windows 跑 test:golden 與 test:related -- --python test_case_row_assertions | 本筆 |
 | 2026-11-09 13:55 | Claude Code | PR #7 別名規則 | target-rebound 加別名檢查；VM：Python 50 項、row stage＋v2 golden 5/5 無差異。待使用者在 Windows 跑 test:integration | 本筆 |
 | 2026-11-09 13:40 | Claude Code | PR #6～#8 記錄 Windows 結果 | 使用者 Windows：fast Node 811/811、Python fast 48/48；test:python 939 OK（4 skips）＋secret scan；golden v1 11/11、v2 2/2。integration 尚未執行 | 本筆 |
 | 2026-11-09 14:00 | Claude Code | PR #7 單列修正契約加嚴 | post-call-changed、target-rebound；確認 targetObserved 已強制並補測試；VM：check-types／lint 0、related 45/45、Python 49 項、row stage 3/3、v2 golden 2/2 無差異。Windows 待執行 | 本筆 |
