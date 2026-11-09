@@ -15,6 +15,7 @@ const buggy = (doc: boolean) => `def clamp(value, high=10):\n${doc ? `    """${D
 const scenario = [line({ scenario: 'value below high', category: 'normal', args: '(5,)' }),
     line({ scenario: 'value equal to high', category: 'boundary', args: '(10,)' })].join('\n');
 const spec = (expect: string, basis: string) => JSON.stringify({ expect, basis });
+const callOf: Record<string, string> = { 'value below high': 'clamp(5)', 'value equal to high': 'clamp(10)' };
 
 async function run(source: string, specReplies: Record<string, string[]>, setting: SpecOracleSetting = 'auto') {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-spec-'));
@@ -28,10 +29,13 @@ async function run(source: string, specReplies: Record<string, string[]>, settin
             filePath: path.join(project, 'limits.py'), funcName: 'clamp', projectRoot: project, outputPath: path.join(directory, 'out'),
             sessionDate: 'spec', pythonExecutable: python, specOracle: setting, log: () => undefined,
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },
-            requestModel: async (system, user) => {
+            requestModel: async (system, user, options) => {
+                assert.deepEqual(options, system.startsWith('You predict') ? { temperature: 0.7 } : undefined,
+                    'only spec predictions carry a temperature (0.7)');
                 if (system.startsWith('You predict')) {
                     specPrompts.push(system + '\n' + user);
-                    const key = Object.keys(specReplies).find(name => user.includes(`Scenario: ${name}`))!;
+                    assert.ok(!/Scenario:|value below high|value equal to high/.test(user), 'spec prompts carry no scenario text');
+                    const key = Object.keys(specReplies).find(name => user.includes(`Call: ${callOf[name]}`))!;
                     const reply = specReplies[key].shift();
                     if (reply === undefined) { throw new Error(`no spec reply for ${key}`); }
                     return reply;

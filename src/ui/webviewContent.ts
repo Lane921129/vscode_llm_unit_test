@@ -577,7 +577,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         updateExecutionTimingStatus();
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode","caseTableRows","caseTableSpecMismatch","caseTableTitle"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         const fileRelativeNameByPath = new Map();
@@ -829,7 +829,17 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
-        function getScoreBadge(score, coverage, outcome) {
+        function getCaseTableBadge(caseTable) {
+            if (!caseTable || typeof caseTable !== 'object') return '';
+            const usable = Number(caseTable.usableRows), total = Number(caseTable.totalRows), mismatch = Number(caseTable.specMismatch);
+            if (![usable, total, mismatch].every(Number.isFinite)) return '';
+            const tier = caseTable.tier === 'usable' ? 'usable' : 'failed';
+            const text = 'v2 ' + tier + ' · ' + usable + '/' + total + ' ' + i18n.caseTableRows + ' · ' + i18n.caseTableSpecMismatch + ' ' + mismatch;
+            return '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + (tier === 'usable' ? '#1677a6' : '#c75050')
+                + '; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; white-space:nowrap;">' + escapeHtml(text) + '</span>';
+        }
+
+        function getScoreBadge(score, coverage, outcome, caseTable) {
             const colors = { passed: '#2ea043', executed: '#1677a6', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
             const state = outcome || { label: i18n.pendingOutcome, kind: 'pending' };
             const outcomeBadge = '<span style="background:' + (colors[state.kind] || colors.pending) + '; color:#fff; padding:2px 7px; border-radius:4px;">' + escapeHtml(state.label) + '</span>';
@@ -845,7 +855,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const covBadge = coverage
                 ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
                 : '';
-            return '<div class="result-badges">' + outcomeBadge + scoreBadge + covBadge + '</div>';
+            return '<div class="result-badges">' + outcomeBadge + scoreBadge + covBadge + getCaseTableBadge(caseTable) + '</div>';
         }
 
         function toggleItemCheck(id, checked) {
@@ -903,7 +913,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
             const badgesDiv = document.createElement('div');
             badgesDiv.className = 'result-metrics';
-            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome);
+            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome, item.caseTable);
             header.appendChild(badgesDiv);
             card.appendChild(header);
 
@@ -1137,7 +1147,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 case 'updateOutcome': {
                     const old = resultsMap.get(msg.fileName) || { id: msg.fileName, fileName: msg.fileName,
                         file: msg.file, func: msg.func, score: 'N/A', coverage: null, checked: false };
-                    resultsMap.set(msg.fileName, { ...old, outcome: msg.outcome, reportPath: msg.reportPath });
+                    resultsMap.set(msg.fileName, { ...old, outcome: msg.outcome, reportPath: msg.reportPath,
+                        ...(msg.caseTable && typeof msg.caseTable === 'object' ? { caseTable: msg.caseTable } : {}) });
                     renderDashboard();
                     break;
                 }

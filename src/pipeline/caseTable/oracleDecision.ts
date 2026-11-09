@@ -16,7 +16,7 @@ import { CaptureReport } from './rowExecution';
 import { RowExpectation } from './rowToTest';
 import { observedExpectation } from './runRowStage';
 import { SpecSources, basisVerified } from './specSources';
-import { SPEC_PREDICTION_COUNT, SpecPrediction, getSpecPredictionCorrectionPrompt, getSpecPredictionPrompt, parseSpecPrediction } from '../../roles/specOracle';
+import { SPEC_PREDICTION_COUNT, SPEC_PREDICTION_TEMPERATURE, SpecPrediction, getSpecPredictionCorrectionPrompt, getSpecPredictionPrompt, parseSpecPrediction } from '../../roles/specOracle';
 
 export interface OracleComparison {
     parsed: boolean;
@@ -28,7 +28,7 @@ export interface OracleComparison {
 export interface SpecDeciderOptions {
     spec: SpecSources;
     functionName: string;
-    ask: (system: string, user: string) => Promise<string>;
+    ask: (system: string, user: string, options?: { temperature?: number }) => Promise<string>;
     /** Test seam; defaults to python_scripts/case_oracle_compare.py. */
     compare?: (request: object) => Promise<OracleComparison>;
     python: string;
@@ -46,11 +46,11 @@ export function createSpecDecider(options: SpecDeciderOptions) {
 
     async function predictOnce(row: CaseRow): Promise<SpecPrediction | null> {
         const prompt = getSpecPredictionPrompt(options.spec, row, options.functionName);
-        const first = await options.ask(prompt.system, prompt.user);
+        const first = await options.ask(prompt.system, prompt.user, { temperature: SPEC_PREDICTION_TEMPERATURE });
         const parsed = parseSpecPrediction(first);
         if (parsed) { return parsed; }
         const correction = getSpecPredictionCorrectionPrompt(options.spec, row, options.functionName, first);
-        return parseSpecPrediction(await options.ask(correction.system, correction.user));
+        return parseSpecPrediction(await options.ask(correction.system, correction.user, { temperature: SPEC_PREDICTION_TEMPERATURE }));
     }
 
     return async function decideExpected(row: CaseRow, capture: CaptureReport): Promise<{ row: CaseRow; expectation: RowExpectation | null }> {

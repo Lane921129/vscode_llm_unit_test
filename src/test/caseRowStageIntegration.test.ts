@@ -32,21 +32,30 @@ async function run(target: string, replies: string[], extra: Partial<Parameters<
 
 test('instance methods get one Writer setup per row and then run as host-written tests', async () => {
     const setup = (size: number) => '```python\ninstance = target_module.Box(' + size + ')\nargs = (3,)\nkwargs = {}\n```';
+    const messages: Record<string, unknown>[] = [];
     const { result, prompts } = await run('Box.grow', [
         [line({ scenario: '加三', category: 'normal', args: '(3,)' }), line({ scenario: '負數', category: 'error', args: '(-1,)' })].join('\n'),
         setup(2),
         '```python\ninstance = target_module.Box(2)\nargs = (-1,)\nkwargs = {}\n```'
-    ]);
+    ], { postMessage: message => { messages.push(message); } });
     assert.equal(prompts.length, 3);
     assert.match(prompts[1], /- instance: the Box object whose method is tested/);
     assert.deepEqual(result.rows.map(row => [row.id, row.status, row.actual?.value]), [['C1', 'test-passed', '5'], ['C2', 'test-passed', 'ValueError']]);
     assert.equal(result.stage!.terminal, 'usable');
+    const coverage = result.stage!.coverage!;
+    assert.ok(coverage.available ? typeof coverage.linePercent === 'number' : typeof coverage.reasonCode === 'string',
+        'coverage is either measured or carries a reason code; it never changes the usable tier');
+    const outcome = messages.find(message => message.command === 'updateOutcome')!;
+    assert.deepEqual(outcome.caseTable, { tier: 'usable', usableRows: 2, totalRows: 2, specMismatch: 0 });
+    assert.equal(outcome.fileName, 'shapes.py:Box.grow');
+    assert.equal(messages.find(message => message.command === 'updateCoverage')!.score, `${Math.round(result.stage!.mutation!.score! * 10) / 10}%`);
 });
 
 test('a failing row gets at most two fixes and a fix that changes the expected value is rejected', async () => {
     const wrong = { kind: 'return' as const, value: '999' };
     const changed = '```python\ndef test_c1(self):\n    result = target_module.double(*(2,), **{})\n    self.assertEqual(result, 4)\n```';
-    const kept = '```python\ndef test_c1(self):\n    value = 2\n    result = target_module.double(*(value,), **{})\n    self.assertEqual(result, 999)\n```';
+    // Setup-only edit: accepted by the contract check, but the wrong expectation still fails.
+    const kept = '```python\ndef test_c1(self):\n    unused = 2\n    result = target_module.double(*(2,), **{})\n    self.assertEqual(result, 999)\n```';
     const { result, prompts, remaining } = await run('double', [
         [line({ scenario: '二的兩倍', category: 'normal', args: '(2,)' }), line({ scenario: '零', category: 'boundary', args: '(0,)' })].join('\n'),
         changed, kept

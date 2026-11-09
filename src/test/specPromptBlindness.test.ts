@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { CaseRow } from '../pipeline/caseTable/caseTable';
 import { CaseTableFacts } from '../pipeline/caseTable/caseTableFacts';
 import { basisVerified, collectSpecSources, hasSpecSource } from '../pipeline/caseTable/specSources';
-import { SPEC_PREDICTION_COUNT, getSpecPredictionCorrectionPrompt, getSpecPredictionPrompt, parseSpecPrediction } from '../roles/specOracle';
+import { SPEC_PREDICTION_COUNT, SPEC_PREDICTION_TEMPERATURE, formatSpecCall, getSpecPredictionCorrectionPrompt, getSpecPredictionPrompt, parseSpecPrediction } from '../roles/specOracle';
 
 const BODY_MARKER = 'BODY_ONLY_MARKER_4711';
 const facts: CaseTableFacts = {
@@ -27,13 +27,24 @@ test('the spec prompt contains only signature, docstring, annotations, requireme
         for (const word of forbidden) { assert.ok(!text.includes(word), `spec prompt must not contain ${word}`); }
         assert.ok(!text.includes(facts.source.split('\n')[1]), 'no function body line');
         assert.ok(!/\b9\b/.test(text), 'the captured outcome never reaches the prompt');
+        assert.ok(!text.includes(row.scenario) && !/Scenario:/.test(text), 'no scenario text (user-approved 2026-11-09)');
         for (const expected of ['Function: clamp(value: int, high: int = 10) -> int', 'Values equal to high are returned unchanged.',
-            '- value: int', '- returns: int', 'R1: High itself is a valid result.', 'Scenario: value equal to high',
-            'Call: clamp(*(10,), **{})', '- store.read returns 3']) {
+            '- value: int', '- returns: int', 'R1: High itself is a valid result.',
+            'Call: clamp(10)', '- store.read returns 3']) {
             assert.ok(text.includes(expected), expected);
         }
     }
     assert.equal(SPEC_PREDICTION_COUNT, 3);
+    assert.equal(SPEC_PREDICTION_TEMPERATURE, 0.7);
+});
+
+test('spec calls are written as ordinary Python and omit empty kwargs', () => {
+    assert.equal(formatSpecCall('bmi', '(70, 1.75)', '{}'), 'bmi(70, 1.75)');
+    assert.equal(formatSpecCall('f', '(1,)', "{'key': 'a'}"), "f(1, key='a')");
+    assert.equal(formatSpecCall('f', '()', '{"a": (1, 2), \'b\': {\'x\': \'y, z\'}}'), "f(a=(1, 2), b={'x': 'y, z'})");
+    assert.equal(formatSpecCall('f', "('a,b', [1, 2])", ''), "f('a,b', [1, 2])");
+    assert.equal(formatSpecCall('f', '()', '{}'), 'f()');
+    assert.equal(formatSpecCall('f', '(1,)', '{1: 2}'), 'f(1, **{1: 2})', 'non-identifier keys keep the dict form');
 });
 
 test('spec presence, basis verification and prediction parsing', () => {

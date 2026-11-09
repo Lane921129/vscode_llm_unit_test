@@ -11,6 +11,8 @@ import { SpecSources } from '../pipeline/caseTable/specSources';
 
 /** Architecture 1.3: each row is predicted independently k = 3 times. */
 export const SPEC_PREDICTION_COUNT = 3;
+/** User-approved 2026-11-09: spec predictions sample at 0.7 so k answers are independent; other roles keep their settings. */
+export const SPEC_PREDICTION_TEMPERATURE = 0.7;
 
 export interface SpecPrediction {
     kind: 'return' | 'raise';
@@ -23,8 +25,48 @@ const SYSTEM = [
     'You cannot see the implementation. Use only the docstring, type annotations and requirements given.'
 ].join('\n');
 
+/** Split a literal's top level on `separator`, ignoring separators inside strings and brackets. */
+function splitTopLevel(text: string, separator: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let quote: string | undefined;
+    let escaped = false;
+    let current = '';
+    for (const character of text) {
+        if (quote) {
+            current += character;
+            if (escaped) { escaped = false; } else if (character === '\\') { escaped = true; } else if (character === quote) { quote = undefined; }
+            continue;
+        }
+        if (character === "'" || character === '"') { quote = character; }
+        else if ('([{'.includes(character)) { depth += 1; }
+        else if (')]}'.includes(character)) { depth -= 1; }
+        else if (character === separator && depth === 0) { parts.push(current.trim()); current = ''; continue; }
+        current += character;
+    }
+    if (current.trim()) { parts.push(current.trim()); }
+    return parts;
+}
+
+/** Render a validated tuple/dict literal call as ordinary Python, e.g. `f(70, 1.75)` or `f(1, key='a')`. */
+export function formatSpecCall(functionName: string, args: string, kwargs: string): string {
+    const trimmedArgs = args.trim();
+    const positional = trimmedArgs.startsWith('(') && trimmedArgs.endsWith(')') ? splitTopLevel(trimmedArgs.slice(1, -1), ',') : [trimmedArgs];
+    const trimmedKwargs = kwargs.trim();
+    const entries = trimmedKwargs.startsWith('{') && trimmedKwargs.endsWith('}') ? splitTopLevel(trimmedKwargs.slice(1, -1), ',') : [];
+    const keywords: string[] = [];
+    for (const entry of entries) {
+        const [key, ...value] = splitTopLevel(entry, ':');
+        const name = /^(['"])([A-Za-z_][A-Za-z0-9_]*)\1$/.exec(key ?? '');
+        if (!name || !value.length) { return `${functionName}(${[...positional, `**${trimmedKwargs}`].filter(Boolean).join(', ')})`; }
+        keywords.push(`${name[2]}=${value.join(':').trim()}`);
+    }
+    return `${functionName}(${[...positional, ...keywords].filter(Boolean).join(', ')})`;
+}
+
 function specLines(spec: SpecSources, row: CaseRow, functionName: string): string[] {
-    const call = needsSetup(row.call) ? [`Inputs: ${row.call.needsSetup}`] : [`Call: ${functionName}(*${row.call.args}, **${row.call.kwargs})`];
+    // User-approved 2026-11-09: no scenario text, only the call, mocks and spec sources.
+    const call = needsSetup(row.call) ? [`Inputs: ${row.call.needsSetup}`] : [`Call: ${formatSpecCall(functionName, row.call.args, row.call.kwargs)}`];
     return [
         `Function: ${spec.signature}`,
         '',
@@ -39,7 +81,6 @@ function specLines(spec: SpecSources, row: CaseRow, functionName: string): strin
         'Requirements:',
         ...(spec.requirements.length ? spec.requirements.map(entry => `${entry.id}: ${entry.text}`) : ['(none)']),
         '',
-        `Scenario: ${row.scenario}`,
         ...call,
         'Mocked dependencies:',
         ...(row.mocks.length ? row.mocks.map(mock => `- ${mock.dependency} ${mock.behavior === 'raise' ? 'raises' : 'returns'} ${mock.value}`) : ['(none)'])
