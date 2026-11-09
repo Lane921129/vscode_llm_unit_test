@@ -360,6 +360,7 @@ export const englishMessages: Record<string, string> = {
     "在選擇的資料夾中沒有找到任何 .py 檔案。": "No .py files were found in the selected folder.",
     "✅ 成功載入 {0} 個 Python 檔案": "✅ Loaded {0} Python files",
     "選擇輸出資料夾": "Select output folder",
+    "選擇需求檔": "Choose requirements file",
     "更新 outputPath 設定失敗": "Failed to update outputPath",
     "選擇批次測試資料夾": "Select batch test folder",
     "找不到此函式的測試結果報告。請先等待本次測試完成。": "The test report is unavailable. Please wait for this run to finish.",

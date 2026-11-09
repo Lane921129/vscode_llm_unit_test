@@ -3,7 +3,10 @@ import { resolveTestFocus } from '../pipeline/testFocus';
 import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettings';
 import { planAnalysisTargetBudget } from '../pipeline/targetBudget';
 
-export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false) {
+export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false,
+    pipeline: { version: string; specOracle: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', requirementsFile: '' }) {
+    const attribute = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const isV2 = pipeline.version === 'v2-case-table';
     const selectedFocus = resolveTestFocus(currentStrategy);
     const selectedEngine = ['builtin', 'mutatest', 'mutmut', 'auto'].includes(mutationEngine) ? mutationEngine : 'builtin';
     const selectedWorkers = Number.isInteger(mutationWorkers) && mutationWorkers >= 1 && mutationWorkers <= 4 ? mutationWorkers : 2;
@@ -298,6 +301,24 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>${t('ui.executionValidation')}</option>
             </select>
             <p id="validation-scope" role="status" aria-live="polite"></p>
+            <label for="pipeline-version">${t('ui.pipelineVersion')}</label>
+            <select id="pipeline-version">
+                <option value="v1" ${isV2 ? '' : 'selected'}>${t('ui.pipelineV1')}</option>
+                <option value="v2-case-table" ${isV2 ? 'selected' : ''}>${t('ui.pipelineV2')}</option>
+            </select>
+            <div id="v2-settings" style="display:${isV2 ? 'block' : 'none'};">
+                <label for="spec-oracle">${t('ui.specOracle')}</label>
+                <select id="spec-oracle">
+                    <option value="auto" ${pipeline.specOracle === 'off' ? '' : 'selected'}>${t('ui.specOracleAuto')}</option>
+                    <option value="off" ${pipeline.specOracle === 'off' ? 'selected' : ''}>${t('ui.specOracleOff')}</option>
+                </select>
+                <label for="requirements-file">${t('ui.requirementsFile')}</label>
+                <div style="display:flex; gap:4px; margin-bottom:8px;">
+                    <input id="requirements-file" type="text" readonly placeholder="${attribute(t('ui.requirementsFileNone'))}" value="${attribute(pipeline.requirementsFile)}" style="flex:1;">
+                    <button id="requirements-file-pick" type="button">${t('ui.chooseRequirementsFile')}</button>
+                    <button id="requirements-file-clear" type="button" title="${attribute(t('ui.clearRequirementsFile'))}">✕</button>
+                </div>
+            </div>
             <label for="prompt-strategy">🧠 ${t('ui.testFocus')}</label>
             <select id="prompt-strategy" style="margin-bottom: 8px;">
                 <option value="full" ${selectedFocus === 'full' ? 'selected' : ''}>${t('ui.focusFull')}</option>
@@ -978,6 +999,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         window.addEventListener('message', event => {
             const msg = event.data;
             switch (msg.command) {
+                case 'setRequirementsFile':
+                    document.getElementById('requirements-file').value = typeof msg.path === 'string' ? msg.path : '';
+                    break;
                 case 'stopPolicySettings':
                     if (!analysisRunning && !stopPolicyTouched) {
                         document.getElementById('failure-limit').value = msg.settings.failureLimit;
@@ -1318,6 +1342,24 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (analysisRunning) return;
             updateValidationScope();
             vscode.postMessage({ command: 'setValidationMode', mode: e.target.value });
+        };
+        document.getElementById('pipeline-version').onchange = (e) => {
+            if (analysisRunning) return;
+            document.getElementById('v2-settings').style.display = e.target.value === 'v2-case-table' ? 'block' : 'none';
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'pipelineVersion', value: e.target.value });
+        };
+        document.getElementById('spec-oracle').onchange = (e) => {
+            if (analysisRunning) return;
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'specOracle', value: e.target.value });
+        };
+        document.getElementById('requirements-file-pick').onclick = () => {
+            if (analysisRunning) return;
+            vscode.postMessage({ command: 'pickRequirementsFile' });
+        };
+        document.getElementById('requirements-file-clear').onclick = () => {
+            if (analysisRunning) return;
+            document.getElementById('requirements-file').value = '';
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'requirementsFile', value: '' });
         };
         document.getElementById('mutation-engine').onchange = (e) => {
             if (analysisRunning) return;

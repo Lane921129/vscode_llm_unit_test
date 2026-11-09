@@ -177,7 +177,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const config = vscode.workspace.getConfiguration('llmUnitTest');
         const html = getWebviewContent(t, config.get('language', 'auto'), config.get('promptStrategy', 'auto'),
             config.get('ollamaBaseUrl', 'http://127.0.0.1:11434'), config.get('validationMode', 'full'),
-            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false));
+            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false),
+            pipelineSettings(config));
         if (this.webview.html !== html) { this.webview.html = html; }
     }
 
@@ -254,7 +255,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const strategy = config.get<string>('promptStrategy', 'auto');
         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
         this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'full'),
-            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false));
+            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false),
+            pipelineSettings(config));
 
         this.webview.onDidReceiveMessage(async (message) => {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -336,7 +338,33 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const lang = config.get<string>('language', 'auto');
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
                         this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'full'),
-                            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false));
+                            config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false),
+            pipelineSettings(config));
+                    }
+                    break;
+                }
+
+                case 'setPipelineSetting': {
+                    const allowed: Record<string, readonly string[] | null> = {
+                        pipelineVersion: ['v1', 'v2-case-table'], specOracle: ['auto', 'off'], requirementsFile: null
+                    };
+                    const choices = allowed[message.key];
+                    if (!this.activeAnalysis && message.key in allowed && typeof message.value === 'string'
+                        && (choices === null ? message.value === '' : choices.includes(message.value))) {
+                        await this.rememberRunPreference(config, message.key, message.value);
+                    }
+                    break;
+                }
+
+                case 'pickRequirementsFile': {
+                    if (this.activeAnalysis) { break; }
+                    const fileUri = await vscode.window.showOpenDialog({
+                        canSelectFiles: true, canSelectFolders: false, canSelectMany: false,
+                        filters: { Markdown: ['md', 'markdown', 'txt'] }, openLabel: localize("選擇需求檔")
+                    });
+                    if (fileUri && fileUri[0]) {
+                        await this.rememberRunPreference(config, 'requirementsFile', fileUri[0].fsPath);
+                        this.webview?.postMessage({ command: 'setRequirementsFile', path: fileUri[0].fsPath });
                     }
                     break;
                 }
@@ -1163,4 +1191,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         }
         return [];
     }
+}
+
+/** v2 pipeline settings shown in the sidebar; values outside the declared enums fall back to the defaults. */
+function pipelineSettings(config: vscode.WorkspaceConfiguration): { version: string; specOracle: string; requirementsFile: string } {
+    const version = config.get<string>('pipelineVersion', 'v1');
+    const specOracle = config.get<string>('specOracle', 'auto');
+    const requirementsFile = config.get<string>('requirementsFile', '');
+    return { version: version === 'v2-case-table' ? version : 'v1', specOracle: specOracle === 'off' ? 'off' : 'auto',
+        requirementsFile: typeof requirementsFile === 'string' ? requirementsFile : '' };
 }
