@@ -19,10 +19,12 @@ import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
 import { writeCaseTable } from './caseTableStore';
 import { RequirementEntry, parseRequirements } from './requirements';
 import { CASE_SCENARIO_ROW_LIMIT, getCaseRowCorrectionPrompt, getCaseScenarioPrompt, parseCaseRows } from '../../roles/semanticAnalyzer';
+import { RowStageResult, RowStageOptions, runRowStage } from './runRowStage';
 
 export type PipelineVersion = 'v1' | 'v2-case-table';
 export type SpecOracleSetting = 'auto' | 'off';
 export const CASE_TABLE_REJECTIONS_FILE = 'case_table_rejections.json';
+export const CASE_TABLE_RESULT_FILE = 'v2_result.json';
 
 export function readPipelineVersion(value: unknown): PipelineVersion {
     return value === 'v2-case-table' ? 'v2-case-table' : 'v1';
@@ -57,6 +59,12 @@ export interface CaseTablePipelineOptions {
     log: (text: string) => void;
     /** Test seam; defaults to running an extension-owned script through runSpawn. */
     runPythonTool?: (script: string, args: string[], input?: string) => Promise<PythonToolResult>;
+    /** Mutation settings shared with v1 (engine, workers, stage seconds). */
+    mutation?: { engine: unknown; workers: unknown; stageSeconds: number };
+    /** Run capture, tests and mutation after the case table (default true). */
+    runRows?: boolean;
+    /** PR #8 hook passed to the row stage. */
+    decideExpected?: RowStageOptions['decideExpected'];
 }
 
 export interface RecordedRejection extends RejectedCaseLine {
@@ -72,6 +80,8 @@ export interface CaseTablePipelineResult {
     overLimit: { line: number; reason: 'row-limit' }[];
     decorated: boolean;
     modelRequests: number;
+    /** Present when the row stage ran. */
+    stage?: RowStageResult;
 }
 
 export async function runCaseTablePipeline(options: CaseTablePipelineOptions): Promise<CaseTablePipelineResult> {
@@ -128,12 +138,27 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
         }
     })();
 
-    writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: outcome.rows });
+    let finalRows = outcome.rows;
+    let stage: RowStageResult | undefined;
+    const validBeforeRows = outcome.rows.filter(row => row.status === 'proposed').length;
+    if (options.runRows !== false && validBeforeRows > 0) {
+        stage = await runRowStage({
+            runtime: { python: options.pythonExecutable, sourceFile: path.resolve(options.filePath), target: options.funcName,
+                importPaths: [...new Set([path.dirname(path.resolve(options.filePath)), path.resolve(options.projectRoot)])],
+                artifacts: path.join(directory, 'v2_runs') },
+            facts, rows: outcome.rows, ask, log: options.log,
+            mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
+            ...(options.decideExpected ? { decideExpected: options.decideExpected } : {})
+        });
+        finalRows = stage.rows;
+    }
+    writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: finalRows });
     fs.writeFileSync(path.join(directory, CASE_TABLE_REJECTIONS_FILE), JSON.stringify({
         version: 'case-table-rejections-v1', target: options.funcName, rejected, overLimit: parsed.overLimit,
         decorated: outcome.decorated, modelRequests, specOracle: options.specOracle
     }, null, 2) + '\n', 'utf8');
-    const valid = outcome.rows.filter(row => row.status === 'proposed').length;
+    if (stage) { writeStageResult(directory, options.funcName, finalRows, stage, modelRequests); }
+    const valid = validBeforeRows;
     options.log(`[v2] case_table.json: ${valid} valid rows, ${outcome.rows.length - valid} invalid rows, `
         + `${rejected.filter(item => item.source === 'scenario' && !item.corrected).length} rejected lines, `
         + `${parsed.overLimit.length} over the row limit.`);
@@ -141,7 +166,34 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
         throw new AnalysisStageError('model-format', 'case-scenario', 'No usable case row was produced.',
             { reasonCode: 'no-valid-case-rows', directory });
     }
-    return { directory, rows: outcome.rows, rejected, overLimit: parsed.overLimit, decorated: outcome.decorated, modelRequests };
+    return { directory, rows: finalRows, rejected, overLimit: parsed.overLimit, decorated: outcome.decorated, modelRequests,
+        ...(stage ? { stage } : {}) };
+}
+
+function writeStageResult(directory: string, target: string, rows: CaseRow[], stage: RowStageResult, modelRequests: number): void {
+    const count = (status: string) => rows.filter(row => row.status === status).length;
+    const run = stage.mutation?.run;
+    const summary = {
+        version: 'case-table-result-v1', target, terminal: stage.terminal, reasonCode: stage.reasonCode,
+        rows: { total: rows.length, invalid: count('invalid'), captureFailed: count('capture-failed'),
+            testPassed: count('test-passed'), testFailed: count('test-failed') },
+        testFile: stage.testFile ? path.relative(directory, stage.testFile).replace(/\\/g, '/') : null,
+        mutation: run ? { engine: run.engine, score: stage.mutation?.score ?? null, killed: run.counts.killed,
+            survived: run.counts.survived, executed: run.counts.executed } : { score: null, failure: stage.mutation?.failure ?? null },
+        modelRequests
+    };
+    fs.writeFileSync(path.join(directory, CASE_TABLE_RESULT_FILE), JSON.stringify(summary, null, 2) + '\n', 'utf8');
+    const lines = [
+        `# v2 case table: ${target}`, '',
+        `- Terminal: **${stage.terminal}** (${stage.reasonCode})`,
+        `- Rows: ${summary.rows.total} total, ${summary.rows.testPassed} passing tests, ${summary.rows.testFailed} failing, `
+            + `${summary.rows.captureFailed} capture-failed, ${summary.rows.invalid} invalid`,
+        `- Mutation score: ${summary.mutation.score ?? 'unavailable'}`,
+        `- Expected values: observed results (not confirmed by a specification)`, '',
+        '| Row | Category | Status | Scenario |', '| --- | --- | --- | --- |',
+        ...rows.map(row => `| ${row.id} | ${row.category} | ${row.status}${row.reason ? ` (${row.reason})` : ''} | ${row.scenario.replace(/\|/g, '\\|')} |`)
+    ];
+    fs.writeFileSync(path.join(directory, 'final_report.md'), lines.join('\n') + '\n', 'utf8');
 }
 
 function readRequirementsFile(file: string | undefined, projectRoot: string): RequirementEntry[] {

@@ -11,7 +11,7 @@ const mochaTests = new Set(['core.test.ts', 'extension.test.ts']);
 const fastNodeTests = new Set([
     'analysisTargetBudget', 'analystPlanContract', 'artifactSafety',
     'batchPreflightPartition', 'batchPreflightSnapshot', 'batchRuntimeQualification',
-    'candidateCheckpoint', 'candidateRejectionTracing', 'candidateToolFailureRouting', 'caseScenarioPrompt', 'caseTable',
+    'candidateCheckpoint', 'candidateRejectionTracing', 'candidateToolFailureRouting', 'caseRowTests', 'caseScenarioPrompt', 'caseTable',
     'cleanerQualityRegression', 'cloudApi', 'cloudCredentials', 'connectionTimeout',
     'contextGrowth', 'customApi', 'dependencyResolver', 'exceptionEvidence',
     'executionContext', 'executionFailureCategory', 'focusedQualityProgress',
@@ -101,7 +101,9 @@ const pythonTests = [
     'python_scripts/test_target_alias_bindings.py',
     'python_scripts/test_eval_aggregate.py',
     'python_scripts/test_case_row_validator.py',
-    'python_scripts/test_case_table_facts.py'
+    'python_scripts/test_case_table_facts.py',
+    'python_scripts/test_case_capture_runner.py',
+    'python_scripts/test_case_row_assertions.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',

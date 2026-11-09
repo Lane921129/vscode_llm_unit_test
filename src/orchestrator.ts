@@ -1908,6 +1908,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             onTargetDirectory: directory => { if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, directory); } },
             pythonExecutable: normalizePythonExecutable(params.pythonExecutable),
             requirementsFile: config.get<string>('requirementsFile', ''), specOracle: readSpecOracleSetting(config.get('specOracle', 'auto')),
+            mutation: { engine: params.mutationEngine, workers: params.mutationWorkers, stageSeconds: normalizeExecutionSettings(params).mutpyTimeout },
             requestModel: (system, user) => requestLlmApi(params, system, user, log), log }); }));
     }
     const reportState: TargetReportState = {};

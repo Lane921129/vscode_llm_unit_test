@@ -85,7 +85,7 @@
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
 | 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；VM 驗證通過，Windows 驗證待執行** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
-| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | 未開始 | | |
+| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；VM 驗證通過（含 v2 golden 錄製），Windows 驗證待執行** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | 未開始 | | |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
@@ -118,6 +118,26 @@
   4. 批次模式下 v2 目標會 attach 到批次資料夾，但 PR #6 還沒有寫終態，批次彙總會把它算成未完成；終態在 PR #7 補上。
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr6-check-types.log`）、lint 0／0 warning（`log/pr6-lint.log`）、test:webview 通過（`log/pr6-webview.log`）、related 71/71（caseScenarioPrompt、caseTable、caseTablePipelineIntegration、verificationRunner、localization、webviewContent、sidebarPreferences、readabilityImprovements；`log/pr6-related-node.log`）、Python 新模組 24/24（test_case_table_facts＋test_case_row_validator，VM Python 3.10）。
 - **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異：v1 路徑只多一個讀設定的判斷）。
+
+### PR #7 `pr/07-capture-rows`（2026-11-09 Claude Code）
+
+- **新增**：
+  - `python_scripts/case_capture_runner.py`：一列一個行程；在 `runtime_policy.guarded_runtime` 內 import 目標模組並呼叫。依 PR #6 facts 的 `patch`／`chain` 在目標模組命名空間 patch（`mock.patch.object`），區域呼叫鏈設定在同一個 MagicMock 上；`raise` 的例外名稱先找 builtins，再從目標模組解析。輸出回傳值（必須能 `repr`→`literal_eval` 還原）或例外（名稱、MRO、測試可用的參照）。行程會設 `sys.dont_write_bytecode`，TS 呼叫時也加 `-B`（寫 `__pycache__` 在 guard 下會被擋）。
+  - `python_scripts/case_row_assertions.py`：比對 Bug Fixer 修正前後每個 `self.assert*` 的預期部分。
+  - `src/pipeline/caseTable/rowToTest.ts`、`rowExecution.ts`、`runRowStage.ts`；`runCaseTablePipeline.ts` 在案例表之後跑 row stage，寫出 `v2_result.json`、`final_report.md`、`v2_runs/`（每次執行的測試檔與 runner 證據）、`test_case_table.py`。
+  - 提示詞：`unittestWriter.ts` 的 `getRowSetupPrompt`／`parseRowSetupResponse`、`bugFixer.ts` 的 `getRowFixPrompt`／`parseRowFixResponse`（全文已列入 `docs/v2_提示詞_待審.md`）。
+  - v2 golden：`src/test/caseTableGolden.test.ts`＋`test/fixtures/golden/v2/{bmi,database}.json`；`test/run_golden_tests.js` 在 v1 之後執行它。**`--update` 只影響 v1；v2 只能用 `UPDATE_CASE_TABLE_GOLDEN=1` 錄製。**
+  - 測試：`src/test/caseRowTests.test.ts`（fast，6）、`src/test/caseRowStageIntegration.test.ts`（integration，2）、`python_scripts/test_case_capture_runner.py`（6，每案子行程）、`python_scripts/test_case_row_assertions.py`（3）；Python 模組數 59→61。
+- **修改**：`src/orchestrator.ts` 分流多傳 1 行 mutation 設定（沿用 v1 的 `mutationEngine`／`mutationWorkers`／`normalizeExecutionSettings(params).mutpyTimeout`）；`pythonTools.ts` 新增 `caseCapture`、`caseRowAssertions`；PR #6 整合測試改傳 `runRows: false`（只測案例表階段）。
+- **與指示不同之處（請監督確認）**：
+  1. 沒有重用 `tier1TestFileBuilder`：它的輸入是 trace 事實、沒有 mock 支援，而 v2 每列都可能 patch 相依；改由 `rowToTest.ts` 依相同結構產生。
+  2. 沒有重用 `mock_scaffold_generator.py` 與 `trace_value_codec.py`：patch 位置改由 PR #6 facts 決定（目標模組命名空間＋呼叫鏈）；值只接受字面值（`repr` 可被 `literal_eval` 還原），回傳物件的列標 `capture-failed`（`return-not-literal`）。
+  3. 覆蓋率還沒量：`usable` 不需要覆蓋率，留到 PR #9 的 `quality-passed`。
+  4. 執行單一方法時不傳 `--test-progress`：該功能用到 Python 3.11 的 `co_qualname`，VM 的 3.10 會壞；v2 不需要進度串流（v1 不受影響）。
+  5. v2 golden 用 builtin 突變引擎（不依賴外部套件，結果可攜）。
+- **限制**：模組以檔名 stem import（目標資料夾與專案根加入 import path），套件內相對 import 的模組目前會 capture 失敗；實例方法每列都需要一次 Writer setup。
+- **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr7-check-types.log`）、lint 0／0 warning（`log/pr7-lint.log`）、related 62/62（`log/pr7-related-node.log`）、Python 四個新模組 33/33（`log/pr7-python-vm.log`）。v2 golden：在 VM（Python 3.10）錄製（`log/pr7-v2-golden-record-vm.log`）後再比對 2/2（`log/pr7-v2-golden-compare-vm.log`）：BMI usable，5 列中 4 列通過、1 列 invalid，builtin 突變 63/96＝65.6；資料庫 usable，3 列通過、1 列未 mock 而 `capture-failed`（isolation-blocked），突變 27/34＝79.4。v1 golden 檔案未改動。
+- **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異；v2 在 Windows Python 3.13 上比對。若 v2 有差異，**先回報差異，不要直接重錄**，因為快照是在 VM 的 3.10 上錄的）。
 
 ## 2-old. PR #5 進度與下一步
 
@@ -458,6 +478,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Claude Code／PR #7）：新增 `python_scripts/{case_capture_runner,case_row_assertions,test_case_capture_runner,test_case_row_assertions}.py`、`src/pipeline/caseTable/{rowToTest,rowExecution,runRowStage}.ts`、`src/test/{caseRowTests,caseRowStageIntegration,caseTableGolden}.test.ts`、`test/fixtures/golden/v2/*.json`；修改 `runCaseTablePipeline.ts`、`unittestWriter.ts`、`bugFixer.ts`、`pythonTools.ts`、`orchestrator.ts`、`test/run_golden_tests.js`、`test/verificationConfig.js`、`verificationRunner.test.ts`。
 - 2026-11-09（Claude Code／PR #6）：沒有 AOCI MCP。新增：`python_scripts/case_table_facts.py`、`python_scripts/test_case_table_facts.py`、`src/pipeline/caseTable/{runCaseTablePipeline,caseTableFacts,requirements}.ts`、`src/test/caseScenarioPrompt.test.ts`、`src/test/caseTablePipelineIntegration.test.ts`、`docs/v2_提示詞_待審.md`。修改：`src/orchestrator.ts`、`src/roles/semanticAnalyzer.ts`、`src/pipeline/pythonTools.ts`、`src/pipeline/caseTable/caseRowParser.ts`、`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/{en,zh-tw,messages}.ts`、`package.json`、`package.nls*.json`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`。
 - 2026-11-08（Claude Code／PR #5 第二版）：再加上新檔 `src/pipeline/caseTable/caseTableStore.ts`；第一版清單中的檔案本輪也有修改。
 - 2026-11-08（Claude Code／PR #5）：沒有 AOCI MCP，未呼叫。新增／修改的受管理檔：`src/pipeline/caseTable/caseTable.ts`、`caseRowParser.ts`、`caseRowValidation.ts`、`src/test/caseTable.test.ts`、`python_scripts/case_row_validator.py`、`python_scripts/test_case_row_validator.py`、`test/verificationConfig.js`、`src/test/verificationRunner.test.ts`。
@@ -543,6 +564,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 03:00 | Claude Code | PR #7 完成 | capture、程式產生測試、逐方法執行、單列修正、突變、v2 golden（VM 錄製）；VM：check-types／lint 0、related 62/62、Python 33/33、v2 golden 2/2。Windows 待執行 | 本筆 |
 | 2026-11-09 01:30 | Claude Code | PR #6 完成 | 設定分流、Analyst-情境、facts、需求檔、側欄；VM：check-types／lint 0、webview 通過、related 71/71、Python 24/24。Windows fast／python／golden 待執行 | 本筆 |
 | 2026-11-08 23:40 | Claude Code | PR #5 第 4 步（記錄 Windows 結果） | 使用者 Windows `test:fast` 通過：Node 796/796、Python fast 48/48；`test:python` 指令誤貼未執行，仍待使用者 | 本筆 |
 | 2026-11-09 00:45 | Claude Code | PR #5 第三版（監督確認三項解讀） | 第 0 節補第 7～9 項；新增全選填欄位往返測試；第 5 節加 CaseRow 欄位維護註記。VM：check-types／lint 0、related 40/40；Windows fast／python 待使用者執行 | 本筆 |
