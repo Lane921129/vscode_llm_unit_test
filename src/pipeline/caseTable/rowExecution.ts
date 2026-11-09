@@ -14,6 +14,7 @@ import { runSpawn } from '../../utils/processRunner';
 import { buildGeneratedTestEnvironment, generatedUnittestArguments } from '../../utils/pythonTestEnvironment';
 import { mutationArguments, selectMutationEngine } from '../../mutation/mutationSelection';
 import { MutationRun, mutationScore, parseIsolatedMutationRun } from '../../mutation/mutationResult';
+import { assessTargetCoverageEvidence } from '../../mutation/targetCoverage';
 import { CaseMock } from './caseTable';
 import { CaseTableDependency } from './caseTableFacts';
 import { ExceptionReference } from './rowToTest';
@@ -83,12 +84,12 @@ export interface MethodRun {
 }
 
 /** Run one test file through generated_test_runner; `module` is the file stem inside runtime.artifacts. */
-export async function runTestFile(runtime: RowRuntime, module: string, code: string): Promise<MethodRun> {
+export async function runTestFile(runtime: RowRuntime, module: string, code: string, useCoverage = false): Promise<MethodRun> {
     const testFile = path.join(runtime.artifacts, `${module}.py`);
     fs.writeFileSync(testFile, code, { encoding: 'utf8', flag: 'wx' });
     const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);
     const resultFile = path.join(runtime.artifacts, `${module}.runner.json`);
-    const args = [...generatedUnittestArguments(module, path.dirname(runtime.sourceFile), false, true),
+    const args = [...generatedUnittestArguments(module, path.dirname(runtime.sourceFile), useCoverage, true),
         '--target-file', runtime.sourceFile, '--target-name', runtime.target, '--target-test-file', testFile,
         '--target-evidence', evidence, '--target-run-id', randomUUID(),
         '--violation-report', path.join(runtime.artifacts, `${module}.isolation.jsonl`),
@@ -109,6 +110,50 @@ export async function runTestFile(runtime: RowRuntime, module: string, code: str
     const targetObserved = invocation?.observed === true && invocation?.status === 'passed';
     const output = `${run.stdout}\n${run.stderr}`.trim();
     return { passed, targetObserved, error: output.length > 3000 ? output.slice(output.length - 3000) : output, testFile };
+}
+
+export interface CoverageMeasurement {
+    available: boolean;
+    /** Covered share of the target's executable lines, 0-100. */
+    linePercent: number | null;
+    executableLines: number;
+    missingLines: number[];
+    /** null when branch data could not be determined. */
+    branchesCovered: boolean | null;
+    missingBranches: string[];
+    reasonCode?: string;
+}
+
+/**
+ * Line and branch coverage of the merged formal test file with the existing tools
+ * (generated_test_runner --coverage-source, coverage_read.py, assessTargetCoverageEvidence).
+ * Failure only yields a reason code; it never changes the usable verdict.
+ */
+export async function measureCoverage(runtime: RowRuntime, code: string): Promise<CoverageMeasurement> {
+    const unavailable = (reasonCode: string): CoverageMeasurement => ({ available: false, linePercent: null, executableLines: 0,
+        missingLines: [], branchesCovered: null, missingBranches: [], reasonCode });
+    try {
+        const module = 'test_case_table_coverage';
+        const run = await runTestFile(runtime, module, code, true);
+        if (!run.passed || !run.targetObserved) { return unavailable('coverage-run-failed'); }
+        const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);
+        const invocation = JSON.parse(fs.readFileSync(evidence, 'utf8'));
+        const expectedRun = { testRunId: String(invocation.testRunId), testHash: String(invocation.testHash) };
+        const read = await runSpawn(runtime.python, ['-B', pythonToolPath('coverage'), runtime.sourceFile, runtime.target,
+            '--invocation-evidence', evidence, '--expected-run-id', expectedRun.testRunId, '--expected-test-hash', expectedRun.testHash],
+            { cwd: runtime.artifacts, env: environment(runtime), timeout: 10000 });
+        if (read.code !== 0) { return unavailable('coverage-read-failed'); }
+        fs.writeFileSync(path.join(runtime.artifacts, 'coverage.json'), read.stdout, 'utf8');
+        const assessment = assessTargetCoverageEvidence(read.stdout, runtime.sourceFile, runtime.target, sha256File(runtime.sourceFile), expectedRun);
+        if (!assessment.available || !assessment.executableTargetLines) { return unavailable(assessment.reason || 'coverage-unavailable'); }
+        const executable = assessment.executableTargetLines.length;
+        const missing = assessment.missingTargetLines ?? [];
+        return { available: true, linePercent: executable ? Math.round(((executable - missing.length) / executable) * 1000) / 10 : null,
+            executableLines: executable, missingLines: missing, branchesCovered: assessment.targetBranchesCovered ?? null,
+            missingBranches: assessment.missingTargetBranches ?? [] };
+    } catch {
+        return unavailable('coverage-failed');
+    }
 }
 
 export interface MutationMeasurement {
@@ -138,12 +183,17 @@ export async function measureMutation(runtime: RowRuntime, testFile: string, opt
     }
 }
 
-/** Expectation dumps before/after a Bug Fixer edit must be identical. */
-export async function sameAssertionExpectations(runtime: RowRuntime, before: string, after: string, method: string): Promise<boolean> {
+/**
+ * A Bug Fixer edit may only change setup: target calls, every self.assert* call, mock setup
+ * and the control flow around calls and assertions must stay AST-identical (case_row_assertions.py).
+ */
+export async function fixPreservesContract(runtime: RowRuntime, before: string, after: string, method: string,
+    callees: readonly string[]): Promise<{ accepted: boolean; violations: string[] }> {
     const run = await runSpawn(runtime.python, ['-B', pythonToolPath('caseRowAssertions')],
-        { env: environment(runtime), timeout: 10000, input: JSON.stringify({ before, after, method }) });
+        { env: environment(runtime), timeout: 10000, input: JSON.stringify({ before, after, method, callees }) });
     try {
         const report = JSON.parse(run.stdout);
-        return report.parsed === true && report.sameName === true && report.expectationsEqual === true;
-    } catch { return false; }
+        const violations = Array.isArray(report.violations) ? report.violations.filter((item: unknown) => typeof item === 'string') : ['invalid-report'];
+        return { accepted: report.accepted === true && violations.length === 0, violations };
+    } catch { return { accepted: false, violations: ['invalid-report'] }; }
 }
