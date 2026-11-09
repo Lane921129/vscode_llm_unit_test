@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "baseline-batch-v1",
+  "batchId": "gpt-oss:20b (plain-llm)-batch",
+  "startedAt": "2026-11-09T12:00:00.000Z",
+  "finishedAt": "2026-11-09T12:10:00.000Z",
+  "status": "complete",
+  "model": "gpt-oss:20b (plain-llm)",
+  "expectedTargets": 2,
+  "finishedTargets": 2,
+  "attemptedTargets": 2,
+  "discoveryFailures": [],
+  "statusCounts": {
+    "usable": 1,
+    "failed": 1
+  },
+  "targets": [
+    {
+      "file": "bmi.py",
+      "target": "calculate_bmi",
+      "state": "finished",
+      "terminalStatus": "usable",
+      "reasonCode": "usable",
+      "reportDirectory": "bmi/calculate_bmi",
+      "modelRequests": 1
+    },
+    {
+      "file": "bottle_utils.py",
+      "target": "tob",
+      "state": "finished",
+      "terminalStatus": "failed",
+      "reasonCode": "model-call-failed",
+      "reportDirectory": "bottle_utils/tob",
+      "modelRequests": 1
+    }
+  ],
+  "method": "plain-llm",
+  "cost": {
+    "modelRequests": 2,
+    "outputTokens": 250
+  },
+  "modelCapabilitySummary": {
+    "lengthStoppedTransports": 0
+  },
+  "settings": {
+    "model": "gpt-oss:20b",
+    "temperature": 0,
+    "numCtx": 8192,
+    "localThinkingMode": "provider-default",
+    "mutationEngine": "builtin"
+  }
+}

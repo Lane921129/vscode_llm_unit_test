@@ -1,0 +1,21 @@
+{
+  "version": "case-table-result-v1",
+  "target": "tob",
+  "terminal": "failed",
+  "rows": {
+    "total": 3,
+    "invalid": 3,
+    "captureFailed": 0,
+    "testPassed": 0,
+    "testFailed": 0
+  },
+  "mutation": {
+    "score": null
+  },
+  "coverage": null,
+  "specOracle": {
+    "used": false,
+    "specMismatchCount": 0,
+    "needsReviewCount": 0
+  }
+}

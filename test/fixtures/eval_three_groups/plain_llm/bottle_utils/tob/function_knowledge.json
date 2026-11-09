@@ -1,0 +1,7 @@
+{
+  "method": "plain-llm",
+  "terminalStatus": "failed",
+  "reasonCode": "model-call-failed",
+  "mutationScore": null,
+  "coverage": null
+}

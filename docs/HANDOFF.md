@@ -113,13 +113,30 @@
 | 9 | Reviewer 改審案例表 | 未開始 | | |
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
-| 12 | 對照組執行器與埋 bug 評估 | 未開始 | | |
+| 12a | 評估紀錄（v2 role_events）、彙總支援 v2、一般 LLM 對照組 | **完成待驗收：VM 驗證通過，待使用者 Windows 驗證；未合併、未 push** | `pr/12a-eval-recording`（自 `lane_edition` 8126f94） | 2026-11-09 Claude Code |
+| 12 | 埋 bug 評估（對照組執行器已拆到 12a） | 未開始 | | |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #6～#8 進度（最新；疊加分支，見第 0 節 23:50 授權）
+## 2. PR #12a 進度（最新）
+
+### PR #12a `pr/12a-eval-recording`（2026-11-09 Claude Code）
+
+- `13e3047` docs：記錄 PR #5～#8 驗收合併（`29b4c9d`／`674dab1`／`a52900f`／`8126f94`）、v2 提示詞核准、v1／v2 實驗室比較依序執行。
+- `6725a16` feat：v2 每個模型請求以 v1 格式寫 `role_events.jsonl`，角色名 `analyst-scenario`、`analyst-scenario-correction`、`writer-row-setup`、`bug-fixer-row`、`analyst-spec`、`analyst-spec-correction`；timing 事件帶 tokens、`completionReason`、耗時。另寫 `function_knowledge.json`（含 `caseTableResult`）與 `run_manifest.json`，沒有有效列的失敗也寫。orchestrator 只把 `onTiming` 轉傳給既有 `requestLlmApi`，v1 請求不變。
+- 本筆 feat／test：
+  - `eval_aggregate.py`：讀 `v2_result.json`（終態、突變分數、行覆蓋率、列數、規格不符、needs-review）；新增「方法」與三個 v2 欄；只有占位事件時 tokens／截斷為「未記錄」（JSON 為 `null`），不顯示 0。v1 數字不變（既有 4 個測試照過）。
+  - `eval_baseline_plain_llm.py`：提示詞逐字為「以下是一個 Python 函式，請為它寫 unittest」＋完整函式原始碼；temperature 0、`num_ctx`、思考模式可設；同一個隔離 runner、`coverage_read.py`、突變引擎；所有失敗（呼叫失敗、沒有程式碼、語法錯誤、沒有測試方法、逾時、測試失敗、未呼叫目標）都計入分母。`usable` 定義同 v2：測試全過且確實呼叫目標；突變量不到時仍為 usable，原因另記、不算「量到突變分數」。
+  - 測試：`test_eval_aggregate.py` 新增三組並列（v1 `eval_screening/gpt_oss20b`、v2 有真實事件、v2 占位事件、對照組；fixture 在 `test/fixtures/eval_three_groups/`）；`test_eval_baseline_plain_llm.py` 以固定回覆假模型驗證可執行／語法錯誤／沒有測試方法／呼叫失敗四種，並確認可被彙總。新模組已登記於 `test/verificationConfig.js`（Python 模組數 62→63）。
+  - `eval/README.md` 新增第 4、5 節（對照組用法、三組並列與依序執行）。
+- VM 驗證（**非正式**，Linux VM）：check-types 0（`log/pr12a-checktypes-vm.log`）、lint 0（`log/pr12a-lint-vm.log`）、related Node 26/26（caseRowStageIntegration、caseSpecOracleIntegration、verificationRunner、caseTablePipelineIntegration；`log/pr12a-related-node.log`）、Python 10/10（`log/pr12a-python-vm.log`）、v2 整合 10/10（`log/pr12a-v2-integration-vm.log`）、v2 golden 2/2 無差異、快照未動（`log/pr12a-v2-golden-vm.log`）。v1 golden 未動。
+- **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v2 有改動）、`npm run test:integration`。
+
+---
+
+## 2-old2. PR #6～#8 進度（疊加分支，見第 0 節 23:50 授權）
 
 ### 2026-11-09 13:33 Windows 原生驗證結果（使用者執行，`pr/08-spec-oracle`）
 
@@ -589,7 +606,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 3. 需要使用者決定
 
-目前沒有待決項目。
+- **（PR #12a，B 類，未改）對照組提示詞沒有模組名稱**：架構 6.3 規定提示詞逐字為「以下是一個 Python 函式，請為它寫 unittest」＋函式原始碼，不告知檔名／模組名。模型只能猜 `from xxx import ...`，猜錯就會被記為失敗（`tests-failed`／`test-runner-error`），這會讓對照組看起來比實際差。選項：(A) 維持逐字，報告中註明此限制；(B) 在原始碼前加一行 `# 檔案：<檔名>`（改提示詞，需核准）；(C) 執行時把常見猜測名稱也放進 import 路徑（不改提示詞，但改了執行環境）。目前照 (A) 實作。
+- **（PR #12a，請確認）對照組 usable 不要求量到突變分數**：與 v2 usable 一致；若監督希望對照組更嚴格，需另行決定（屬通過標準）。
 
 - 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
 - Windows 原子改名有限重試已依 11/7 批准條件完成。
@@ -598,6 +616,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Claude Code／PR #12a）：沒有 AOCI MCP。新增 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`test/fixtures/eval_three_groups/**`；修改 `python_scripts/{eval_aggregate,test_eval_aggregate}.py`、`src/pipeline/caseTable/{runCaseTablePipeline,runRowStage,oracleDecision}.ts`、`src/orchestrator.ts`、`src/test/{caseRowStageIntegration,caseSpecOracleIntegration,verificationRunner}.test.ts`、`test/verificationConfig.js`、`eval/README.md`。
 - 2026-11-09（Claude Code／PR #7 契約加嚴）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions}.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/test/caseRowStageIntegration.test.ts`。
 - 2026-11-09（Claude Code／PR #7、#8 監督核對後修正）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions,test_case_capture_runner}.py`、`src/pipeline/caseTable/{rowExecution,runRowStage,runCaseTablePipeline,oracleDecision}.ts`、`src/roles/specOracle.ts`、`src/orchestrator.ts`、`src/ui/webviewContent.ts`、`src/i18n/{en,zh-tw}.ts`、`src/test/{specPromptBlindness,caseSpecOracleIntegration,caseRowStageIntegration}.test.ts`、`docs/v2_提示詞_待審.md`。
 - 2026-11-09（Claude Code／PR #8）：新增 `src/pipeline/caseTable/{specSources,oracleDecision,specMismatchReport}.ts`、`src/roles/specOracle.ts`、`python_scripts/{case_oracle_compare,test_case_oracle_compare}.py`、`src/test/{specPromptBlindness,caseSpecOracleIntegration}.test.ts`；修改 `runCaseTablePipeline.ts`、`runRowStage.ts`、`batchJournal.ts`、`pythonTools.ts`、`test/verificationConfig.js`、`verificationRunner.test.ts`、`docs/v2_提示詞_待審.md`。
@@ -687,6 +706,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 23:30 | Claude Code | PR #12a 彙總支援 v2、對照組執行器、三組測試 | VM 非正式：types／lint 0、related 26/26、Python 10/10、v2 golden 2/2 無差異；待使用者 Windows fast／python／golden／integration；未合併、未 push | 本筆 |
 | 2026-11-09 22:20 | Claude Code | 記錄 PR #5～#8 驗收與合併、v2 提示詞核准；開 `pr/12a-eval-recording` | 由監督完成合併；本筆只更新文件 | 本筆 |
 | 2026-11-09 19:20 | Claude Code | PR #6～#8 記錄 Windows integration | Node 1065／1048 pass／17 fail（14 葉＋3 父），與第 5 節既有清單逐案相同，新增 0；v2 整合 10 項全過；Python integration 因 runner 在 Node 失敗後停止而未跑（test:python 全量已於 7fe7530 通過） | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 記錄 Windows related | 使用者 Windows：5 個 v2 Python 模組單獨 related 50/50 OK。待 integration | 本筆 |

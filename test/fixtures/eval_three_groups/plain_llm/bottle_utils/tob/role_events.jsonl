@@ -1,0 +1,2 @@
+{"sequence": 1, "runId": "q", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "requested", "detail": {"role": "plain-llm", "pipeline": "plain-llm"}}
+{"sequence": 2, "runId": "q", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "error", "detail": {"role": "plain-llm", "elapsedMs": 50, "reasonCode": "URLError"}}

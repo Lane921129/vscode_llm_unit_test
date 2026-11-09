@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-09 PR #12a（評估紀錄與對照組）
+- v2 每次模型請求都以 v1 格式寫入 `role_events.jsonl`（角色名、tokens、結束原因、耗時），並寫 `function_knowledge.json`／`run_manifest.json` 供批次彙總。
+- `eval_aggregate.py` 支援 v2：讀 `v2_result.json`，新增「方法」「可用列比例」「規格不符數」「needs-review 數」欄；只有占位事件時 tokens 與截斷顯示「未記錄」而非 0。
+- 新增 `eval_baseline_plain_llm.py` 一般 LLM 對照組（架構 6.3 固定提示詞、temperature 0、相同隔離 runner／覆蓋率／突變工具，所有失敗計入分母），輸出可與 v1、v2 並列彙總；說明在 `eval/README.md`。
+
 ## 2026-11-09 PR #7／#8 監督核對後修正
 - 單列 Bug Fixer 改為 AST 全面比對（被測呼叫、斷言、mock、控制流程都不可變），之後再加嚴為呼叫後全部不變與禁止重綁目標，最終規則見 PR #7 該筆。
 - 規格預測請求改用 temperature 0.7（`requestTemperature` 只由 v2 規格預測設定，v1 請求內容不變）；規格提示詞拿掉情境文字，呼叫改寫成一般寫法、kwargs 為空時不顯示。

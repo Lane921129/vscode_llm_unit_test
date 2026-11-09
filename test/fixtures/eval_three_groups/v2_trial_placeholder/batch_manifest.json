@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "batchId": "gpt-oss:20b-batch",
+  "startedAt": "2026-11-09T12:00:00.000Z",
+  "finishedAt": "2026-11-09T12:10:00.000Z",
+  "status": "failed",
+  "model": "gpt-oss:20b",
+  "expectedTargets": 1,
+  "finishedTargets": 1,
+  "attemptedTargets": 1,
+  "discoveryFailures": [],
+  "statusCounts": {},
+  "targets": [
+    {
+      "file": "bmi.py",
+      "target": "calculate_bmi",
+      "state": "finished",
+      "reportDirectory": "bmi/calculate_bmi",
+      "terminalStatus": "usable",
+      "modelRequests": 2
+    }
+  ],
+  "cost": {
+    "modelRequests": 2,
+    "outputTokens": 0
+  },
+  "modelCapabilitySummary": {
+    "lengthStoppedTransports": 0
+  }
+}
