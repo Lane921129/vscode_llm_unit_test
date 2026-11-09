@@ -1915,7 +1915,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             mutation: { engine: params.mutationEngine, workers: params.mutationWorkers, stageSeconds: normalizeExecutionSettings(params).mutpyTimeout },
             postMessage: message => { void sidebarProvider.webview?.postMessage(message); },
             requestModel: (system, user, options) => requestLlmApi(options?.temperature === undefined ? params
-                : { ...params, requestTemperature: options.temperature }, system, user, log), log }); }));
+                : { ...params, requestTemperature: options.temperature }, system, user, log, 'text', undefined, options?.onTiming), log }); }));
     }
     const reportState: TargetReportState = {};
     return withImportFixtures(fixtures, async () => {

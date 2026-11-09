@@ -41,6 +41,17 @@ export function readSpecOracleSetting(value: unknown): SpecOracleSetting {
 /** Per-request options; only the spec oracle sets a temperature (user-approved 0.7). */
 export interface ModelRequestOptions {
     temperature?: number;
+    /** Transport telemetry for role_events (same RequestTelemetry objects v1 records). */
+    onTiming?: (timing: object) => void;
+}
+
+/** v2 role names recorded in role_events.jsonl (v1's event format is unchanged). */
+export type CaseTableRole = 'analyst-scenario' | 'analyst-scenario-correction' | 'writer-row-setup' | 'bug-fixer-row'
+    | 'analyst-spec' | 'analyst-spec-correction';
+
+export interface RoleAskOptions {
+    role: CaseTableRole;
+    temperature?: number;
 }
 
 export interface PythonToolResult {
@@ -117,12 +128,28 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
         + `${facts.dependencies.length} mockable dependencies, ${requirements.length} requirements.`);
 
     let modelRequests = 0;
-    const ask = async (system: string, user: string, request?: ModelRequestOptions) => {
+    // Every request is journaled like v1: requested, transport timing (tokens, completionReason), completed/error.
+    const roleEvents: { stage: string; status: string; detail: Record<string, unknown> }[] = [];
+    const ask = async (system: string, user: string, request: RoleAskOptions) => {
         modelRequests += 1;
-        return request ? options.requestModel(system, user, request) : options.requestModel(system, user);
+        const started = Date.now();
+        roleEvents.push({ stage: 'model-request', status: 'requested', detail: { role: request.role, pipeline: 'v2-case-table' } });
+        try {
+            const response = await options.requestModel(system, user, {
+                ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+                onTiming: timing => { roleEvents.push({ stage: 'model-request', status: 'timing', detail: { role: request.role, ...timing } }); }
+            });
+            roleEvents.push({ stage: 'model-request', status: 'completed', detail: { role: request.role, elapsedMs: Date.now() - started } });
+            return response;
+        } catch (error) {
+            const reasonCode = (error as { diagnostic?: { reasonCode?: unknown } })?.diagnostic?.reasonCode;
+            roleEvents.push({ stage: 'model-request', status: 'error', detail: { role: request.role, elapsedMs: Date.now() - started,
+                ...(typeof reasonCode === 'string' ? { reasonCode } : {}) } });
+            throw error;
+        }
     };
     const scenarioPrompt = getCaseScenarioPrompt(facts, requirements);
-    const response = await ask(scenarioPrompt.system, scenarioPrompt.user);
+    const response = await ask(scenarioPrompt.system, scenarioPrompt.user, { role: 'analyst-scenario' });
     const requirementIds = requirements.map(entry => entry.id);
     const parsed = parseCaseRows(response, { origin: 'analyst', requirementIds });
     const rows = [...parsed.rows];
@@ -136,7 +163,7 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
             continue;
         }
         const correction = getCaseRowCorrectionPrompt(original, rejection.reason, rejection.field, facts, requirements);
-        const corrected = parseCaseRows(await ask(correction.system, correction.user),
+        const corrected = parseCaseRows(await ask(correction.system, correction.user, { role: 'analyst-scenario-correction' }),
             { origin: 'analyst', requirementIds, firstIndex: nextCaseRowIndex(rows), limit: 1 });
         if (corrected.rows.length) {
             rows.push(corrected.rows[0]);
@@ -192,13 +219,20 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
     if (stage) {
         postResultCard(options, directory, finalRows, stage, specMismatch!.specMismatchCount);
         writeStageResult(directory, options.funcName, finalRows, stage, modelRequests, specOracleUsed, specMismatch!);
-        writeBatchRecords(directory, options.filePath, options.funcName, stage, modelRequests, specMismatch!.specMismatchCount);
+        writeBatchRecords(directory, options.filePath, options.funcName, roleEvents, { terminal: stage.terminal, reasonCode: stage.reasonCode,
+            specMismatchCount: specMismatch!.specMismatchCount, caseTableResult: {
+                mutationScore: stage.mutation?.score ?? null, lineCoveragePercent: stage.coverage?.available ? stage.coverage.linePercent : null,
+                coverageReasonCode: stage.coverage?.reasonCode ?? null, testPassedRows: finalRows.filter(row => row.status === 'test-passed').length,
+                totalRows: finalRows.length, needsReviewCount: specMismatch!.needsReviewCount } });
     }
     const valid = validBeforeRows;
     options.log(`[v2] case_table.json: ${valid} valid rows, ${outcome.rows.length - valid} invalid rows, `
         + `${rejected.filter(item => item.source === 'scenario' && !item.corrected).length} rejected lines, `
         + `${parsed.overLimit.length} over the row limit.`);
     if (valid === 0) {
+        writeBatchRecords(directory, options.filePath, options.funcName, roleEvents, { terminal: 'failed', reasonCode: 'no-valid-case-rows',
+            specMismatchCount: 0, caseTableResult: { mutationScore: null, lineCoveragePercent: null, coverageReasonCode: null,
+                testPassedRows: 0, totalRows: outcome.rows.length, needsReviewCount: 0 } });
         throw new AnalysisStageError('model-format', 'case-scenario', 'No usable case row was produced.',
             { reasonCode: 'no-valid-case-rows', directory });
     }
@@ -220,16 +254,28 @@ function postResultCard(options: CaseTablePipelineOptions, directory: string, ro
 }
 
 /** Minimal records the batch journal reads (function_knowledge, run_manifest, role_events) for a v2 target. */
-function writeBatchRecords(directory: string, file: string, target: string, stage: RowStageResult, modelRequests: number, specMismatchCount: number): void {
+interface BatchRecord {
+    terminal: 'usable' | 'failed';
+    reasonCode: string;
+    specMismatchCount: number;
+    /** Nested so the batch tier classifier keeps treating v2 knowledge as a terminal-status-only record. */
+    caseTableResult: { mutationScore: number | null; lineCoveragePercent: number | null; coverageReasonCode: string | null;
+        testPassedRows: number; totalRows: number; needsReviewCount: number };
+}
+
+/** Records the batch journal and eval_aggregate read: function_knowledge, run_manifest and v1-format role_events. */
+function writeBatchRecords(directory: string, file: string, target: string,
+    roleEvents: { stage: string; status: string; detail: Record<string, unknown> }[], record: BatchRecord): void {
     const runId = randomUUID();
     const sourceHash = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     const base = { runId, sourceHash, target, validationMode: 'full', pipelineVersion: 'v2-case-table' };
     fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify(base, null, 2) + '\n', 'utf8');
     fs.writeFileSync(path.join(directory, 'function_knowledge.json'), JSON.stringify({ ...base, schemaVersion: 2,
-        terminalStatus: stage.terminal, ...(stage.terminal === 'failed' ? { failureCategory: 'validation', failureStage: 'case-table', reasonCode: stage.reasonCode } : {}),
-        specMismatchCount }, null, 2) + '\n', 'utf8');
-    const events = [{ runId, sourceHash, stage: 'v2-case-table', status: stage.terminal },
-        ...Array.from({ length: modelRequests }, () => ({ runId, sourceHash, stage: 'model-request', status: 'requested', detail: { pipeline: 'v2' } }))];
+        terminalStatus: record.terminal, ...(record.terminal === 'failed' ? { failureCategory: 'validation', failureStage: 'case-table', reasonCode: record.reasonCode } : {}),
+        specMismatchCount: record.specMismatchCount, caseTableResult: record.caseTableResult }, null, 2) + '\n', 'utf8');
+    const time = new Date().toISOString();
+    const events = [...roleEvents, { stage: 'v2-case-table', status: record.terminal, detail: { reasonCode: record.reasonCode } }]
+        .map((event, index) => ({ sequence: index + 1, runId, sourceHash, time, loop: 1, ...event }));
     fs.writeFileSync(path.join(directory, 'role_events.jsonl'), events.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8');
 }
 

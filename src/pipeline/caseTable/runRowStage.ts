@@ -22,7 +22,8 @@ export interface RowStageOptions {
     runtime: RowRuntime;
     facts: CaseTableFacts;
     rows: CaseRow[];
-    ask: (system: string, user: string, options?: { temperature?: number }) => Promise<string>;
+    ask: (system: string, user: string, options: { role: 'writer-row-setup' | 'bug-fixer-row' | 'analyst-spec' | 'analyst-spec-correction';
+        temperature?: number }) => Promise<string>;
     mutation: { engine: unknown; workers: unknown; stageSeconds: number };
     log: (text: string) => void;
     /** PR #8 hook: decide the expected value after capture; default keeps the observed outcome. */
@@ -72,7 +73,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
             const prompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
                 targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
-            setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user)) ?? undefined;
+            setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' })) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
             setups.set(row.id, setup);
         }
@@ -95,7 +96,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
             attempt += 1;
             const prompt = getRowFixPrompt({ signature: facts.signature, scenario: row.scenario, methodName: row.testMethod!,
                 method, error: run.error || 'The test did not call the function under test.' });
-            const fixed = parseRowFixResponse(await options.ask(prompt.system, prompt.user), row.testMethod!);
+            const fixed = parseRowFixResponse(await options.ask(prompt.system, prompt.user, { role: 'bug-fixer-row' }), row.testMethod!);
             const verdict = fixed ? await fixPreservesContract(runtime, method, fixed, row.testMethod!, callees)
                 : { accepted: false, violations: ['method-missing'] };
             if (!verdict.accepted) {

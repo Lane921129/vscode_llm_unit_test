@@ -30,7 +30,7 @@ async function run(source: string, specReplies: Record<string, string[]>, settin
             sessionDate: 'spec', pythonExecutable: python, specOracle: setting, log: () => undefined,
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },
             requestModel: async (system, user, options) => {
-                assert.deepEqual(options, system.startsWith('You predict') ? { temperature: 0.7 } : undefined,
+                assert.equal(options?.temperature, system.startsWith('You predict') ? 0.7 : undefined,
                     'only spec predictions carry a temperature (0.7)');
                 if (system.startsWith('You predict')) {
                     specPrompts.push(system + '\n' + user);

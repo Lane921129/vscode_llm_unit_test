@@ -24,17 +24,29 @@ async function run(target: string, replies: string[], extra: Partial<Parameters<
             filePath: path.join(project, 'shapes.py'), funcName: target, projectRoot: project, outputPath: path.join(directory, 'out'),
             sessionDate: 'rows', pythonExecutable: python, specOracle: 'off', log: () => undefined,
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },
-            requestModel: async (_system, user) => { prompts.push(user); const reply = replies.shift(); if (reply === undefined) { throw new Error('unexpected request'); } return reply; },
+            requestModel: async (_system, user, options) => {
+                prompts.push(user);
+                options?.onTiming?.({ version: 'model-request-timing-v1', kind: 'transport', outcome: 'completed',
+                    ollama: { promptEvalCount: 40, evalCount: 12, completionReason: 'stop' } });
+                const reply = replies.shift();
+                if (reply === undefined) { throw new Error('unexpected request'); }
+                return reply;
+            },
             ...extra
         });
-        return { result, prompts, remaining: replies.length };
+        const eventsFile = path.join(result.directory, 'role_events.jsonl');
+        const events = fs.existsSync(eventsFile)
+            ? fs.readFileSync(eventsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
+        const knowledgeFile = path.join(result.directory, 'function_knowledge.json');
+        const knowledge = fs.existsSync(knowledgeFile) ? JSON.parse(fs.readFileSync(knowledgeFile, 'utf8')) : null;
+        return { result, prompts, remaining: replies.length, events, knowledge };
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 
 test('instance methods get one Writer setup per row and then run as host-written tests', async () => {
     const setup = (size: number) => '```python\ninstance = target_module.Box(' + size + ')\nargs = (3,)\nkwargs = {}\n```';
     const messages: Record<string, unknown>[] = [];
-    const { result, prompts } = await run('Box.grow', [
+    const { result, prompts, events, knowledge } = await run('Box.grow', [
         [line({ scenario: '加三', category: 'normal', args: '(3,)' }), line({ scenario: '負數', category: 'error', args: '(-1,)' })].join('\n'),
         setup(2),
         '```python\ninstance = target_module.Box(2)\nargs = (-1,)\nkwargs = {}\n```'
@@ -49,6 +61,16 @@ test('instance methods get one Writer setup per row and then run as host-written
     const outcome = messages.find(message => message.command === 'updateOutcome')!;
     assert.deepEqual(outcome.caseTable, { tier: 'usable', usableRows: 2, totalRows: 2, specMismatch: 0 });
     assert.equal(outcome.fileName, 'shapes.py:Box.grow');
+    const requests = events.filter(event => event.stage === 'model-request');
+    assert.deepEqual(requests.filter(event => event.status === 'requested').map(event => event.detail.role),
+        ['analyst-scenario', 'writer-row-setup', 'writer-row-setup'], 'every v2 request is journaled with its role');
+    assert.equal(requests.filter(event => event.status === 'completed').length, 3);
+    const timing = requests.find(event => event.status === 'timing');
+    assert.deepEqual([timing.detail.role, timing.detail.kind, timing.detail.ollama.evalCount, timing.detail.ollama.completionReason],
+        ['analyst-scenario', 'transport', 12, 'stop'], 'transport telemetry is recorded in the v1 timing shape');
+    assert.ok(events.every(event => typeof event.runId === 'string' && typeof event.sourceHash === 'string' && Number.isInteger(event.sequence)));
+    assert.deepEqual([knowledge.caseTableResult.testPassedRows, knowledge.caseTableResult.totalRows], [2, 2]);
+    assert.equal(knowledge.caseTableResult.mutationScore, result.stage!.mutation!.score);
     assert.equal(messages.find(message => message.command === 'updateCoverage')!.score, `${Math.round(result.stage!.mutation!.score! * 10) / 10}%`);
 });
 
