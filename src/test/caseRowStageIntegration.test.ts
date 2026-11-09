@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { test } from 'node:test';
 import { runCaseTablePipeline } from '../pipeline/caseTable/runCaseTablePipeline';
 import { observedExpectation } from '../pipeline/caseTable/runRowStage';
+import { runTestFile } from '../pipeline/caseTable/rowExecution';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 const root = path.resolve(__dirname, '../..');
@@ -70,4 +71,23 @@ test('a failing row gets at most two fixes and a fix that changes the expected v
     assert.match(prompts[1], /self\.assertEqual\(result, 999\)/);
     assert.deepEqual(result.rows.map(row => [row.id, row.status, row.reason ?? null]), [['C1', 'test-failed', 'test-failed'], ['C2', 'test-passed', null]]);
     assert.equal(result.stage!.terminal, 'usable', 'the other row still passes and is measured');
+});
+
+test('a passing method that never executes the real target is not counted as target-observed', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-observed-'));
+    try {
+        const project = path.join(directory, 'project');
+        const artifacts = path.join(directory, 'runs');
+        fs.mkdirSync(project);
+        fs.mkdirSync(artifacts);
+        const source = path.join(project, 'shapes.py');
+        fs.writeFileSync(source, SOURCE, 'utf8');
+        const runtime = { python, sourceFile: source, target: 'double', importPaths: [project], artifacts };
+        const header = 'import unittest\nfrom unittest import mock\nimport shapes as target_module\n\n\nclass TestCaseTable(unittest.TestCase):\n';
+        const real = await runTestFile(runtime, 'real_test', header + '    def test_c1(self):\n        self.assertEqual(target_module.double(*(2,), **{}), 4)\n');
+        assert.deepEqual([real.passed, real.targetObserved], [true, true]);
+        const fake = await runTestFile(runtime, 'fake_test', header
+            + '    def test_c1(self):\n        target_module.double = lambda *a, **k: 4\n        self.assertEqual(target_module.double(*(2,), **{}), 4)\n');
+        assert.deepEqual([fake.passed, fake.targetObserved], [true, false], 'unittest passes, but the real target never ran');
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

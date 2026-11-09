@@ -38,6 +38,12 @@
 7. （A 類）補 capture 的 patch 位置測試：`from pkg import dep` 與 `import pkg` 兩種寫法都要 patch 在受測模組實際查找的位置。
 8. 改完重新產生 `docs/v2_提示詞_待審.md`；v2 golden 若因 1～5 改變可用 `UPDATE_CASE_TABLE_GOLDEN=1` 重錄，但要逐項列出差異與原因；v1 golden 一律不准動。
 
+**2026-11-09 13:00 監督追加（C 類，單列修正契約加嚴）**：
+1. 從方法中第一個「含有被測呼叫的陳述式」到方法結尾，所有陳述式必須與修正前 AST 逐一相同；違反為 `post-call-changed`。
+2. 第一個被測呼叫之前的 setup 可以修改，但不准：對 `target_module` 或被測類別屬性做指定／刪除／augmented assignment、`setattr`／`delattr`、重新指定被測函式名稱、新增指向被測目標的 `mock.patch`／`patch.object`、import 被測模組後重新綁定；違反為 `target-rebound`。
+3. 原本的 `target-call-changed`、`assertion-changed`、`mock-changed`、`control-flow-added` 保留。
+4. 沒有執行真實目標的方法不可算 `test-passed`。
+
 **2026-11-08 23:50 使用者授權：PR #6～#8 連續進行（疊加分支）**：
 - 可以不等驗收，連續做完 PR #6、#7、#8。分支疊加：`pr/06-v2-scenario` 從 `pr/05-case-table` 開，`pr/07-capture-rows` 從 `pr/06` 開，`pr/08-spec-oracle` 從 `pr/07` 開。不合併到 `lane_edition`，不 push。PR #8 完成後不開始 PR #9～#12。
 - 提示詞授權：可依架構第 5 節自行撰寫 v2 新提示詞（Analyst-情境、單列 setup、單列 Bug Fixer、Analyst-規格），但只能放在新的 v2 函式；`llmUnitTest.pipelineVersion` 預設 `"v1"`。每份提示詞全文（system＋user 範本＋唯一範例）整理到 `docs/v2_提示詞_待審.md`，註明檔案與函式名稱；使用者審閱前不可用於實驗室。
@@ -161,6 +167,14 @@
   5. 「側欄顯示規格不符數」目前透過側欄的執行紀錄（log）顯示一行統計；結果卡片的 UI 整合留到之後。
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr8-check-types.log`）、lint 0／0 warning（`log/pr8-lint.log`）、related 70 個中 69 個通過（`log/pr8-related-node.log`）；唯一失敗是 v1 的 `batchJournalIntegration`「real batch command…」，原因是 VM 的 Python 沒有 `coverage`（`coverage-preflight`／environment），與本 PR 無關，須在 Windows 重跑確認。規格整合測試 3/3（`log/pr8-spec-integration-vm.log`）、Python 五個 v2 模組全過（`log/pr8-python-vm.log`）、v2 golden＋row stage 4/4（`log/pr8-v2-golden-and-rows-vm.log`；v2 golden 用 `specOracle: 'off'`，所以不受影響）。v1 golden 檔案未改。
 - **待使用者在 Windows 執行**（PR #6～#8 一起）：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異，v2 必須通過）；時間足夠時背景跑 `npm run test:integration`，逐案比對第 5 節既有的 14 個失敗。
+
+### 2026-11-09 13:00 單列修正契約加嚴（`pr/08-spec-oracle`，Claude Code，fix(pr07)）
+
+- `python_scripts/case_row_assertions.py`：新增 `post-call-changed`（比對方法本體從第一個含被測呼叫的頂層陳述式到結尾的 `ast.dump` 序列；我們產生的方法中，該陳述式通常是包住呼叫的 `with mock.patch...`，所以 mock 設定也一併凍結），以及 `target-rebound`（只檢查呼叫前的 setup）。受保護的根名稱包含 `target_module`、`import <受測模組> [as X]` 的別名、`from <受測模組> import Y` 的名稱；屬性或下標的指定、刪除、augmented assignment 只要寫入的運算式中出現受保護名稱就算違反，例如 `vars(target_module)['f'] = …`。重新指定 `target_module`、被測函式名稱、類別名稱或 `instance.<方法>`，對它們呼叫 `setattr`／`delattr`，或以 `mock.patch('模組.目標')`／`patch.object(受保護物件, '目標')` patch 被測目標，都算違反。請求新增 `module`、`target` 欄位，由 `rowExecution.fixPreservesContract` 帶入。
+- 第 4 點核對結果：**已經有**。`rowExecution.runTestFile` 的 `targetObserved` 讀 runner 的 target-invocation 證據（`observed`：只有來源檔中真正的目標 code object 被執行時才為 true，且 `status` 必須是 passed）；`runRowStage` 只有 `passed && targetObserved` 才轉 `test-passed`，否則為 `test-failed`（`target-not-called`），合併測試與覆蓋率也同樣要求。新增整合測試證明：用 lambda 換掉目標的測試，unittest 會通過，但 `targetObserved=false`。
+- 測試：`test_case_row_assertions.py` 12 項（原 7 項，加上 A 例重新指定結果→`post-call-changed`、B 例 lambda 換目標→`target-rebound`、呼叫後加 `print` 或 `pass` 被拒、只改註解被接受、`setattr`／`del`／`+=`／`patch.object` setup／`mock.patch('health.bmi')`／別名重綁／`vars()` 寫入／重綁 `target_module`／重綁目標名稱都被拒、用 `with patch.object` 包住呼叫→`post-call-changed`、只改呼叫前 setup 與 docstring 被接受）；`caseRowStageIntegration.test.ts` 新增 targetObserved 測試（3/3）。
+- **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr7c-check-types.log`）、lint 0／0 warning（`log/pr7c-lint.log`）、related 45/45（`log/pr7c-related-node.log`）、row stage 3/3（`log/pr7c-rows-vm.log`）、Python 五個 v2 模組共 49 項全過（`log/pr7c-python-vm.log`）、**v2 golden 2/2 無差異**（`log/pr7c-v2-golden-vm.log`）。v1 golden 未動。
+- **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:python`、`npm run test:golden`。
 
 ### 2026-11-09 監督核對後修正（`pr/08-spec-oracle`，Claude Code）
 
@@ -515,6 +529,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Claude Code／PR #7 契約加嚴）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions}.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/test/caseRowStageIntegration.test.ts`。
 - 2026-11-09（Claude Code／PR #7、#8 監督核對後修正）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions,test_case_capture_runner}.py`、`src/pipeline/caseTable/{rowExecution,runRowStage,runCaseTablePipeline,oracleDecision}.ts`、`src/roles/specOracle.ts`、`src/orchestrator.ts`、`src/ui/webviewContent.ts`、`src/i18n/{en,zh-tw}.ts`、`src/test/{specPromptBlindness,caseSpecOracleIntegration,caseRowStageIntegration}.test.ts`、`docs/v2_提示詞_待審.md`。
 - 2026-11-09（Claude Code／PR #8）：新增 `src/pipeline/caseTable/{specSources,oracleDecision,specMismatchReport}.ts`、`src/roles/specOracle.ts`、`python_scripts/{case_oracle_compare,test_case_oracle_compare}.py`、`src/test/{specPromptBlindness,caseSpecOracleIntegration}.test.ts`；修改 `runCaseTablePipeline.ts`、`runRowStage.ts`、`batchJournal.ts`、`pythonTools.ts`、`test/verificationConfig.js`、`verificationRunner.test.ts`、`docs/v2_提示詞_待審.md`。
 - 2026-11-09（Claude Code／PR #7）：新增 `python_scripts/{case_capture_runner,case_row_assertions,test_case_capture_runner,test_case_row_assertions}.py`、`src/pipeline/caseTable/{rowToTest,rowExecution,runRowStage}.ts`、`src/test/{caseRowTests,caseRowStageIntegration,caseTableGolden}.test.ts`、`test/fixtures/golden/v2/*.json`；修改 `runCaseTablePipeline.ts`、`unittestWriter.ts`、`bugFixer.ts`、`pythonTools.ts`、`orchestrator.ts`、`test/run_golden_tests.js`、`test/verificationConfig.js`、`verificationRunner.test.ts`。
@@ -603,6 +618,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 14:00 | Claude Code | PR #7 單列修正契約加嚴 | post-call-changed、target-rebound；確認 targetObserved 已強制並補測試；VM：check-types／lint 0、related 45/45、Python 49 項、row stage 3/3、v2 golden 2/2 無差異。Windows 待執行 | 本筆 |
 | 2026-11-09 13:30 | Claude Code | PR #7／#8 監督核對後修正 | Bug Fixer AST 契約、規格 temperature 0.7、拿掉情境、一般呼叫寫法、v2 覆蓋率、結果卡片、patch 位置測試；VM：check-types／lint 0、related 95/95、整合 5/5、Python 全過、v2 golden 2/2 未變。Windows 待執行；不開始 PR #9 | 本筆（pr07＋pr08 兩筆） |
 | 2026-11-09 04:30 | Claude Code | PR #8 完成 | 規格來源、Analyst-規格（k=3）、分級、規格不符報告與測試檔、批次累加；VM：check-types／lint 0、related 69/70（唯一失敗是 VM 缺 coverage）、規格整合 3/3、Python 全過、v2 golden 2/2。Windows 待執行；不開始 PR #9 | 本筆 |
 | 2026-11-09 03:00 | Claude Code | PR #7 完成 | capture、程式產生測試、逐方法執行、單列修正、突變、v2 golden（VM 錄製）；VM：check-types／lint 0、related 62/62、Python 33/33、v2 golden 2/2。Windows 待執行 | 本筆 |

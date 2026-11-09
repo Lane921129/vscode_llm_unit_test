@@ -184,13 +184,15 @@ export async function measureMutation(runtime: RowRuntime, testFile: string, opt
 }
 
 /**
- * A Bug Fixer edit may only change setup: target calls, every self.assert* call, mock setup
- * and the control flow around calls and assertions must stay AST-identical (case_row_assertions.py).
+ * A Bug Fixer edit may only change setup before the first target call: from that statement to the end
+ * the method must stay AST-identical, setup may not rebind or patch the target, and target calls,
+ * assertions, mock setup and surrounding control flow must match (case_row_assertions.py).
  */
 export async function fixPreservesContract(runtime: RowRuntime, before: string, after: string, method: string,
     callees: readonly string[]): Promise<{ accepted: boolean; violations: string[] }> {
     const run = await runSpawn(runtime.python, ['-B', pythonToolPath('caseRowAssertions')],
-        { env: environment(runtime), timeout: 10000, input: JSON.stringify({ before, after, method, callees }) });
+        { env: environment(runtime), timeout: 10000, input: JSON.stringify({ before, after, method, callees,
+            module: path.basename(runtime.sourceFile, '.py'), target: runtime.target }) });
     try {
         const report = JSON.parse(run.stdout);
         const violations = Array.isArray(report.violations) ? report.violations.filter((item: unknown) => typeof item === 'string') : ['invalid-report'];

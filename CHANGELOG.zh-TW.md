@@ -3,7 +3,7 @@
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
 ## 2026-11-09 PR #7／#8 監督核對後修正
-- 單列 Bug Fixer 改為 AST 全面比對：被測呼叫與參數、每個 `self.assert*` 整個、patch／mock 設定都不可變，也不可新增包住呼叫或斷言的 try／if／迴圈或 return，只能改 setup。
+- 單列 Bug Fixer 改為 AST 全面比對（被測呼叫、斷言、mock、控制流程都不可變），之後再加嚴為呼叫後全部不變與禁止重綁目標，最終規則見 PR #7 該筆。
 - 規格預測請求改用 temperature 0.7（`requestTemperature` 只由 v2 規格預測設定，v1 請求內容不變）；規格提示詞拿掉情境文字，呼叫改寫成一般寫法、kwargs 為空時不顯示。
 - v2 合併後的正式測試以既有 coverage 工具量行與分支覆蓋並寫入結果與報告，失敗只記原因碼；側欄結果卡片顯示 v2 終態、可用列數／總列數與規格不符數。
 - 新增 capture 的 patch 位置測試（`from pkg import dep` 與 `import pkg`）；v2 golden 未變、未重錄，v1 golden 未動。
@@ -16,7 +16,7 @@
 ## 2026-11-09 PR #7（v2 逐列 capture、程式產生測試與突變）
 - 新增 `case_capture_runner.py`：每列一個行程，在 `guarded_runtime` 隔離內依 facts 在目標模組查找位置 patch（區域呼叫鏈以 MagicMock 設定），記錄回傳值或例外；未 mock 而碰到外部資源只讓該列 `capture-failed`。
 - `rowToTest.ts` 由程式寫出每列一個測試方法（預期值暫為 observed）；只有 needs-setup 或實例方法才請 Writer 寫 3～10 行 setup；`rowExecution.ts` 逐方法用既有 runner 執行，通過者合併後以既有突變引擎量測，終態 usable／failed。
-- 單列 Bug Fixer 每列最多 2 次，`case_row_assertions.py` 以 AST 檢查修正不得改動任何斷言預期值；新提示詞列入 `docs/v2_提示詞_待審.md`。
+- 單列 Bug Fixer 每列最多 2 次；`case_row_assertions.py` 以 AST 要求第一個被測呼叫起到方法結尾完全不變（`post-call-changed`），之前的 setup 不得重綁或 patch 被測目標（`target-rebound`），並保留呼叫、斷言、mock 與控制流程檢查；未執行真實目標的方法不算通過。新提示詞列入 `docs/v2_提示詞_待審.md`。
 - 新增獨立的 v2 golden（`test/fixtures/golden/v2/` 的 BMI 與資料庫 fixture，皆 usable 且有突變分數）；只能用 `UPDATE_CASE_TABLE_GOLDEN=1` 錄製，v1 golden 未改。
 
 ## 2026-11-09 PR #6（v2 設定分流與 Analyst-情境）

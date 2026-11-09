@@ -18,7 +18,23 @@ CALLEES = ['target_module.find']
 
 
 def check(after, before=BEFORE, method='test_c1'):
-    return compare({'before': before, 'after': after, 'method': method, 'callees': CALLEES})
+    return compare({'before': before, 'after': after, 'method': method, 'callees': CALLEES, 'module': 'store', 'target': 'find'})
+
+
+PLAIN = '''    def test_c1(self):
+        """C1 normal: typical values"""
+        result = target_module.bmi(*(70, 1.75), **{})
+        self.assertEqual(result, (22.9, 'normal'))
+'''
+CALL = "        result = target_module.bmi(*(70, 1.75), **{})\n"
+
+
+def check_plain(after):
+    return compare({'before': PLAIN, 'after': after, 'method': 'test_c1', 'callees': ['target_module.bmi'], 'module': 'health', 'target': 'bmi'})
+
+
+def before_call(lines):
+    return PLAIN.replace(CALL, ''.join('        ' + line + '\n' for line in lines) + CALL)
 
 
 class FixContractTests(unittest.TestCase):
@@ -61,6 +77,43 @@ class FixContractTests(unittest.TestCase):
         self.assertEqual(check('    def test_c1(self):\n        self.assertEqual(1,\n')['violations'], ['unparseable'])
         self.assertFalse(compare({'before': '    def test_c1(self):\n        pass\n', 'after': '    def test_c1(self):\n        pass\n',
                                   'method': 'test_c1', 'callees': CALLEES})['accepted'], 'nothing to protect means nothing to accept')
+
+
+
+class TargetIntegrityTests(unittest.TestCase):
+    def test_reassigning_the_result_after_the_call_is_rejected(self):
+        report = check_plain(PLAIN.replace(CALL, CALL + "        result = (22.9, 'normal')\n"))
+        self.assertIn('post-call-changed', report['violations'])
+        self.assertFalse(report['accepted'])
+
+    def test_replacing_the_target_before_the_call_is_rejected(self):
+        report = check_plain(before_call(["target_module.bmi = lambda *a, **k: (22.9, 'normal')"]))
+        self.assertEqual(report['violations'], ['target-rebound'])
+
+    def test_any_added_statement_after_the_call_is_rejected_but_comments_are_not_statements(self):
+        self.assertIn('post-call-changed', check_plain(PLAIN.replace(CALL, CALL + '        print(result)\n'))['violations'])
+        self.assertIn('post-call-changed', check_plain(PLAIN + '        pass\n')['violations'])
+        self.assertTrue(check_plain(PLAIN.replace(CALL, CALL + '        # checked by hand\n'))['accepted'])
+
+    def test_setattr_delete_augmented_assignment_and_patching_the_target_are_rejected(self):
+        for lines in (["setattr(target_module, 'bmi', lambda *a, **k: (22.9, 'normal'))"],
+                      ['del target_module.bmi'],
+                      ['target_module.bmi += 0'],
+                      ["patcher = mock.patch.object(target_module, 'bmi', return_value=(22.9, 'normal'))", 'patcher.start()'],
+                      ["mock.patch('health.bmi').start()"],
+                      ['import health as again', "again.bmi = lambda *a: (22.9, 'normal')"],
+                      ['from health import bmi', "vars(target_module)['bmi'] = bmi"],
+                      ['target_module = object()'],
+                      ['bmi = None']):
+            with self.subTest(lines=lines):
+                self.assertIn('target-rebound', check_plain(before_call(lines))['violations'])
+        wrapped = PLAIN.replace(CALL, "        with mock.patch.object(target_module, 'bmi', return_value=(22.9, 'normal')):\n    " + CALL)
+        self.assertIn('post-call-changed', check_plain(wrapped)['violations'])
+
+    def test_setup_only_changes_before_the_call_are_accepted(self):
+        report = check_plain(before_call(['import math', 'height = math.sqrt(3.0625)', 'helper = target_module.Helper(scale=2)']))
+        self.assertEqual(report, {'parsed': True, 'sameName': True, 'accepted': True, 'violations': []})
+        self.assertTrue(check_plain(PLAIN.replace('typical values', 'typical adult values'))['accepted'], 'docstring is setup')
 
 
 if __name__ == '__main__':
