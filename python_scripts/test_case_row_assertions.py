@@ -110,8 +110,31 @@ class TargetIntegrityTests(unittest.TestCase):
         wrapped = PLAIN.replace(CALL, "        with mock.patch.object(target_module, 'bmi', return_value=(22.9, 'normal')):\n    " + CALL)
         self.assertIn('post-call-changed', check_plain(wrapped)['violations'])
 
+    def test_aliasing_protected_objects_before_the_call_is_rejected(self):
+        supervisor_example = ['t = target_module', 'orig = t.bmi',
+                              "t.bmi = lambda *a, **k: (orig(*a, **k), (22.9, 'normal'))[1]"]
+        for lines in (supervisor_example,
+                      ['t = target_module'],
+                      ["f = getattr(target_module, 'bmi')"],
+                      ['(t,) = (target_module,)'],
+                      ['t, n = target_module, 1'],
+                      ['f = target_module.bmi'],
+                      ['import health as alias', 'g = alias'],
+                      ['from health import bmi as real', 'g = real'],
+                      ['(t := target_module)'],
+                      ['for t in (target_module,):', '    pass'],
+                      ['ts = [m for m in [target_module]]'],
+                      ['with contextlib.nullcontext() as c, open(__file__) as t:', '    pass', 'h: object = target_module'],
+                      ['def helper(m=target_module):', '    return m'],
+                      ["d = vars(target_module)"],
+                      ["f = target_module.__dict__['bmi']"],
+                      ['t = target_module if True else None']):
+            with self.subTest(lines=lines):
+                self.assertIn('target-rebound', check_plain(before_call(lines))['violations'])
+
     def test_setup_only_changes_before_the_call_are_accepted(self):
-        report = check_plain(before_call(['import math', 'height = math.sqrt(3.0625)', 'helper = target_module.Helper(scale=2)']))
+        report = check_plain(before_call(['import math', 'height = math.sqrt(3.0625)', 'helper = target_module.Helper(scale=2)',
+                                          'limit = target_module.LIMIT', 'items = [target_module.Item(n) for n in range(2)]']))
         self.assertEqual(report, {'parsed': True, 'sameName': True, 'accepted': True, 'violations': []})
         self.assertTrue(check_plain(PLAIN.replace('typical values', 'typical adult values'))['accepted'], 'docstring is setup')
 

@@ -44,6 +44,8 @@
 3. 原本的 `target-call-changed`、`assertion-changed`、`mock-changed`、`control-flow-added` 保留。
 4. 沒有執行真實目標的方法不可算 `test-passed`。
 
+**2026-11-09 13:45 監督追加（C 類）**：`target-rebound` 再加一條：第一個被測呼叫之前的 setup，不准把 `target_module`、被測函式名稱、`instance.<method>`，或從受測模組 import 進來的名稱，指定給任何其他名稱（含 tuple unpacking、walrus、for 目標、with ... as、`getattr(target_module, ...)` 的結果）。
+
 **2026-11-08 23:50 使用者授權：PR #6～#8 連續進行（疊加分支）**：
 - 可以不等驗收，連續做完 PR #6、#7、#8。分支疊加：`pr/06-v2-scenario` 從 `pr/05-case-table` 開，`pr/07-capture-rows` 從 `pr/06` 開，`pr/08-spec-oracle` 從 `pr/07` 開。不合併到 `lane_edition`，不 push。PR #8 完成後不開始 PR #9～#12。
 - 提示詞授權：可依架構第 5 節自行撰寫 v2 新提示詞（Analyst-情境、單列 setup、單列 Bug Fixer、Analyst-規格），但只能放在新的 v2 函式；`llmUnitTest.pipelineVersion` 預設 `"v1"`。每份提示詞全文（system＋user 範本＋唯一範例）整理到 `docs/v2_提示詞_待審.md`，註明檔案與函式名稱；使用者審閱前不可用於實驗室。
@@ -180,6 +182,14 @@
   5. 「側欄顯示規格不符數」目前透過側欄的執行紀錄（log）顯示一行統計；結果卡片的 UI 整合留到之後。
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr8-check-types.log`）、lint 0／0 warning（`log/pr8-lint.log`）、related 70 個中 69 個通過（`log/pr8-related-node.log`）；唯一失敗是 v1 的 `batchJournalIntegration`「real batch command…」，原因是 VM 的 Python 沒有 `coverage`（`coverage-preflight`／environment），與本 PR 無關，須在 Windows 重跑確認。規格整合測試 3/3（`log/pr8-spec-integration-vm.log`）、Python 五個 v2 模組全過（`log/pr8-python-vm.log`）、v2 golden＋row stage 4/4（`log/pr8-v2-golden-and-rows-vm.log`；v2 golden 用 `specOracle: 'off'`，所以不受影響）。v1 golden 檔案未改。
 - **待使用者在 Windows 執行**（PR #6～#8 一起）：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異，v2 必須通過）；時間足夠時背景跑 `npm run test:integration`，逐案比對第 5 節既有的 14 個失敗。
+
+### 2026-11-09 13:50 別名規則（`pr/08-spec-oracle`，Claude Code，fix(pr07)）
+
+- `case_row_assertions.py` 的 `target-rebound` 新增別名檢查：呼叫前 setup 的綁定來源（`=`、註記指定、`+=`、walrus、`for`／comprehension 的 iter、有 `as` 的 with、函式與 lambda 的預設值）只要**運算結果就是受保護物件本身**就拒絕。受保護物件包括：`target_module`、受測模組別名、從受測模組 import 的名稱、被測函式名稱與類別名稱、`X.<目標名稱|類別名稱|__dict__>`（X 為上述根名稱或 `instance`）、`getattr`／`vars` 套在受保護物件上的結果、以及包含它們的 tuple／list／set／dict／條件運算式。只是「使用」模組的運算式不算別名，例如 `target_module.Helper(scale=2)`、`target_module.LIMIT`。
+- 測試（`test_case_row_assertions.py`，13 項）：監督的例子、`t = target_module`、`f = getattr(target_module, 'bmi')`、`(t,) = (target_module,)`、`t, n = target_module, 1`、`f = target_module.bmi`、模組別名轉綁、from-import 名稱轉綁、walrus、for、comprehension、註記指定、預設參數、`vars(target_module)`、`__dict__[...]`、條件運算式都被拒；只改 setup（建構物件、補 import、讀常數、comprehension 建物件）仍被接受。
+- **已知殘留（請監督判斷）**：把受保護物件當成**呼叫參數**傳給 setup 裡另外定義的函式（例如 `def f(m): m.bmi = ...` 接著 `f(target_module)`），靜態規則沒有攔，因為 `mock.patch.object(target_module, '其他相依')` 這類合法 setup 也是同一種寫法。真實目標仍須被執行（`targetObserved`），但回傳值可能被包裝。若要禁止，屬於規則變更，需要另外決定。
+- **驗證（Linux VM，不是正式結果）**：Python 五個 v2 模組 50 項全過（`log/pr7d-python-vm.log`）；row stage 3/3＋**v2 golden 2/2 無差異**（`log/pr7d-rows-golden-vm.log`）。TS 沒有修改，所以不重跑 check-types／lint。v1 golden 未動。
+- **待使用者在 Windows 跑 `npm run test:integration`**（完整背景執行，跑完後逐案比對第 5 節既有的 14 個失敗；同時確認 v2 覆蓋率 `coverage.available`）。`test:python` 有改到 python_scripts，建議一併重跑。
 
 ### 2026-11-09 13:00 單列修正契約加嚴（`pr/08-spec-oracle`，Claude Code，fix(pr07)）
 
@@ -631,6 +641,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 13:55 | Claude Code | PR #7 別名規則 | target-rebound 加別名檢查；VM：Python 50 項、row stage＋v2 golden 5/5 無差異。待使用者在 Windows 跑 test:integration | 本筆 |
 | 2026-11-09 13:40 | Claude Code | PR #6～#8 記錄 Windows 結果 | 使用者 Windows：fast Node 811/811、Python fast 48/48；test:python 939 OK（4 skips）＋secret scan；golden v1 11/11、v2 2/2。integration 尚未執行 | 本筆 |
 | 2026-11-09 14:00 | Claude Code | PR #7 單列修正契約加嚴 | post-call-changed、target-rebound；確認 targetObserved 已強制並補測試；VM：check-types／lint 0、related 45/45、Python 49 項、row stage 3/3、v2 golden 2/2 無差異。Windows 待執行 | 本筆 |
 | 2026-11-09 13:30 | Claude Code | PR #7／#8 監督核對後修正 | Bug Fixer AST 契約、規格 temperature 0.7、拿掉情境、一般呼叫寫法、v2 覆蓋率、結果卡片、patch 位置測試；VM：check-types／lint 0、related 95/95、整合 5/5、Python 全過、v2 golden 2/2 未變。Windows 待執行；不開始 PR #9 | 本筆（pr07＋pr08 兩筆） |

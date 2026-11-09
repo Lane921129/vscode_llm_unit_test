@@ -13,8 +13,12 @@ A fix is accepted only when, compared with the host-written method:
                         augments an attribute of target_module (or of a name
                         imported from the module under test), never calls
                         setattr/delattr on them, never rebinds target_module,
-                        the target's own name or `instance.<method>`, and never
-                        patches the target itself with mock.patch/patch.object;
+                        the target's own name or `instance.<method>`, never
+                        patches the target itself with mock.patch/patch.object,
+                        and never binds any of those protected objects to
+                        another name (assignment, tuple unpacking, walrus, for
+                        target, comprehension, with-as, default argument, or the
+                        result of getattr/vars/__dict__ on them);
   target-call-changed   every call to the function under test (callee and all
                         arguments) is AST-identical, in the same order;
   assertion-changed     every self.assert* call (all arguments, including the
@@ -134,6 +138,51 @@ def _rebinds_target(statements, module, target):
                 for alias in node.names:
                     roots.add(alias.asname or alias.name)
     instance_attribute = parts[-1]
+    target_attributes = {parts[0], parts[-1], '__dict__'}
+
+    def aliases(expression):
+        """True when the expression evaluates to a protected object itself (not merely uses it)."""
+        if expression is None:
+            return False
+        if isinstance(expression, ast.Name):
+            return expression.id in roots or expression.id in protected_names
+        if isinstance(expression, ast.Attribute):
+            return expression.attr in target_attributes and (_root(expression) in roots or _root(expression) == 'instance')
+        if isinstance(expression, ast.Call):
+            name = _dotted(expression.func)
+            if name in ('getattr', 'builtins.getattr', 'vars', 'builtins.vars') and expression.args:
+                return aliases(expression.args[0]) or _root(expression.args[0]) in roots | {'instance'}
+            return False
+        if isinstance(expression, ast.Subscript):
+            return aliases(expression.value)
+        if isinstance(expression, (ast.Tuple, ast.List, ast.Set)):
+            return any(aliases(item) for item in expression.elts)
+        if isinstance(expression, ast.Dict):
+            return any(aliases(item) for item in list(expression.keys) + list(expression.values) if item is not None)
+        if isinstance(expression, ast.Starred):
+            return aliases(expression.value)
+        if isinstance(expression, ast.IfExp):
+            return aliases(expression.body) or aliases(expression.orelse)
+        if isinstance(expression, ast.BoolOp):
+            return any(aliases(item) for item in expression.values)
+        if isinstance(expression, ast.NamedExpr):
+            return aliases(expression.value)
+        return False
+
+    for statement in statements:
+        for node in ast.walk(statement):
+            sources = []
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+                sources = [node.value]
+            elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+                sources = [node.iter]
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                sources = [item.context_expr for item in node.items if item.optional_vars is not None]
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                sources = list(node.args.defaults) + [item for item in node.args.kw_defaults if item is not None]
+            if any(aliases(source) for source in sources):
+                return True
+
     for statement in statements:
         for node in ast.walk(statement):
             targets = []
