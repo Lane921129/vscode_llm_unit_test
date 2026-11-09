@@ -28,6 +28,14 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-09 22:45 使用者決定**：
+1. `usable` 的標準在 v1、v2、對照組完全相同：測試通過、確實呼叫真實目標、且量到突變分數。
+2. 對照組提示詞在原始碼前加一行「檔案：<檔名>.py」，其餘照架構 6.3 原文。
+3. 對照組沒有輸出長度上限、v1／v2 有：只在 `eval/README.md` 註明，不改設定。
+4. PR #13 側欄精簡照使用者核准配置做。
+5. PR #10 授權依架構第 5 節撰寫 Quality Analyst 存活突變提示詞（只放在新的 v2 函式），全文加進 `docs/v2_提示詞_待審.md`，標為「待審（PR #10）」，使用者審閱前不可用於實驗室；每個目標最多處理 3 個存活突變（沿用已核准的 qualityNoImprovementLimit=3）。
+仍然禁止：修改 v1 的提示詞、預算、重試、停止條件、通過標準或預設值；更新 v1 golden；修改 PR #6～#8 已核准的 v2 提示詞。
+
 **2026-11-09 使用者決定**：
 - 21:17 使用者已審閱並**核准 v2 提示詞用於實驗室**（`docs/v2_提示詞_待審.md`，檔名不改，開頭狀態已改為「已核准（2026-11-09 使用者）」）。
 - 22:15 使用者驗收 PR #5～#8；監督已在本機以四個 no-ff 等效合併 commit 併入 `lane_edition`：#5 `29b4c9d`、#6 `674dab1`、#7 `a52900f`、#8 `8126f94`（內容等於 `d79f3fa`），並刪除已合併的本機 `pr/*` 分支。
@@ -121,6 +129,14 @@
 ---
 
 ## 2. PR #12a 進度（最新）
+
+### PR #12a 修正（2026-11-09 Antigravity）
+
+- 依監督 22:50 指示修正：
+  1. `eval_baseline_plain_llm.py`：量不到突變分數時 `terminalStatus='failed'`、`reasonCode='mutation-unmeasured'`，保留原因細節；`test_eval_baseline_plain_llm.py` 新增「突變量不到 → failed」測試，3/3 通過。
+  2. 對照組提示詞改為三段：第一行「以下是一個 Python 函式，請為它寫 unittest」，第二行「檔案：<檔名>.py」，空一行後接完整函式原始碼；測試斷言完全等於此格式。
+  3. `eval/README.md` 寫明輸出長度上限差異（對對照組有利，結果偏保守）。
+- Windows 原生驗證：`test_eval_baseline_plain_llm.py` 3/3 通過、`test_eval_aggregate.py` 8/8 通過。
 
 ### PR #12a `pr/12a-eval-recording`（2026-11-09 Claude Code）
 
@@ -607,7 +623,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 ## 3. 需要使用者決定
 
 - **（PR #12a，B 類，未改）對照組提示詞沒有模組名稱**：架構 6.3 規定提示詞逐字為「以下是一個 Python 函式，請為它寫 unittest」＋函式原始碼，不告知檔名／模組名。模型只能猜 `from xxx import ...`，猜錯就會被記為失敗（`tests-failed`／`test-runner-error`），這會讓對照組看起來比實際差。選項：(A) 維持逐字，報告中註明此限制；(B) 在原始碼前加一行 `# 檔案：<檔名>`（改提示詞，需核准）；(C) 執行時把常見猜測名稱也放進 import 路徑（不改提示詞，但改了執行環境）。目前照 (A) 實作。
-- **（PR #12a，請確認）對照組 usable 不要求量到突變分數**：與 v2 usable 一致；若監督希望對照組更嚴格，需另行決定（屬通過標準）。
+- **（PR #12a）對照組 usable 標準**：已依監督指示恢復與 v2 相同標準（測試通過、確實呼叫真實目標、且量到突變分數）。
 
 - 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
 - Windows 原子改名有限重試已依 11/7 批准條件完成。
@@ -616,6 +632,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Antigravity／PR #12a 修正）：沒有 AOCI MCP。修改 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`eval/README.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Claude Code／PR #12a）：沒有 AOCI MCP。新增 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`test/fixtures/eval_three_groups/**`；修改 `python_scripts/{eval_aggregate,test_eval_aggregate}.py`、`src/pipeline/caseTable/{runCaseTablePipeline,runRowStage,oracleDecision}.ts`、`src/orchestrator.ts`、`src/test/{caseRowStageIntegration,caseSpecOracleIntegration,verificationRunner}.test.ts`、`test/verificationConfig.js`、`eval/README.md`。
 - 2026-11-09（Claude Code／PR #7 契約加嚴）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions}.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/test/caseRowStageIntegration.test.ts`。
 - 2026-11-09（Claude Code／PR #7、#8 監督核對後修正）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions,test_case_capture_runner}.py`、`src/pipeline/caseTable/{rowExecution,runRowStage,runCaseTablePipeline,oracleDecision}.ts`、`src/roles/specOracle.ts`、`src/orchestrator.ts`、`src/ui/webviewContent.ts`、`src/i18n/{en,zh-tw}.ts`、`src/test/{specPromptBlindness,caseSpecOracleIntegration,caseRowStageIntegration}.test.ts`、`docs/v2_提示詞_待審.md`。
@@ -706,6 +723,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `55f5448` |
 | 2026-11-09 23:30 | Claude Code | PR #12a 彙總支援 v2、對照組執行器、三組測試 | VM 非正式：types／lint 0、related 26/26、Python 10/10、v2 golden 2/2 無差異；待使用者 Windows fast／python／golden／integration；未合併、未 push | 本筆 |
 | 2026-11-09 22:20 | Claude Code | 記錄 PR #5～#8 驗收與合併、v2 提示詞核准；開 `pr/12a-eval-recording` | 由監督完成合併；本筆只更新文件 | 本筆 |
 | 2026-11-09 19:20 | Claude Code | PR #6～#8 記錄 Windows integration | Node 1065／1048 pass／17 fail（14 葉＋3 父），與第 5 節既有清單逐案相同，新增 0；v2 整合 10 項全過；Python integration 因 runner 在 Node 失敗後停止而未跑（test:python 全量已於 7fe7530 通過） | 本筆 |

@@ -41,8 +41,9 @@ BUILTIN_OPERATOR_SET_VERSION = 'builtin-ast-v3'
 FENCE = re.compile(r'```(?:python|py)?[^\n]*\n(.*?)```', re.S | re.I)
 
 
-def build_prompt(function_source):
-    return f'{PROMPT_HEADER}\n\n{function_source}'
+def build_prompt(file_name, function_source):
+    base_name = os.path.basename(file_name)
+    return f'{PROMPT_HEADER}\n檔案：{base_name}\n\n{function_source}'
 
 
 def function_source(source, target):
@@ -179,7 +180,7 @@ def evaluate_target(settings, file, target, workdir, request_fn):
     os.makedirs(workdir, exist_ok=True)
     with open(file, encoding='utf-8') as handle:
         source = handle.read()
-    prompt = build_prompt(function_source(source, target))
+    prompt = build_prompt(file, function_source(source, target))
     with open(os.path.join(workdir, 'prompt.txt'), 'w', encoding='utf-8') as handle:
         handle.write(prompt)
     events = [{'stage': 'model-request', 'status': 'requested', 'detail': {'role': ROLE, 'pipeline': METHOD}}]
@@ -229,7 +230,13 @@ def evaluate_target(settings, file, target, workdir, request_fn):
                                 settings['mutationEngine'], settings['mutationStageSeconds'], settings['mutationWorkers'])
     record['mutation'] = mutation
     record['mutationScore'] = mutation['score']
-    # Same tier rule as v2 usable: passing tests that call the target; mutation is reported separately.
+    # Same tier rule as v1 and v2: usable requires passing tests, target called, AND a mutation score.
+    if mutation['score'] is None:
+        record['terminalStatus'] = 'failed'
+        record['reasonCode'] = 'mutation-unmeasured'
+        if mutation.get('reasonCode'):
+            record['detail'] = mutation['reasonCode']
+        return record, events
     record['terminalStatus'], record['reasonCode'] = 'usable', 'usable'
     return record, events
 
@@ -298,7 +305,7 @@ def run_baseline(settings, targets_path, output, request_fn=ollama_request):
                 'modelCapabilitySummary': {'lengthStoppedTransports': length_stops},
                 'settings': {'model': settings['model'], 'temperature': 0, 'numCtx': settings['numCtx'],
                              'localThinkingMode': settings['localThinkingMode'], 'mutationEngine': settings['mutationEngine'],
-                             'prompt': PROMPT_HEADER + ' + complete function source'}}
+                             'prompt': PROMPT_HEADER + ' + 檔案：<檔名>.py + complete function source'}}
     with open(os.path.join(output, 'batch_manifest.json'), 'w', encoding='utf-8') as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
     return manifest

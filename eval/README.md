@@ -100,7 +100,7 @@ python python_scripts/eval_aggregate.py D:/read/專題/test/result/model_test --
 
 ## 4. 一般 LLM 對照組（`python_scripts/eval_baseline_plain_llm.py`，架構 6.3）
 
-對照組只發一次請求，提示詞固定為「以下是一個 Python 函式，請為它寫 unittest」加上完整函式原始碼（含裝飾器），不加任何其他說明；`temperature=0`，`num_ctx` 與思考模式可設定。回覆中取最長的程式碼區塊，以與主流程相同的隔離 runner（`generated_test_runner.py`）執行，覆蓋率用 `coverage_read.py`，突變用同一套引擎。
+對照組只發一次請求，提示詞固定為三段：第一行「以下是一個 Python 函式，請為它寫 unittest」，第二行「檔案：<檔名>.py」，空一行後接完整函式原始碼（含裝飾器），不加任何其他說明；`temperature=0`，`num_ctx` 與思考模式可設定。回覆中取最長的程式碼區塊，以與主流程相同的隔離 runner（`generated_test_runner.py`）執行，覆蓋率用 `coverage_read.py`，突變用同一套引擎。
 
 ```bash
 python python_scripts/eval_baseline_plain_llm.py \
@@ -111,8 +111,12 @@ python python_scripts/eval_baseline_plain_llm.py \
 
 - `--targets` 格式同側欄目標清單（`{"targets": {"檔名.py": ["函式名", ...]}}`），檔名相對於清單所在資料夾。
 - `--output` 必須是新資料夾或空資料夾。產出 `batch_manifest.json`（`method: "plain-llm"`，模型名稱後綴 `(plain-llm)`）以及每個目標的 `function_knowledge.json`、`role_events.jsonl`（角色 `plain-llm`）。
-- **所有失敗都算進分母**：呼叫失敗（`model-call-failed`）、沒有程式碼區塊（`no-test-code`）、語法錯誤（`syntax-error`）、沒有測試方法（`no-test-methods`）、測試逾時或失敗、未呼叫目標函式（`target-not-called`）都記為 `failed`；只有測試全部通過且確實呼叫目標才記為 `usable`（與 v2 的 usable 一致）；突變量不到時仍為 `usable`，原因記在 `mutation.reasonCode`，不計入「量到突變分數」。
-- 已知限制：固定提示詞沒有告知模組名稱，模型可能猜錯 import 而判為失敗。此提示詞依架構 6.3 逐字固定，不可自行加料；是否調整需另行決定（見 `docs/HANDOFF.md` 第 3 節）。
+- **所有失敗都算進分母**：呼叫失敗（`model-call-failed`）、沒有程式碼區塊（`no-test-code`）、語法錯誤（`syntax-error`）、沒有測試方法（`no-test-methods`）、測試逾時或失敗、未呼叫目標函式（`target-not-called`）都記為 `failed`；只有測試全部通過、確實呼叫真實目標、且量到突變分數才記為 `usable`（與 v1、v2 的 usable 標準完全相同）；突變量不到時為 `failed`（`reasonCode: "mutation-unmeasured"`，原因記錄於 `detail`）。
+
+### 比較時的注意事項
+
+1. **輸出長度上限的差異（對對照組有利，結果偏保守）**：對照組單次請求沒有設定個別角色的輸出長度上限（`num_predict`），而 v1 與 v2 流程有嚴格的各角色輸出上限（例如種子測試 1536 tokens 等）。這使得對照組不會因為角色預算上限而發生長度截斷，對對照組有利，所得的比較結果偏向保守。
+2. **模組名稱提供**：對照組提示詞第二行提供檔案名稱（`檔案：<檔名>.py`），使模型可推知正確的 import 來源模組，減少因猜錯檔名而導致的非本質失敗。
 
 ## 5. 三組並列比較與實驗室執行順序
 
