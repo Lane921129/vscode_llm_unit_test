@@ -8,6 +8,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { runCaseTablePipeline } from '../pipeline/caseTable/runCaseTablePipeline';
 import { readCaseTable } from '../pipeline/caseTable/caseTableStore';
@@ -16,6 +17,10 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 const root = path.resolve(__dirname, '../..');
 const goldenDirectory = path.join(root, 'test', 'fixtures', 'golden', 'v2');
 const update = process.env.UPDATE_CASE_TABLE_GOLDEN === '1';
+const python = resolvePythonExecutable(undefined, root);
+/** Coverage values differ by environment and stay out of the snapshot; the success path is asserted when coverage is installed. */
+const coverageInstalled = spawnSync(python, ['-c', 'import coverage'], { stdio: 'ignore' }).status === 0;
+const COVERAGE_MISSING_NOTICE = '[v2 golden] coverage 套件不存在，覆蓋率成功路徑未驗證 (coverage package missing; coverage success path NOT verified)';
 const line = (fields: Record<string, string>) => JSON.stringify({ kwargs: '{}', mocks: '', requirement: '', ...fields });
 
 const scenarios = [
@@ -41,7 +46,7 @@ const scenarios = [
 ];
 
 for (const scenario of scenarios) {
-    test(`v2 golden: ${scenario.name} reaches usable with a measured mutation score`, async () => {
+    test(`v2 golden: ${scenario.name} reaches usable with a measured mutation score`, async (context) => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), `v2-golden-${scenario.name}-`));
         try {
             const project = path.join(directory, 'project');
@@ -51,7 +56,7 @@ for (const scenario of scenarios) {
             const replies = [...scenario.replies];
             const result = await runCaseTablePipeline({
                 filePath: file, funcName: scenario.target, projectRoot: project, outputPath: path.join(directory, 'out'),
-                sessionDate: 'golden', pythonExecutable: resolvePythonExecutable(undefined, root), specOracle: 'off',
+                sessionDate: 'golden', pythonExecutable: python, specOracle: 'off',
                 requestModel: async () => { const reply = replies.shift(); if (reply === undefined) { throw new Error('unexpected request'); } return reply; },
                 log: () => undefined, mutation: { engine: 'builtin', workers: 1, stageSeconds: 120 }
             });
@@ -59,6 +64,16 @@ for (const scenario of scenarios) {
             assert.equal(stage.terminal, 'usable');
             assert.ok(typeof stage.mutation?.score === 'number');
             assert.ok(result.rows.some(row => row.status === 'test-passed'));
+            const coverage = stage.coverage;
+            if (coverageInstalled) {
+                assert.ok(coverage?.available === true, `coverage must be measured when the coverage package is installed; reasonCode=${coverage?.reasonCode ?? 'none'}`);
+                assert.ok(typeof coverage.linePercent === 'number' && coverage.linePercent >= 0 && coverage.linePercent <= 100,
+                    `linePercent must be 0-100, got ${coverage.linePercent}; reasonCode=${coverage.reasonCode ?? 'none'}`);
+                assert.ok(coverage.executableLines > 0, `executableLines must be > 0, got ${coverage.executableLines}; reasonCode=${coverage.reasonCode ?? 'none'}`);
+            } else {
+                console.log(COVERAGE_MISSING_NOTICE);
+                context.diagnostic(COVERAGE_MISSING_NOTICE);
+            }
             assert.ok(result.rows.some(row => row.status === 'invalid' || row.status === 'capture-failed'),
                 'the deliberately broken row fails on its own');
             const run = stage.mutation!.run!;

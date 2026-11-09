@@ -3,6 +3,11 @@ import io
 import json
 import unittest
 
+import os as _os
+import sys as _sys
+
+# Make sibling scripts importable when this module runs alone (test:related), like the other test modules.
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from case_row_validator import REPORT_VERSION, REQUEST_VERSION, main, target_signature, validate_request
 
 SOURCE = '''

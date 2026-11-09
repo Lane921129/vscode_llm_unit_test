@@ -40,7 +40,8 @@ export const PYTHON_TOOLS = {
     caseTableFacts: 'case_table_facts.py',
     caseRowValidator: 'case_row_validator.py',
     caseCapture: 'case_capture_runner.py',
-    caseRowAssertions: 'case_row_assertions.py'
+    caseRowAssertions: 'case_row_assertions.py',
+    caseOracleCompare: 'case_oracle_compare.py'
 } as const;
 
 export function pythonToolPath(tool: keyof typeof PYTHON_TOOLS): string {

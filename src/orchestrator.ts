@@ -531,6 +531,8 @@ interface AnalysisParams {
     localThinkingMode?: LocalThinkingMode;
     /** Internal seed completion scope; not a saved model capability. */
     requestSeedCompletion?: boolean;
+    /** v2 spec-oracle requests only; absent means each provider's request body is unchanged. */
+    requestTemperature?: number;
     /** Internal batch inventory; never serialized with provider credentials. */
     batchJournal?: BatchJournal;
     batchTargetId?: number;
@@ -1251,7 +1253,7 @@ async function requestLlmApiUnlocked(
             ...(params.requestSeedCompletion ? { prompt: userPrompt, raw: true }
                 : buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt)),
             stream: true,
-            options: { temperature: 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
+            options: { temperature: params.requestTemperature ?? 0, ...(params.requestContextTokens ? { num_ctx: params.requestContextTokens } : {}),
                 ...(params.requestOutputTokens ? { num_predict: params.requestOutputTokens } : {}),
                 ...(params.requestPromptBatchTokens ? { num_batch: params.requestPromptBatchTokens } : {}) },
             ...(expectsJsonObject ? { format: ['semantic-json', 'review-json', 'quality-json'].includes(outputFormat) ? responseSchemaForOutputFormat(outputFormat) : 'json' } : {})
@@ -1259,6 +1261,7 @@ async function requestLlmApiUnlocked(
     } else if (params.envType === 'custom') {
         apiUrl = params.customUrl || 'https://api.openai.com/v1/chat/completions';
         bodyData = buildCustomChatCompletionBody(params.modelName, contractedSystemPrompt, userPrompt, outputFormat);
+        if (params.requestTemperature !== undefined) { bodyData = { ...bodyData, temperature: params.requestTemperature }; }
         if (params.customKey) {
             headers['Authorization'] = `Bearer ${params.customKey}`;
         }
@@ -1273,6 +1276,7 @@ async function requestLlmApiUnlocked(
             actualKey,
             contractedSystemPrompt + "\n\n" + userPrompt,
             { ...(outputFormat === 'text' ? {} : { responseMimeType: 'application/json', responseSchema }),
+                ...(params.requestTemperature !== undefined ? { temperature: params.requestTemperature } : {}),
                 thinkingMode: vscode.workspace.getConfiguration('llmUnitTest').get('cloudThinkingMode', 'minimal') === 'minimal'
                     ? 'minimal' : 'provider-default' }
         );
@@ -1909,7 +1913,9 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             pythonExecutable: normalizePythonExecutable(params.pythonExecutable),
             requirementsFile: config.get<string>('requirementsFile', ''), specOracle: readSpecOracleSetting(config.get('specOracle', 'auto')),
             mutation: { engine: params.mutationEngine, workers: params.mutationWorkers, stageSeconds: normalizeExecutionSettings(params).mutpyTimeout },
-            requestModel: (system, user) => requestLlmApi(params, system, user, log), log }); }));
+            postMessage: message => { void sidebarProvider.webview?.postMessage(message); },
+            requestModel: (system, user, options) => requestLlmApi(options?.temperature === undefined ? params
+                : { ...params, requestTemperature: options.temperature }, system, user, log), log }); }));
     }
     const reportState: TargetReportState = {};
     return withImportFixtures(fixtures, async () => {

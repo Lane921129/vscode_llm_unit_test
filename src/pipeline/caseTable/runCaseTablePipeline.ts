@@ -19,7 +19,11 @@ import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
 import { writeCaseTable } from './caseTableStore';
 import { RequirementEntry, parseRequirements } from './requirements';
 import { CASE_SCENARIO_ROW_LIMIT, getCaseRowCorrectionPrompt, getCaseScenarioPrompt, parseCaseRows } from '../../roles/semanticAnalyzer';
-import { RowStageResult, RowStageOptions, runRowStage } from './runRowStage';
+import { RowStageResult, RowStageOptions, rowTestContext, runRowStage } from './runRowStage';
+import { collectSpecSources, hasSpecSource } from './specSources';
+import { createSpecDecider } from './oracleDecision';
+import { SpecMismatchSummary, writeSpecMismatchArtifacts } from './specMismatchReport';
+import { createHash, randomUUID } from 'node:crypto';
 
 export type PipelineVersion = 'v1' | 'v2-case-table';
 export type SpecOracleSetting = 'auto' | 'off';
@@ -32,6 +36,11 @@ export function readPipelineVersion(value: unknown): PipelineVersion {
 
 export function readSpecOracleSetting(value: unknown): SpecOracleSetting {
     return value === 'off' ? 'off' : 'auto';
+}
+
+/** Per-request options; only the spec oracle sets a temperature (user-approved 0.7). */
+export interface ModelRequestOptions {
+    temperature?: number;
 }
 
 export interface PythonToolResult {
@@ -55,7 +64,7 @@ export interface CaseTablePipelineOptions {
     /** Path of the requirements file, absolute or relative to projectRoot; empty means none. */
     requirementsFile?: string;
     specOracle: SpecOracleSetting;
-    requestModel: (system: string, user: string) => Promise<string>;
+    requestModel: (system: string, user: string, options?: ModelRequestOptions) => Promise<string>;
     log: (text: string) => void;
     /** Test seam; defaults to running an extension-owned script through runSpawn. */
     runPythonTool?: (script: string, args: string[], input?: string) => Promise<PythonToolResult>;
@@ -65,6 +74,15 @@ export interface CaseTablePipelineOptions {
     runRows?: boolean;
     /** PR #8 hook passed to the row stage. */
     decideExpected?: RowStageOptions['decideExpected'];
+    /** Sidebar result card updates (updateCoverage / updateOutcome with a caseTable summary). */
+    postMessage?: (message: Record<string, unknown>) => void;
+}
+
+export interface CaseTableCardSummary {
+    tier: 'usable' | 'failed';
+    usableRows: number;
+    totalRows: number;
+    specMismatch: number;
 }
 
 export interface RecordedRejection extends RejectedCaseLine {
@@ -82,6 +100,9 @@ export interface CaseTablePipelineResult {
     modelRequests: number;
     /** Present when the row stage ran. */
     stage?: RowStageResult;
+    /** Whether spec prediction ran (specOracle auto and a docstring or requirement exists). */
+    specOracleUsed: boolean;
+    specMismatch?: SpecMismatchSummary;
 }
 
 export async function runCaseTablePipeline(options: CaseTablePipelineOptions): Promise<CaseTablePipelineResult> {
@@ -96,7 +117,10 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
         + `${facts.dependencies.length} mockable dependencies, ${requirements.length} requirements.`);
 
     let modelRequests = 0;
-    const ask = async (system: string, user: string) => { modelRequests += 1; return options.requestModel(system, user); };
+    const ask = async (system: string, user: string, request?: ModelRequestOptions) => {
+        modelRequests += 1;
+        return request ? options.requestModel(system, user, request) : options.requestModel(system, user);
+    };
     const scenarioPrompt = getCaseScenarioPrompt(facts, requirements);
     const response = await ask(scenarioPrompt.system, scenarioPrompt.user);
     const requirementIds = requirements.map(entry => entry.id);
@@ -141,23 +165,35 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
     let finalRows = outcome.rows;
     let stage: RowStageResult | undefined;
     const validBeforeRows = outcome.rows.filter(row => row.status === 'proposed').length;
+    const spec = collectSpecSources(facts, requirements);
+    const specOracleUsed = options.specOracle === 'auto' && hasSpecSource(spec);
+    let specMismatch: SpecMismatchSummary | undefined;
     if (options.runRows !== false && validBeforeRows > 0) {
+        const runtime = { python: options.pythonExecutable, sourceFile: path.resolve(options.filePath), target: options.funcName,
+            importPaths: [...new Set([path.dirname(path.resolve(options.filePath)), path.resolve(options.projectRoot)])],
+            artifacts: path.join(directory, 'v2_runs') };
+        const decideExpected = options.decideExpected
+            ?? (specOracleUsed ? createSpecDecider({ spec, functionName: options.funcName, ask, python: options.pythonExecutable }) : undefined);
         stage = await runRowStage({
-            runtime: { python: options.pythonExecutable, sourceFile: path.resolve(options.filePath), target: options.funcName,
-                importPaths: [...new Set([path.dirname(path.resolve(options.filePath)), path.resolve(options.projectRoot)])],
-                artifacts: path.join(directory, 'v2_runs') },
-            facts, rows: outcome.rows, ask, log: options.log,
+            runtime, facts, rows: outcome.rows, ask, log: options.log,
             mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
-            ...(options.decideExpected ? { decideExpected: options.decideExpected } : {})
+            ...(decideExpected ? { decideExpected } : {})
         });
         finalRows = stage.rows;
+        specMismatch = writeSpecMismatchArtifacts(directory, options.funcName, finalRows, rowTestContext(runtime, facts), stage.setups);
+        options.log(`[v2] spec oracle ${specOracleUsed ? 'on' : 'off'}: ${specMismatch.specMismatchCount} spec mismatches, `
+            + `${specMismatch.needsReviewCount} rows need manual review.`);
     }
     writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: finalRows });
     fs.writeFileSync(path.join(directory, CASE_TABLE_REJECTIONS_FILE), JSON.stringify({
         version: 'case-table-rejections-v1', target: options.funcName, rejected, overLimit: parsed.overLimit,
         decorated: outcome.decorated, modelRequests, specOracle: options.specOracle
     }, null, 2) + '\n', 'utf8');
-    if (stage) { writeStageResult(directory, options.funcName, finalRows, stage, modelRequests); }
+    if (stage) {
+        postResultCard(options, directory, finalRows, stage, specMismatch!.specMismatchCount);
+        writeStageResult(directory, options.funcName, finalRows, stage, modelRequests, specOracleUsed, specMismatch!);
+        writeBatchRecords(directory, options.filePath, options.funcName, stage, modelRequests, specMismatch!.specMismatchCount);
+    }
     const valid = validBeforeRows;
     options.log(`[v2] case_table.json: ${valid} valid rows, ${outcome.rows.length - valid} invalid rows, `
         + `${rejected.filter(item => item.source === 'scenario' && !item.corrected).length} rejected lines, `
@@ -167,10 +203,38 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
             { reasonCode: 'no-valid-case-rows', directory });
     }
     return { directory, rows: finalRows, rejected, overLimit: parsed.overLimit, decorated: outcome.decorated, modelRequests,
-        ...(stage ? { stage } : {}) };
+        specOracleUsed, ...(stage ? { stage } : {}), ...(specMismatch ? { specMismatch } : {}) };
 }
 
-function writeStageResult(directory: string, target: string, rows: CaseRow[], stage: RowStageResult, modelRequests: number): void {
+function postResultCard(options: CaseTablePipelineOptions, directory: string, rows: CaseRow[], stage: RowStageResult, specMismatch: number): void {
+    if (!options.postMessage) { return; }
+    const file = options.projectName ? path.relative(options.projectRoot, options.filePath).replace(/\\/g, '/') : path.basename(options.filePath);
+    const identity = { fileName: `${file}:${options.funcName}`, file, func: options.funcName };
+    const score = stage.mutation?.score;
+    options.postMessage({ command: 'updateCoverage', ...identity, score: typeof score === 'number' ? `${Math.round(score * 10) / 10}%` : 'N/A',
+        coverage: stage.coverage?.available ? `${stage.coverage.linePercent}%` : null });
+    const caseTable: CaseTableCardSummary = { tier: stage.terminal, usableRows: rows.filter(row => row.status === 'test-passed').length,
+        totalRows: rows.length, specMismatch };
+    options.postMessage({ command: 'updateOutcome', ...identity, reportPath: path.join(directory, 'final_report.md'),
+        outcome: { label: stage.terminal === 'usable' ? 'v2 usable' : 'v2 failed', kind: stage.terminal === 'usable' ? 'executed' : 'failed' }, caseTable });
+}
+
+/** Minimal records the batch journal reads (function_knowledge, run_manifest, role_events) for a v2 target. */
+function writeBatchRecords(directory: string, file: string, target: string, stage: RowStageResult, modelRequests: number, specMismatchCount: number): void {
+    const runId = randomUUID();
+    const sourceHash = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    const base = { runId, sourceHash, target, validationMode: 'full', pipelineVersion: 'v2-case-table' };
+    fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify(base, null, 2) + '\n', 'utf8');
+    fs.writeFileSync(path.join(directory, 'function_knowledge.json'), JSON.stringify({ ...base, schemaVersion: 2,
+        terminalStatus: stage.terminal, ...(stage.terminal === 'failed' ? { failureCategory: 'validation', failureStage: 'case-table', reasonCode: stage.reasonCode } : {}),
+        specMismatchCount }, null, 2) + '\n', 'utf8');
+    const events = [{ runId, sourceHash, stage: 'v2-case-table', status: stage.terminal },
+        ...Array.from({ length: modelRequests }, () => ({ runId, sourceHash, stage: 'model-request', status: 'requested', detail: { pipeline: 'v2' } }))];
+    fs.writeFileSync(path.join(directory, 'role_events.jsonl'), events.map(event => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+}
+
+function writeStageResult(directory: string, target: string, rows: CaseRow[], stage: RowStageResult, modelRequests: number,
+    specOracleUsed: boolean, specMismatch: SpecMismatchSummary): void {
     const count = (status: string) => rows.filter(row => row.status === status).length;
     const run = stage.mutation?.run;
     const summary = {
@@ -180,6 +244,9 @@ function writeStageResult(directory: string, target: string, rows: CaseRow[], st
         testFile: stage.testFile ? path.relative(directory, stage.testFile).replace(/\\/g, '/') : null,
         mutation: run ? { engine: run.engine, score: stage.mutation?.score ?? null, killed: run.counts.killed,
             survived: run.counts.survived, executed: run.counts.executed } : { score: null, failure: stage.mutation?.failure ?? null },
+        coverage: stage.coverage ?? null,
+        specOracle: { used: specOracleUsed, specMismatchCount: specMismatch.specMismatchCount, needsReviewCount: specMismatch.needsReviewCount,
+            mismatchTestFile: specMismatch.testFile ? path.basename(specMismatch.testFile) : null },
         modelRequests
     };
     fs.writeFileSync(path.join(directory, CASE_TABLE_RESULT_FILE), JSON.stringify(summary, null, 2) + '\n', 'utf8');
@@ -189,9 +256,14 @@ function writeStageResult(directory: string, target: string, rows: CaseRow[], st
         `- Rows: ${summary.rows.total} total, ${summary.rows.testPassed} passing tests, ${summary.rows.testFailed} failing, `
             + `${summary.rows.captureFailed} capture-failed, ${summary.rows.invalid} invalid`,
         `- Mutation score: ${summary.mutation.score ?? 'unavailable'}`,
-        `- Expected values: observed results (not confirmed by a specification)`, '',
-        '| Row | Category | Status | Scenario |', '| --- | --- | --- | --- |',
-        ...rows.map(row => `| ${row.id} | ${row.category} | ${row.status}${row.reason ? ` (${row.reason})` : ''} | ${row.scenario.replace(/\|/g, '\\|')} |`)
+        `- Coverage: ${stage.coverage?.available ? `${stage.coverage.linePercent}% of target lines; branches ${stage.coverage.branchesCovered === null ? 'unknown'
+            : stage.coverage.branchesCovered ? 'all covered' : `missing ${stage.coverage.missingBranches.join(', ')}`}`
+            : `unavailable (${stage.coverage?.reasonCode ?? 'not-measured'})`}`,
+        `- Spec oracle: ${specOracleUsed ? 'on' : 'off'}; spec mismatches: ${specMismatch.specMismatchCount} (see spec_mismatch.md); `
+            + `needs manual review: ${specMismatch.needsReviewCount}`, '',
+        '| Row | Category | Status | Expected from | Scenario |', '| --- | --- | --- | --- | --- |',
+        ...rows.map(row => `| ${row.id} | ${row.category} | ${row.status}${row.reason ? ` (${row.reason})` : ''} | ${row.oracleStatus ?? '-'} | `
+            + `${row.scenario.replace(/\|/g, '\\|')} |`)
     ];
     fs.writeFileSync(path.join(directory, 'final_report.md'), lines.join('\n') + '\n', 'utf8');
 }

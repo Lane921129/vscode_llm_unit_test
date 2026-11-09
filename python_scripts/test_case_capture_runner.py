@@ -9,6 +9,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import os as _os
+import sys as _sys
+
+# Make sibling scripts importable when this module runs alone (test:related), like the other test modules.
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
 RUNNER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'case_capture_runner.py')
 MODULE = '''
@@ -114,6 +119,49 @@ class CaptureRunnerTests(unittest.TestCase):
         self.assertEqual(self.capture('lookup', {'args': "'k'", 'kwargs': "{'default': 7}",
                                                  'mocks': [{'dependency': 'cur.fetchone', 'behavior': 'return', 'value': 'None'}]})['actual'],
                          {'kind': 'return', 'value': '7'})
+
+
+
+class PatchLocationTests(unittest.TestCase):
+    """`from pkg import dep` is looked up in the target module; `import pkg` looks up pkg.dep at call time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.mkdtemp()
+        os.mkdir(os.path.join(cls.directory, 'pkg'))
+        files = {
+            os.path.join('pkg', '__init__.py'): 'def dep(value):\n    raise RuntimeError("real dependency was called")\n',
+            'uses_from.py': 'from pkg import dep\n\n\ndef run(value):\n    return dep(value) + 1\n',
+            'uses_import.py': 'import pkg\n\n\ndef run(value):\n    return pkg.dep(value) + 1\n',
+        }
+        for name, text in files.items():
+            with open(os.path.join(cls.directory, name), 'w', encoding='utf-8') as handle:
+                handle.write(text)
+
+    def capture(self, module, mocks):
+        from case_table_facts import collect_facts
+        path = os.path.join(self.directory, module)
+        with open(path, encoding='utf-8') as handle:
+            dependencies = collect_facts(handle.read(), 'run')['dependencies']
+        request = {'version': 'case-capture-request-v1', 'file': path, 'target': 'run', 'importPaths': [self.directory],
+                   'dependencies': dependencies, 'row': {'id': 'C1', 'args': '(1,)', 'kwargs': '{}', 'mocks': mocks}}
+        run = subprocess.run([sys.executable, '-E', '-B', RUNNER], input=json.dumps(request), capture_output=True,
+                             text=True, encoding='utf-8', cwd=self.directory, timeout=60)
+        return dependencies, json.loads(run.stdout)
+
+    def test_from_import_is_patched_in_the_target_module(self):
+        dependencies, report = self.capture('uses_from.py', [{'dependency': 'dep', 'behavior': 'return', 'value': '41'}])
+        self.assertEqual(dependencies, [{'name': 'dep', 'patch': 'dep', 'chain': []}])
+        self.assertEqual(report['actual'], {'kind': 'return', 'value': '42'}, 'the real pkg.dep would have raised')
+
+    def test_module_import_is_patched_on_the_imported_module_attribute(self):
+        dependencies, report = self.capture('uses_import.py', [{'dependency': 'pkg.dep', 'behavior': 'return', 'value': '41'}])
+        self.assertEqual(dependencies, [{'name': 'pkg.dep', 'patch': 'pkg.dep', 'chain': []}])
+        self.assertEqual(report['actual'], {'kind': 'return', 'value': '42'})
+
+    def test_unmocked_dependency_really_runs(self):
+        _, report = self.capture('uses_from.py', [])
+        self.assertEqual(report['actual'], {'kind': 'raise', 'value': 'RuntimeError'})
 
 
 if __name__ == '__main__':

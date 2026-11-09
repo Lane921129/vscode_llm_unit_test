@@ -711,7 +711,7 @@ export class BatchJournal {
             expectedTargets: this.targets.length,
             finishedTargets: this.targets.filter(t => t.state === 'finished').length,
             totalCount,
-            specMismatchCount: 0,
+            specMismatchCount: this.targets.reduce((sum, target) => sum + readSpecMismatchCount(this.directory, target.reportDirectory), 0),
             tierCounts,
             byStageAndReason,
             roleUsability,
@@ -762,4 +762,13 @@ export class BatchJournal {
         ];
         fs.writeFileSync(path.join(this.directory, 'batch_failure_summary.md'), mdLines.join('\n'), 'utf8');
     }
+}
+
+/** v2 targets record specMismatchCount in function_knowledge.json; v1 targets have none and count 0. */
+function readSpecMismatchCount(batchDirectory: string, reportDirectory: string | undefined): number {
+    if (!reportDirectory) { return 0; }
+    try {
+        const knowledge = JSON.parse(fs.readFileSync(path.join(resultDataDirectory(path.join(batchDirectory, reportDirectory)), 'function_knowledge.json'), 'utf8'));
+        return Number.isSafeInteger(knowledge.specMismatchCount) && knowledge.specMismatchCount >= 0 ? knowledge.specMismatchCount : 0;
+    } catch { return 0; }
 }

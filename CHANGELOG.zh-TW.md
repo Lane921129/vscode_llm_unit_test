@@ -2,11 +2,23 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-09 PR #7／#8 監督核對後修正
+- 單列 Bug Fixer 改為 AST 全面比對（被測呼叫、斷言、mock、控制流程都不可變），之後再加嚴為呼叫後全部不變與禁止重綁目標，最終規則見 PR #7 該筆。
+- 規格預測請求改用 temperature 0.7（`requestTemperature` 只由 v2 規格預測設定，v1 請求內容不變）；規格提示詞拿掉情境文字，呼叫改寫成一般寫法、kwargs 為空時不顯示。
+- v2 合併後的正式測試以既有 coverage 工具量行與分支覆蓋並寫入結果與報告，失敗只記原因碼；側欄結果卡片顯示 v2 終態、可用列數／總列數與規格不符數。
+- 新增 capture 的 patch 位置測試（`from pkg import dep` 與 `import pkg`）；v2 golden 未變、未重錄，v1 golden 未動。
+
+## 2026-11-09 PR #8（v2 規格預測）
+- 新增 `specSources.ts`（docstring、型別註記、需求檔）與 `specOracle.ts`（Analyst-規格提示詞，只含簽名、docstring、型別註記、需求與該列輸入；不含函式本體與任何執行結果），每列獨立預測 3 次，格式錯誤只重問一次。
+- `oracleDecision.ts` 依架構 1.3 分級，`case_oracle_compare.py` 依 3.3 比對（浮點 isclose、例外依類別與 MRO）；basis 必須真的出現在 docstring 或需求才算規格不符，否則列為需人工確認。
+- 規格不符的列不進正式測試，改以規格值寫入 `test_spec_mismatch.py`（不跑突變），並輸出 `spec_mismatch.md／json`；批次 `specMismatchCount` 由各目標累加；`specOracle=off` 或沒有 docstring／需求時完全不呼叫規格預測。
+
 ## 2026-11-09 PR #7（v2 逐列 capture、程式產生測試與突變）
 - 新增 `case_capture_runner.py`：每列一個行程，在 `guarded_runtime` 隔離內依 facts 在目標模組查找位置 patch（區域呼叫鏈以 MagicMock 設定），記錄回傳值或例外；未 mock 而碰到外部資源只讓該列 `capture-failed`。
 - `rowToTest.ts` 由程式寫出每列一個測試方法（預期值暫為 observed）；只有 needs-setup 或實例方法才請 Writer 寫 3～10 行 setup；`rowExecution.ts` 逐方法用既有 runner 執行，通過者合併後以既有突變引擎量測，終態 usable／failed。
-- 單列 Bug Fixer 每列最多 2 次，`case_row_assertions.py` 以 AST 檢查修正不得改動任何斷言預期值；新提示詞列入 `docs/v2_提示詞_待審.md`。
-- 新增獨立的 v2 golden（`test/fixtures/golden/v2/` 的 BMI 與資料庫 fixture，皆 usable 且有突變分數）；只能用 `UPDATE_CASE_TABLE_GOLDEN=1` 錄製，v1 golden 未改。
+- 單列 Bug Fixer 每列最多 2 次；`case_row_assertions.py` 以 AST 要求第一個被測呼叫起到方法結尾完全不變（`post-call-changed`），之前的 setup 不得重綁、patch 或以別名綁定被測目標（`target-rebound`，含 tuple unpacking、walrus、getattr），並保留呼叫、斷言、mock 與控制流程檢查；未執行真實目標的方法不算通過。新提示詞列入 `docs/v2_提示詞_待審.md`。
+- 新增獨立的 v2 golden（`test/fixtures/golden/v2/` 的 BMI 與資料庫 fixture，皆 usable 且有突變分數）；只能用 `UPDATE_CASE_TABLE_GOLDEN=1` 錄製，v1 golden 未改；有 coverage 套件時強制斷言覆蓋率量測成功，沒有時印出「成功路徑未驗證」（數值不入快照）。
+- v2 的五個 Python 測試模組自行加入 `python_scripts` 匯入路徑，可用 `test:related -- --python <模組>` 單獨執行。
 
 ## 2026-11-09 PR #6（v2 設定分流與 Analyst-情境）
 - 新增設定 `llmUnitTest.pipelineVersion`（v1／v2-case-table，預設 v1）、`specOracle`（auto／off）、`requirementsFile`，側欄可切換與選擇需求檔；orchestrator 只加入依設定分流到 `runCaseTablePipeline` 的分支。

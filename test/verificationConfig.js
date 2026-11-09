@@ -30,7 +30,7 @@ const fastNodeTests = new Set([
     'runtimeQualificationSession', 'seedCandidatePipeline', 'semanticAnalysisParser',
     'semanticContractRepair', 'semanticPromptBudget', 'semanticPromptCompaction',
     'serialRequestQueue', 'sidebarProviderResponseDeadline', 'sourceExpectationPipeline',
-    'sourceImportProjection', 'stubClassifier', 'stubSmokeAssertion', 'stubTestPlan',
+    'sourceImportProjection', 'specPromptBlindness', 'stubClassifier', 'stubSmokeAssertion', 'stubTestPlan',
     'supplementalProbeInputs', 'targetBudget', 'targetCoverage', 'testRuleLibrary',
     'tier1Literals', 'tier1TestBuilder', 'tier1TestFileBuilder', 'tier2SubtaskGate',
     'tierFailurePolicy', 'tierRouter', 'traceRecovery', 'traceTestAugmenter',
@@ -103,7 +103,8 @@ const pythonTests = [
     'python_scripts/test_case_row_validator.py',
     'python_scripts/test_case_table_facts.py',
     'python_scripts/test_case_capture_runner.py',
-    'python_scripts/test_case_row_assertions.py'
+    'python_scripts/test_case_row_assertions.py',
+    'python_scripts/test_case_oracle_compare.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',
