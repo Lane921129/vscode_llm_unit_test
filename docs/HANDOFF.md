@@ -189,7 +189,7 @@
 - **使用者 Windows `npm run test:related -- --python test_case_row_assertions` 失敗**：`ModuleNotFoundError: No module named 'case_row_assertions'`。原因是 v2 新增的五個 Python 測試模組沒有把 `python_scripts` 加入 `sys.path`；既有測試模組都會自己加。在完整 `test:python` 中能通過，只是因為同一行程中較早的模組已經加過路徑。屬於測試檔的 C 類問題，產品程式不受影響。
 - **修正**：`test_case_row_validator.py`、`test_case_table_facts.py`、`test_case_capture_runner.py`、`test_case_row_assertions.py`、`test_case_oracle_compare.py` 都在 import 前加入 `sys.path.insert(0, <本檔所在目錄>)`，比照既有模組。
 - **驗證（Linux VM，不是正式結果）**：五個模組各自在 repo 根目錄、不設 `PYTHONPATH` 單獨執行全部通過（19、5、9、13、4 項；`log/pr7f-<模組>-alone.log`）；五個一起執行 50 項通過（`log/pr7f-python-together-vm.log`）。
-- **待使用者在 Windows 重跑 `npm run test:related -- --python test_case_row_assertions`**（也可以把其他四個模組一起加上 `--python`）；完整 `npm run test:integration` 仍待執行。
+- **使用者 Windows 重跑（`7bbf8a5`，2026-11-09 15:03）**：`npm run test:related -- --python test_case_row_assertions --python test_case_row_validator --python test_case_table_facts --python test_case_capture_runner --python test_case_oracle_compare` → 5 個模組 50 tests OK，結尾印出 `Selected scope passed`。完整 `npm run test:integration` 仍待執行。
 
 ### 2026-11-09 14:45 v2 golden 強制驗證覆蓋率成功路徑（`pr/08-spec-oracle`，Claude Code，test(pr07)）
 
@@ -659,6 +659,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 15:05 | Claude Code | PR #7 記錄 Windows related | 使用者 Windows：5 個 v2 Python 模組單獨 related 50/50 OK。待 integration | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 Windows 結果與 Python 測試路徑 | Windows golden v1 11/11、v2 2/2（覆蓋率成功路徑通過）；related 單獨跑失敗→五個 v2 Python 測試補 sys.path，VM 單獨與合併執行皆通過。待使用者重跑 related 與 integration | 本筆 |
 | 2026-11-09 14:50 | Claude Code | PR #7 v2 golden 覆蓋率斷言 | 有 coverage 時強制斷言成功路徑，沒有時印出未驗證提示；VM：check-types／lint 0、v2 golden 2/2 並印出提示。待使用者在 Windows 跑 test:golden 與 test:related -- --python test_case_row_assertions | 本筆 |
 | 2026-11-09 13:55 | Claude Code | PR #7 別名規則 | target-rebound 加別名檢查；VM：Python 50 項、row stage＋v2 golden 5/5 無差異。待使用者在 Windows 跑 test:integration | 本筆 |
