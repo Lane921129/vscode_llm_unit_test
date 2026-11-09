@@ -102,9 +102,9 @@
 | 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
 | 5 | case-table-v1 結構與驗證 | **實作完成（`9774e9b`）；Windows `test:fast` 已通過（Node 796/796、Python 48/48）；待使用者在 Windows 跑 `test:python`** | `pr/05-case-table` | 2026-11-08 Claude Code |
-| 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；Windows fast／python／golden 通過（11/09），待驗收** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
-| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；Windows fast／python／golden 通過（11/09，v2 golden 在 3.13 上無差異），待驗收** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
-| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **實作完成；Windows fast／python／golden 通過（11/09），待驗收** | `pr/08-spec-oracle`（疊在 pr/07 上） | 2026-11-09 Claude Code |
+| 6 | 設定分流、Analyst-情境提示、UI 設定 | **實作完成；Windows fast／python／golden／integration（無新增失敗）通過，待驗收** | `pr/06-v2-scenario`（疊在 pr/05 上） | 2026-11-09 Claude Code |
+| 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **實作完成；Windows fast／python／golden／integration（無新增失敗）通過，待驗收** | `pr/07-capture-rows`（疊在 pr/06 上） | 2026-11-09 Claude Code |
+| 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **實作完成；Windows fast／python／golden／integration（無新增失敗）通過，待驗收** | `pr/08-spec-oracle`（疊在 pr/07 上） | 2026-11-09 Claude Code |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
@@ -182,6 +182,29 @@
   5. 「側欄顯示規格不符數」目前透過側欄的執行紀錄（log）顯示一行統計；結果卡片的 UI 整合留到之後。
 - **驗證（Linux VM，不是正式結果）**：check-types 0（`log/pr8-check-types.log`）、lint 0／0 warning（`log/pr8-lint.log`）、related 70 個中 69 個通過（`log/pr8-related-node.log`）；唯一失敗是 v1 的 `batchJournalIntegration`「real batch command…」，原因是 VM 的 Python 沒有 `coverage`（`coverage-preflight`／environment），與本 PR 無關，須在 Windows 重跑確認。規格整合測試 3/3（`log/pr8-spec-integration-vm.log`）、Python 五個 v2 模組全過（`log/pr8-python-vm.log`）、v2 golden＋row stage 4/4（`log/pr8-v2-golden-and-rows-vm.log`；v2 golden 用 `specOracle: 'off'`，所以不受影響）。v1 golden 檔案未改。
 - **待使用者在 Windows 執行**（PR #6～#8 一起）：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:python`、`npm run test:golden`（v1 必須零差異，v2 必須通過）；時間足夠時背景跑 `npm run test:integration`，逐案比對第 5 節既有的 14 個失敗。
+
+### 2026-11-09 19:15 Windows 完整 integration 結果（使用者執行，`pr/08-spec-oracle`）
+
+- 證據：`log/pr6-8-windows-integration.log`（使用者貼上的完整輸出）。log 沒有印出 commit；從 log 內的時間戳（07:46 UTC＝15:46 台灣時間）判斷，執行時分支最新 commit 是 `ce9d286`，程式內容等同 `7bbf8a5`，之後沒有程式變動。
+- **Node integration**：191 個檔、1065 tests／1048 pass／17 fail（14 個葉節點＋3 個父測試）／0 skip／0 cancelled。
+- **與第 5 節既有 14 個失敗逐案比對：檔案、完整案例名稱與第一個錯誤全部相同，新增失敗 0。**
+  - bmiFocused preserved-seed：`retained-after-failure` vs `passed`；modified-seed：`4 !== 6`
+  - bmiPreservation：`1 !== 2`
+  - mutationImprovement：`4 !== 1`
+  - numericSkill：`1 !== 2`
+  - parameterFixture：`5 !== 3`
+  - reviewerDemo：`5 !== 2`
+  - roleOrchestrator：`1 !== 3`
+  - writerOutputRecovery：repeat-length `5 !== 2`；measured-too-slow 與 qualification-consumed-retry 為同一句計數斷言
+  - writerRevision：stop／length `11264 !== 8192`、multi-finding `0 !== 1`
+  - 3 個父測試也和以前相同（BMI keeps an executed seed…、formal Writer length recovery…、formal full Writer revision…）。
+- 與 PR #3 那次比較：Node tests 1053→1065（PR #5～#8 新增的 integration 測試）。v2 新增的整合測試全部通過，共 10 項：caseTablePipelineIntegration 4、caseRowStageIntegration 3、caseSpecOracleIntegration 3。v1 的 `batchJournalIntegration`「real batch command…」在 Windows 通過（VM 失敗只是因為缺 coverage）。
+- **Python integration 這次沒有執行**：verification runner 在 Node 失敗後就停止（`[failed] Node regressions`），和 PR #3 時 Codex 用自訂腳本強制補跑不同。Python 的佐證如下：
+  - `npm run test:python`（62 個檔全量，包含 57 個 integration 檔）在 `7fe7530` 已通過 939 tests；
+  - 之後 Python 只改了 `case_row_assertions.py`（別名規則）與五個 v2 測試模組（匯入路徑），這五個模組已在 `7bbf8a5` 用 Windows related 通過 50/50；
+  - 其餘 Python 檔自 `7fe7530` 起沒有變動。
+  - 若要嚴格的同版本證據，可再跑一次 `npm run test:python`（約 13 分鐘）。
+- 結論：PR #5～#8 已完成驗證清單上的所有 Windows 項目，可交監督與使用者驗收。
 
 ### 2026-11-09 15:00 Windows 結果與 Python 測試單獨執行修正（`pr/08-spec-oracle`，Claude Code，test(pr07)）
 
@@ -659,6 +682,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-09 19:20 | Claude Code | PR #6～#8 記錄 Windows integration | Node 1065／1048 pass／17 fail（14 葉＋3 父），與第 5 節既有清單逐案相同，新增 0；v2 整合 10 項全過；Python integration 因 runner 在 Node 失敗後停止而未跑（test:python 全量已於 7fe7530 通過） | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 記錄 Windows related | 使用者 Windows：5 個 v2 Python 模組單獨 related 50/50 OK。待 integration | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 Windows 結果與 Python 測試路徑 | Windows golden v1 11/11、v2 2/2（覆蓋率成功路徑通過）；related 單獨跑失敗→五個 v2 Python 測試補 sys.path，VM 單獨與合併執行皆通過。待使用者重跑 related 與 integration | 本筆 |
 | 2026-11-09 14:50 | Claude Code | PR #7 v2 golden 覆蓋率斷言 | 有 coverage 時強制斷言成功路徑，沒有時印出未驗證提示；VM：check-types／lint 0、v2 golden 2/2 並印出提示。待使用者在 Windows 跑 test:golden 與 test:related -- --python test_case_row_assertions | 本筆 |
