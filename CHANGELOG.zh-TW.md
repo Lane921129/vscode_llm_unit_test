@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-10 PR #13（側欄精簡與進階設定收合）
+- 精簡側欄版面配置：模型選擇、流程版本、驗證模式、受測專案與函式選擇、執行與中止按鈕常駐顯示；context 大小、thinking 模式、突變設定、需求檔與目標清單匯出入收進「進階設定」（預設收合，保存使用者開合選擇）。
+- 移除側欄「開始前要求通過角色資格測試」勾選框，設定項 `llmUnitTest.requireRoleQualification` 保留預設 false；「測試連線」一併執行既有角色資格測試並在下方顯示各角色結果摘要。
+- 函式選擇改為「勾選此檔全部函式／取消勾選」，並新增動態「已選 N／M」即時計數標籤；目標清單按鈕改名為「從檔案載入目標清單…」「把目前清單存成檔案…」。
+- 支援中英雙語字典更新；新增與更新 Webview 相關測試（`sidebarSimplification.test.ts`、`sidebarPreferences.test.ts`、`connectionQualification.test.ts`）。
+
 ## 2026-11-10 PR #10（案例表存活突變列）
 - Quality Analyst 新增單任務提示詞 `getSurvivorRowPrompt` 與 `parseSurvivorRow`，提示詞全文列入 `docs/v2_提示詞_待審.md`。
 - 新增 `captureSurvivorRow` 與 `basic_mutation_runner.py --capture-mutant` 雙版本獨立執行，輸出相同判定為 `survivor-row-indistinguishable`。

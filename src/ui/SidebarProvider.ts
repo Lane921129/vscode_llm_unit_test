@@ -721,6 +721,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     this.pendingStartCancelled = false;
                     const revision = this.projectRevision;
                     const params = { ...message };
+                    params.requireRoleQualification = params.requireRoleQualification ?? config.get<boolean>('requireRoleQualification', false);
                     try {
                         // Bind UI values and all other budget counters before any
                         // asynchronous save or credential lookup can change them.
