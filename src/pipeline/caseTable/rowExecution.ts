@@ -193,7 +193,8 @@ export async function measureCoverage(runtime: RowRuntime, code: string): Promis
     const unavailable = (reasonCode: string): CoverageMeasurement => ({ available: false, linePercent: null, executableLines: 0,
         missingLines: [], branchesCovered: null, missingBranches: [], reasonCode });
     try {
-        const module = 'test_case_table_coverage';
+        const id = randomUUID().replace(/-/g, '').slice(0, 8);
+        const module = `test_case_table_coverage_${id}`;
         const run = await runTestFile(runtime, module, code, true);
         if (!run.passed || !run.targetObserved) { return unavailable('coverage-run-failed'); }
         const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);

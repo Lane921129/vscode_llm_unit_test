@@ -5,7 +5,7 @@ import {
 } from '../roles/semanticAnalyzer';
 import { parseRequirements } from '../pipeline/caseTable/requirements';
 import { readCaseTableFacts } from '../pipeline/caseTable/caseTableFacts';
-import { readPipelineVersion, readSpecOracleSetting } from '../pipeline/caseTable/runCaseTablePipeline';
+import { readPipelineVersion, readQualityAnalystSetting, readSpecOracleSetting } from '../pipeline/caseTable/runCaseTablePipeline';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
 const facts: CaseScenarioPromptFacts = {
@@ -73,6 +73,9 @@ test('settings default to v1 and auto; facts tool errors are tool failures', () 
     assert.equal(readPipelineVersion('v2-case-table'), 'v2-case-table');
     assert.equal(readSpecOracleSetting('off'), 'off');
     assert.equal(readSpecOracleSetting('anything'), 'auto');
+    assert.equal(readQualityAnalystSetting('off'), 'off');
+    assert.equal(readQualityAnalystSetting('anything'), 'auto');
+    assert.equal(readQualityAnalystSetting(undefined), 'auto');
     assert.throws(() => readCaseTableFacts('{"version":"case-table-facts-v1","error":"target-not-found"}'), /case-table-facts-failed/);
     assert.throws(() => readCaseTableFacts('nope'), /case-table-facts-malformed/);
 });

@@ -23,7 +23,13 @@ const coverageInstalled = spawnSync(python, ['-c', 'import coverage'], { stdio: 
 const COVERAGE_MISSING_NOTICE = '[v2 golden] coverage 套件不存在，覆蓋率成功路徑未驗證 (coverage package missing; coverage success path NOT verified)';
 const line = (fields: Record<string, string>) => JSON.stringify({ kwargs: '{}', mocks: '', requirement: '', ...fields });
 
-const scenarios = [
+const scenarios: Array<{
+    name: string;
+    source: string;
+    target: string;
+    qualityAnalyst?: 'auto' | 'off';
+    replies: string[];
+}> = [
     {
         name: 'bmi', source: path.join(root, 'test', 'test_mut', 'bmi.py'), target: 'calculate_bmi',
         replies: [[
@@ -33,6 +39,22 @@ const scenarios = [
             line({ scenario: '肥胖', category: 'normal', args: '(90, 170)' }),
             line({ scenario: '參數過多（故意壞列）', category: 'error', args: '(1, 2, 3)' })
         ].join('\n')]
+    },
+    {
+        name: 'bmi-quality-analyst', source: path.join(root, 'test', 'test_mut', 'bmi.py'), target: 'calculate_bmi',
+        qualityAnalyst: 'auto',
+        replies: [
+            [
+                line({ scenario: '一般體重', category: 'normal', args: '(65, 170)' }),
+                line({ scenario: '健康下界', category: 'boundary', args: '(53.465, 170)' }),
+                line({ scenario: '身高為 0', category: 'error', args: '(60, 0)' }),
+                line({ scenario: '肥胖', category: 'normal', args: '(90, 170)' }),
+                line({ scenario: '參數過多（故意壞列）', category: 'error', args: '(1, 2, 3)' })
+            ].join('\n'),
+            line({ scenario: '嘗試區分平方等價突變（無法區分）', category: 'normal', args: '(60, 160)' }),
+            line({ scenario: '體重過輕區分存活突變', category: 'boundary', args: '(45, 170)' }),
+            line({ scenario: '體重過重區分存活突變', category: 'boundary', args: '(75, 170)' })
+        ]
     },
     {
         name: 'database', source: path.join(root, 'eval', 'eval_screening', 'vehicle_db.py'), target: 'authenticate_user',
@@ -56,7 +78,7 @@ for (const scenario of scenarios) {
             const replies = [...scenario.replies];
             const result = await runCaseTablePipeline({
                 filePath: file, funcName: scenario.target, projectRoot: project, outputPath: path.join(directory, 'out'),
-                sessionDate: 'golden', pythonExecutable: python, specOracle: 'off', qualityAnalyst: 'off',
+                sessionDate: 'golden', pythonExecutable: python, specOracle: 'off', qualityAnalyst: scenario.qualityAnalyst ?? 'off',
                 requestModel: async () => { const reply = replies.shift(); if (reply === undefined) { throw new Error('unexpected request'); } return reply; },
                 log: () => undefined, mutation: { engine: 'builtin', workers: 1, stageSeconds: 120 }
             });
