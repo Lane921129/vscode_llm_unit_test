@@ -56,7 +56,7 @@ for (const scenario of scenarios) {
             const replies = [...scenario.replies];
             const result = await runCaseTablePipeline({
                 filePath: file, funcName: scenario.target, projectRoot: project, outputPath: path.join(directory, 'out'),
-                sessionDate: 'golden', pythonExecutable: python, specOracle: 'off',
+                sessionDate: 'golden', pythonExecutable: python, specOracle: 'off', qualityAnalyst: 'off',
                 requestModel: async () => { const reply = replies.shift(); if (reply === undefined) { throw new Error('unexpected request'); } return reply; },
                 log: () => undefined, mutation: { engine: 'builtin', workers: 1, stageSeconds: 120 }
             });

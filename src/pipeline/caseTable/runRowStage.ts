@@ -8,12 +8,14 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { CaseRow, needsSetup, transitionCaseRow } from './caseTable';
+import { CaseRow, needsSetup, nextCaseRowIndex, transitionCaseRow } from './caseTable';
 import { CaseTableFacts } from './caseTableFacts';
 import { buildCaseTableTestFile, buildRowTestMethod, RowExpectation, RowTestContext, rowTestMethodName } from './rowToTest';
-import { captureRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile } from './rowExecution';
+import { captureRow, captureSurvivorRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile } from './rowExecution';
 import { getRowSetupPrompt, parseRowSetupResponse } from '../../roles/unittestWriter';
 import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../../roles/bugFixer';
+import { getSurvivorRowPrompt, parseSurvivorRow } from '../../roles/qualityAnalyst';
+import { currentStopPolicy } from '../stopPolicy';
 
 export type RowStageTerminal = 'usable' | 'failed';
 export const CASE_TABLE_TEST_FILE = 'test_case_table.py';
@@ -22,10 +24,12 @@ export interface RowStageOptions {
     runtime: RowRuntime;
     facts: CaseTableFacts;
     rows: CaseRow[];
-    ask: (system: string, user: string, options: { role: 'writer-row-setup' | 'bug-fixer-row' | 'analyst-spec' | 'analyst-spec-correction';
+    ask: (system: string, user: string, options: { role: 'writer-row-setup' | 'bug-fixer-row' | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst';
         temperature?: number }) => Promise<string>;
     mutation: { engine: unknown; workers: unknown; stageSeconds: number };
     log: (text: string) => void;
+    /** PR #10: whether to run Quality Analyst survivor loop (default true). */
+    qualityAnalyst?: boolean;
     /** PR #8 hook: decide the expected value after capture; default keeps the observed outcome. */
     decideExpected?: (row: CaseRow, capture: CaptureReport) => Promise<{ row: CaseRow; expectation: RowExpectation | null }>;
 }
@@ -123,7 +127,166 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     const mutation = await measureMutation(runtime, mergedRun.testFile, { ...options.mutation, className: facts.className ?? '' });
     options.log(`[v2] ${passing.size} passing row tests; line coverage ${coverage.available ? `${coverage.linePercent}%` : `unavailable (${coverage.reasonCode})`}; `
         + `mutation score ${mutation.score ?? 'unavailable'}.`);
-    return mutation.score === null
-        ? { rows, terminal: 'failed', reasonCode: 'mutation-unmeasured', testFile: mergedRun.testFile, mutation, coverage, passingMethods: passing.size, setups }
-        : { rows, terminal: 'usable', reasonCode: 'usable', testFile: mergedRun.testFile, mutation, coverage, passingMethods: passing.size, setups };
+    if (mutation.score === null) {
+        return { rows, terminal: 'failed', reasonCode: 'mutation-unmeasured', testFile: mergedRun.testFile, mutation, coverage, passingMethods: passing.size, setups };
+    }
+
+    let currentMutation = mutation;
+    let currentMerged = merged;
+    let currentMergedRun = mergedRun;
+    let currentCoverage = coverage;
+
+    const survivors = currentMutation.run?.mutants.filter(m => m.status === 'SURVIVED') ?? [];
+    if (options.qualityAnalyst !== false && survivors.length > 0) {
+        const stopPolicy = currentStopPolicy();
+        const qualityNoImprovementLimit = stopPolicy?.settings.qualityNoImprovementLimit ?? 3;
+        const maxAttempts = 3;
+        let attempts = 0;
+        let noImprovementCount = 0;
+        const attemptedIds = new Set<string>();
+
+        while (attempts < maxAttempts && noImprovementCount < qualityNoImprovementLimit) {
+            const remainingSurvivors = (currentMutation.run?.mutants.filter(m => m.status === 'SURVIVED') ?? [])
+                .filter(m => !attemptedIds.has(m.id));
+            if (!remainingSurvivors.length) { break; }
+            const survivor = remainingSurvivors[0];
+            attemptedIds.add(survivor.id);
+            attempts += 1;
+
+            options.log(`[v2] Quality Analyst targeting surviving mutant at line ${survivor.line} (${survivor.from} -> ${survivor.to}, attempt ${attempts}/${maxAttempts}).`);
+            const prompt = getSurvivorRowPrompt({
+                signature: facts.signature,
+                className: facts.className ?? undefined,
+                methodKind: facts.methodKind,
+                source: facts.source,
+                dependencies: facts.dependencies,
+                survivor: {
+                    line: survivor.line,
+                    original: survivor.codeChange?.before ?? `${survivor.from} (line ${survivor.line})`,
+                    mutated: survivor.codeChange?.after ?? `${survivor.to} (line ${survivor.line})`
+                }
+            });
+            let reply: string;
+            try {
+                reply = await options.ask(prompt.system, prompt.user, { role: 'quality-analyst' });
+            } catch (askError) {
+                options.log(`[v2] Quality Analyst request failed: ${(askError as Error)?.message}`);
+                noImprovementCount += 1;
+                continue;
+            }
+            const candidateRow = parseSurvivorRow(reply, { firstIndex: nextCaseRowIndex(rows) });
+            if (!candidateRow) {
+                options.log(`[v2] Quality Analyst response could not be parsed as a case row.`);
+                noImprovementCount += 1;
+                continue;
+            }
+            let row = candidateRow;
+            rows.push(row);
+            const rowIndex = rows.length - 1;
+
+            let setup: string | undefined;
+            if (needsSetup(row.call) || facts.methodKind === 'instance') {
+                const description = needsSetup(row.call) ? row.call.needsSetup
+                    : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
+                const setupPrompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
+                    targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
+                setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' })) ?? undefined;
+                if (!setup) {
+                    rows[rowIndex] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable');
+                    noImprovementCount += 1;
+                    continue;
+                }
+                setups.set(row.id, setup);
+            }
+
+            const dualCapture = await captureSurvivorRow(runtime, needsSetup(row.call)
+                ? { id: row.id, setup, mocks: row.mocks }
+                : { id: row.id, args: row.call.args, kwargs: row.call.kwargs, ...(setup ? { setup } : {}), mocks: row.mocks },
+                survivor, facts.dependencies);
+
+            if (!dualCapture.distinguishable || dualCapture.status !== 'distinguishable') {
+                const reason = dualCapture.reason || (dualCapture.status === 'indistinguishable' ? 'survivor-row-indistinguishable' : 'capture-failed');
+                options.log(`[v2] Quality Analyst row ${row.id} not distinguishable (${reason}).`);
+                rows[rowIndex] = transitionCaseRow(row, 'capture-failed', reason);
+                noImprovementCount += 1;
+                continue;
+            }
+
+            row = transitionCaseRow(row, 'captured');
+            const decided = options.decideExpected ? await options.decideExpected(row, dualCapture.clean) : observedExpectation(row, dualCapture.clean);
+            row = decided.row;
+            if (!decided.expectation) {
+                rows[rowIndex] = row;
+                noImprovementCount += 1;
+                continue;
+            }
+
+            let method = buildRowTestMethod(row, context, decided.expectation, setup);
+            row = { ...transitionCaseRow(row, 'test-generated'), testMethod: rowTestMethodName(row) };
+            let attempt = 0;
+            let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test`, buildCaseTableTestFile(context, [method]));
+            while (!(run.passed && run.targetObserved) && attempt < ROW_FIX_MAX_ATTEMPTS) {
+                attempt += 1;
+                const fixPrompt = getRowFixPrompt({ signature: facts.signature, scenario: row.scenario, methodName: row.testMethod!,
+                    method, error: run.error || 'The test did not call the function under test.' });
+                const fixed = parseRowFixResponse(await options.ask(fixPrompt.system, fixPrompt.user, { role: 'bug-fixer-row' }), row.testMethod!);
+                const verdict = fixed ? await fixPreservesContract(runtime, method, fixed, row.testMethod!, callees)
+                    : { accepted: false, violations: ['method-missing'] };
+                if (!verdict.accepted) {
+                    options.log(`[v2] ${row.id}: fix ${attempt} rejected (${verdict.violations.join(', ')}).`);
+                    continue;
+                }
+                method = fixed!;
+                run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test`, buildCaseTableTestFile(context, [method]));
+            }
+
+            if (!(run.passed && run.targetObserved)) {
+                rows[rowIndex] = transitionCaseRow(row, 'test-failed', run.passed ? 'target-not-called' : 'test-failed');
+                noImprovementCount += 1;
+                continue;
+            }
+
+            rows[rowIndex] = transitionCaseRow(row, 'test-passed');
+            passing.set(row.id, method);
+            if (setup) { setups.set(row.id, setup); }
+
+            // Candidate merged test run to check mutation score improvement
+            const candidateMerged = buildCaseTableTestFile(context, rows.filter(r => passing.has(r.id)).map(r => passing.get(r.id)!));
+            const candidateRun = await runTestFile(runtime, `test_candidate_${row.id.toLowerCase()}`, candidateMerged);
+            if (!(candidateRun.passed && candidateRun.targetObserved)) {
+                options.log(`[v2] Candidate merged test for survivor row ${row.id} failed; reverting.`);
+                passing.delete(row.id);
+                noImprovementCount += 1;
+                continue;
+            }
+
+            const candidateMutation = await measureMutation(runtime, candidateRun.testFile, { ...options.mutation, className: facts.className ?? '' });
+            if (candidateMutation.score !== null && (currentMutation.score === null || candidateMutation.score > currentMutation.score)) {
+                options.log(`[v2] Survivor row ${row.id} improved mutation score from ${currentMutation.score} to ${candidateMutation.score}.`);
+                currentMutation = candidateMutation;
+                currentMerged = candidateMerged;
+                currentMergedRun = candidateRun;
+                currentCoverage = await measureCoverage(runtime, candidateMerged);
+                noImprovementCount = 0;
+            } else {
+                options.log(`[v2] Survivor row ${row.id} did not improve mutation score (${candidateMutation.score} <= ${currentMutation.score}); retaining baseline.`);
+                passing.delete(row.id);
+                noImprovementCount += 1;
+            }
+        }
+    }
+
+    // Ensure the final test file contains the accepted tests
+    fs.writeFileSync(path.join(runtime.artifacts, CASE_TABLE_TEST_FILE), currentMerged, 'utf8');
+
+    return {
+        rows,
+        terminal: 'usable',
+        reasonCode: 'usable',
+        testFile: path.join(runtime.artifacts, CASE_TABLE_TEST_FILE),
+        mutation: currentMutation,
+        coverage: currentCoverage,
+        passingMethods: passing.size,
+        setups
+    };
 }

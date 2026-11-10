@@ -1104,7 +1104,221 @@ def run_mutation_trials(source_path, test_path, max_mutations=30, timeout_second
     return result
 
 
+def get_mutant_source(source_path, target_function=None, target_class=None, mutant_id=None,
+                      line=None, from_val=None, to_val=None, code_change=None,
+                      operator_version=OPERATOR_SET_VERSION_V3):
+    """Return (mutant_source, candidate_record) for the matching mutant."""
+    source_file = Path(source_path).resolve()
+    original_source = source_file.read_bytes().decode('utf-8')
+    source_hash = hashlib.sha256(original_source.encode('utf-8')).hexdigest()
+    tree = ast.parse(original_source, filename=str(source_file))
+    scope = find_target_scope(tree, target_function, target_class)
+    if scope is None:
+        raise ValueError(f'Target scope {target_function} not found in {source_path}')
+    scope_name = (target_function if target_function and '.' in target_function
+                  else f'{target_class + "." if target_class else ""}{target_function or "module"}')
+    scope_version = FUNCTION_SCOPE_VERSION if target_function else MODULE_SCOPE_VERSION
+
+    versions = ([operator_version] if operator_version in (OPERATOR_SET_VERSION, OPERATOR_SET_VERSION_V2, OPERATOR_SET_VERSION_V3)
+                else [OPERATOR_SET_VERSION_V3, OPERATOR_SET_VERSION_V2])
+    for op_ver in versions:
+        if op_ver == OPERATOR_SET_VERSION:
+            candidate_stream = ((c, apply_mutation(tree, idx, target_function, target_class), None)
+                                for idx, c in enumerate(mutation_candidates(tree, scope)))
+        elif op_ver == OPERATOR_SET_VERSION_V2:
+            candidate_stream = ((c, var, None) for c, var in iter_mutations(tree, scope))
+        else:
+            candidate_stream = ((c, var, None) for c, var in iter_mutations_v3(tree, scope))
+
+        seen_variants = set()
+        original_ast = ast.dump(tree, include_attributes=False)
+        for candidate, variant, provided_source in candidate_stream:
+            ast.fix_missing_locations(variant)
+            variant_ast = ast.dump(variant, include_attributes=False)
+            if variant_ast == original_ast or variant_ast in seen_variants:
+                continue
+            try:
+                compile(variant, str(source_file), 'exec')
+            except (SyntaxError, TypeError, ValueError):
+                continue
+            seen_variants.add(variant_ast)
+            variant_hash = hashlib.sha256(variant_ast.encode('utf-8')).hexdigest()
+            identity = json.dumps([op_ver, scope_version, source_hash, scope_name, candidate, variant_hash],
+                                  sort_keys=True, separators=(',', ':'))
+            cand_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+            mutant_source = provided_source if provided_source is not None else ast.unparse(variant) + '\n'
+
+            matched = False
+            if mutant_id and cand_id == mutant_id:
+                matched = True
+            elif line is not None and candidate.get('line') == line:
+                if from_val is not None and candidate.get('from') != from_val:
+                    pass
+                elif to_val is not None and candidate.get('to') != to_val:
+                    pass
+                else:
+                    matched = True
+
+            if matched:
+                record = {**candidate, 'id': cand_id}
+                return mutant_source, record
+
+    if isinstance(code_change, dict) and code_change.get('before') and code_change.get('after'):
+        before, after = code_change['before'], code_change['after']
+        if before in original_source:
+            mutant_source = original_source.replace(before, after, 1)
+            record = {'id': mutant_id or 'unknown', 'line': line or 0, 'from': from_val or '', 'to': to_val or ''}
+            return mutant_source, record
+
+    raise ValueError(f'Mutant not found: id={mutant_id}, line={line}, from={from_val}, to={to_val}')
+
+
+def dual_capture_mutant(request):
+    """Run capture on clean and mutated sources, return distinction outcome."""
+    req_version = request.get('version')
+    if req_version != 'case-mutant-capture-request-v1':
+        return {'version': 'case-mutant-capture-v1', 'error': 'invalid-request'}
+
+    source_path = request['file']
+    target = request['target']
+    row = request['row']
+    row_id = row.get('id', 'unknown')
+    dependencies = request.get('dependencies', [])
+    import_paths = request.get('importPaths', [])
+    mutant_info = request.get('mutant', {})
+    operator_version = request.get('operatorVersion', OPERATOR_SET_VERSION_V3)
+
+    target_func = target.split('.')[-1]
+    target_class = target.split('.')[0] if '.' in target else None
+
+    # Step 1: Run clean capture via case_capture_runner in subprocess
+    clean_req = {
+        'version': 'case-capture-request-v1',
+        'file': source_path,
+        'target': target,
+        'importPaths': import_paths or [str(Path(source_path).parent)],
+        'dependencies': dependencies,
+        'row': row
+    }
+    case_capture_path = str(Path(__file__).parent / 'case_capture_runner.py')
+    clean_proc = subprocess.run(
+        [sys.executable, '-B', '-X', 'utf8', case_capture_path],
+        input=json.dumps(clean_req),
+        capture_output=True,
+        text=True,
+        timeout=15
+    )
+    try:
+        clean_report = json.loads(clean_proc.stdout)
+    except Exception:
+        clean_report = {'version': 'case-capture-v1', 'id': row_id, 'status': 'capture-failed', 'reason': 'clean-capture-parse-failed'}
+
+    if clean_report.get('status') != 'captured':
+        return {
+            'version': 'case-mutant-capture-v1',
+            'id': row_id,
+            'status': 'capture-failed',
+            'distinguishable': False,
+            'reason': clean_report.get('reason', 'clean-capture-failed'),
+            'clean': clean_report,
+            'mutant': None
+        }
+
+    # Step 2: Obtain mutant source
+    try:
+        mutant_source, _ = get_mutant_source(
+            source_path=source_path,
+            target_function=target_func,
+            target_class=target_class,
+            mutant_id=mutant_info.get('id'),
+            line=mutant_info.get('line'),
+            from_val=mutant_info.get('from'),
+            to_val=mutant_info.get('to'),
+            code_change=mutant_info.get('codeChange'),
+            operator_version=operator_version
+        )
+    except Exception as exc:
+        return {
+            'version': 'case-mutant-capture-v1',
+            'id': row_id,
+            'status': 'capture-failed',
+            'distinguishable': False,
+            'reason': f'mutant-source-unavailable: {exc}',
+            'clean': clean_report,
+            'mutant': None
+        }
+
+    # Step 3: Run mutant capture in isolated temporary directory
+    source_file = Path(source_path).resolve()
+    with tempfile.TemporaryDirectory(prefix='mutant_cap_') as td:
+        mutant_file = Path(td) / source_file.name
+        mutant_file.write_text(mutant_source, encoding='utf-8')
+        mutant_import_paths = [td, *(import_paths or [str(source_file.parent)])]
+
+        mutant_req = {
+            'version': 'case-capture-request-v1',
+            'file': str(mutant_file),
+            'target': target,
+            'importPaths': mutant_import_paths,
+            'dependencies': dependencies,
+            'row': row
+        }
+        mutant_proc = subprocess.run(
+            [sys.executable, '-B', '-X', 'utf8', case_capture_path],
+            input=json.dumps(mutant_req),
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+        try:
+            mutant_report = json.loads(mutant_proc.stdout)
+        except Exception:
+            mutant_report = {'version': 'case-capture-v1', 'id': row_id, 'status': 'capture-failed', 'reason': 'mutant-capture-parse-failed'}
+
+    # Step 4: Compare outcomes
+    clean_actual = clean_report.get('actual')
+    mutant_actual = mutant_report.get('actual')
+
+    if mutant_report.get('status') == 'captured':
+        if clean_actual == mutant_actual:
+            return {
+                'version': 'case-mutant-capture-v1',
+                'id': row_id,
+                'status': 'indistinguishable',
+                'distinguishable': False,
+                'reason': 'survivor-row-indistinguishable',
+                'clean': clean_report,
+                'mutant': mutant_report
+            }
+        else:
+            return {
+                'version': 'case-mutant-capture-v1',
+                'id': row_id,
+                'status': 'distinguishable',
+                'distinguishable': True,
+                'clean': clean_report,
+                'mutant': mutant_report
+            }
+    else:
+        return {
+            'version': 'case-mutant-capture-v1',
+            'id': row_id,
+            'status': 'distinguishable',
+            'distinguishable': True,
+            'clean': clean_report,
+            'mutant': mutant_report
+        }
+
+
 if __name__ == '__main__':
+    if '--capture-mutant' in sys.argv:
+        try:
+            request_data = json.loads(sys.stdin.read())
+            report = dual_capture_mutant(request_data)
+        except Exception as exc:
+            report = {'version': 'case-mutant-capture-v1', 'error': str(exc)}
+        sys.stdout.write(json.dumps(report, ensure_ascii=False))
+        sys.exit(1 if 'error' in report else 0)
     activate_functions = '--activate-functions' in sys.argv
     if sys.argv.count('--activate-functions') > 1:
         print(json.dumps({'error': 'invalid-arguments'}))
