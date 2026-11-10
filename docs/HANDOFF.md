@@ -746,7 +746,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（4/4 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | 本筆 |
+| 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（4/4 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | `816d515` |
 | 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `55f5448` |
 | 2026-11-09 23:30 | Claude Code | PR #12a 彙總支援 v2、對照組執行器、三組測試 | VM 非正式：types／lint 0、related 26/26、Python 10/10、v2 golden 2/2 無差異；待使用者 Windows fast／python／golden／integration；未合併、未 push | 本筆 |
 | 2026-11-09 22:20 | Claude Code | 記錄 PR #5～#8 驗收與合併、v2 提示詞核准；開 `pr/12a-eval-recording` | 由監督完成合併；本筆只更新文件 | 本筆 |
