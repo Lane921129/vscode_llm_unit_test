@@ -233,3 +233,37 @@ test('PR #13: v1/v2 pipeline version toggle updates v2-settings display and post
     assert.equal(v2Settings.style.display, 'none', 'v2-settings should be hidden in v1 mode');
     assert.equal(env.messages.at(-1).value, 'v1');
 });
+
+test('PR #13: qualityAnalyst dropdown is shown in v2, hidden in v1, and writes setting', () => {
+    const env = createMockEnvironment();
+    const pipelineSelect = env.elements.get('pipeline-version');
+    const v2Settings = env.elements.get('v2-settings');
+    const qualityAnalystSelect = env.elements.get('quality-analyst');
+    assert.ok(pipelineSelect);
+    assert.ok(v2Settings);
+    assert.ok(qualityAnalystSelect, 'quality-analyst dropdown must exist in DOM');
+
+    // 1. Initial state (v1): v2-settings is hidden
+    assert.equal(v2Settings.style.display, 'none', 'v2-settings must be hidden initially in v1 mode');
+
+    // 2. Switch to v2: v2-settings (containing quality-analyst) is shown
+    pipelineSelect.value = 'v2-case-table';
+    pipelineSelect.onchange?.({ target: { value: 'v2-case-table' } });
+    assert.equal(v2Settings.style.display, 'block', 'v2-settings must be shown in v2 mode');
+
+    // 3. Changing dropdown writes setting to llmUnitTest.qualityAnalyst
+    qualityAnalystSelect.value = 'off';
+    qualityAnalystSelect.onchange?.({ target: { value: 'off' } });
+    const offMsg = env.messages.find(m => m.command === 'setPipelineSetting' && m.key === 'qualityAnalyst' && m.value === 'off');
+    assert.ok(offMsg, 'changing quality-analyst should post setPipelineSetting message with value off');
+
+    qualityAnalystSelect.value = 'auto';
+    qualityAnalystSelect.onchange?.({ target: { value: 'auto' } });
+    const autoMsg = env.messages.find(m => m.command === 'setPipelineSetting' && m.key === 'qualityAnalyst' && m.value === 'auto');
+    assert.ok(autoMsg, 'changing quality-analyst should post setPipelineSetting message with value auto');
+
+    // 4. Switch back to v1: v2-settings is hidden again
+    pipelineSelect.value = 'v1';
+    pipelineSelect.onchange?.({ target: { value: 'v1' } });
+    assert.equal(v2Settings.style.display, 'none', 'v2-settings must be hidden when switching back to v1');
+});

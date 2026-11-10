@@ -4,7 +4,7 @@ import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettin
 import { planAnalysisTargetBudget } from '../pipeline/targetBudget';
 
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false,
-    pipeline: { version: string; specOracle: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', requirementsFile: '' }) {
+    pipeline: { version: string; specOracle: string; qualityAnalyst?: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', qualityAnalyst: 'auto', requirementsFile: '' }) {
     const attribute = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const isV2 = pipeline.version === 'v2-case-table';
     const selectedFocus = resolveTestFocus(currentStrategy);
@@ -289,6 +289,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             <select id="spec-oracle">
                 <option value="auto" ${pipeline.specOracle === 'off' ? '' : 'selected'}>${t('ui.specOracleAuto')}</option>
                 <option value="off" ${pipeline.specOracle === 'off' ? 'selected' : ''}>${t('ui.specOracleOff')}</option>
+            </select>
+            <label for="quality-analyst" style="margin-top:8px;">${t('ui.qualityAnalyst')}</label>
+            <select id="quality-analyst">
+                <option value="auto" ${pipeline.qualityAnalyst === 'off' ? '' : 'selected'}>${t('ui.qualityAnalystAuto')}</option>
+                <option value="off" ${pipeline.qualityAnalyst === 'off' ? 'selected' : ''}>${t('ui.qualityAnalystOff')}</option>
             </select>
         </div>
         <label for="validation-mode">${t('ui.validationScope')}</label>
@@ -1411,6 +1416,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('spec-oracle').onchange = (e) => {
             if (analysisRunning) return;
             vscode.postMessage({ command: 'setPipelineSetting', key: 'specOracle', value: e.target.value });
+        };
+        document.getElementById('quality-analyst').onchange = (e) => {
+            if (analysisRunning) return;
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'qualityAnalyst', value: e.target.value });
         };
         document.getElementById('requirements-file-pick').onclick = () => {
             if (analysisRunning) return;
