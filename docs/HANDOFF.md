@@ -130,7 +130,7 @@
 
 ## 2. PR #12b 進度（最新）
 
-### PR #12b 埋 bug 評估（2026-11-09 Antigravity）
+### PR #12b 埋 bug 評估（2026-11-09 Antigravity，11/10 監督核對後修正）
 
 - 依架構 6.4 節於 `eval/seeded_bugs/` 建立 16 個語意 bug，涵蓋 6 大類型（每類至少 2 個、每個目標最多 2 個，目標選自 `eval_screening/` 有規格來源之函式）：
   - 邊界運算子 (boundary-operator)：3 個（bug_01_bmi_upper_boundary、bug_02_range_non_inclusive、bug_03_char_value_digit_boundary）。
@@ -141,12 +141,15 @@
   - 條件反向 (condition-inversion)：3 個（bug_14_html_escape_quote_inversion、bug_15_iban_empty_string_check、bug_16_char_value_digit_condition）。
   - 每個 bug 均驗證：unified diff patch 能乾淨套用、套用後模組仍可 import、witness 呼叫在乾淨版與 bug 版產出不同輸出（記錄於 `meta.json`）。
   - `vehicle_time_utils.py` 原無 docstring，僅在評估副本補上並註明 `docstringAdded: true`。
-- 新增 `python_scripts/eval_seeded_bugs.py`：
+- `python_scripts/eval_seeded_bugs.py`：
   - `prepare` 子命令：將每個 bug 套用到獨立副本（輸出於指定資料夾，不寫入 repo），產生乾淨版副本與它的 `targets.json`，以及合併所有 bug 的 `targets.json`（路徑為 `bugs/<bug_id>/<sourceFile>`）。
-  - `analyze` 子命令：讀取 v1、v2、對照組在 bug 版與乾淨版上的結果資料夾，重跑乾淨版（使用 `generated_test_runner.py`）量測 bug 被寫成正確答案之比例，並計算偵測率（`spec-mismatch` 與 `needs-review`，對照組與 v1 標為 N/A）與乾淨版誤報平均數，產出 `seeded_bug_report.md` 與 `seeded_bug_report.json`。
-- 新增 `python_scripts/test_eval_seeded_bugs.py`：驗證 patch 套用、`prepare` 結構、重跑乾淨版失敗判定、以及三大指標計算；登記於 `test/verificationConfig.js`（Python 模組數 63→64）與 `src/test/verificationRunner.test.ts`。
+  - `analyze` 子命令（11/10 依監督指示修正）：
+    1. 不再以 `terminalStatus` 推斷 bug 版通過，改為只要交付正式測試檔即在 bug 版重跑隔離 runner；未交付測試檔列為「沒有測試」（計入分母、不計分子）。
+    2. 乾淨版重跑要求 runner 正常完成、目標確實被呼叫且測試為 failure 或 error（來自目標行為）才算 `failedOnClean=True`；其他非被測行為錯誤列為 `cleanRecheck='unavailable'`（不計分子並另列）。
+    3. `find_formal_test_file` 補齊 v1 `quality_baseline.json` 與 `executable_baseline.json` 讀取，支援 `retained-after-failure` 重跑。
+- `python_scripts/test_eval_seeded_bugs.py`（8/8 通過）：驗證 patch 套用、`prepare` 結構、三大指標計算、乾淨版 runner 失敗 unavailable 分離、bug 版通過＋乾淨版 assertion 失敗計入、bug 版通過＋乾淨版例外 error 計入、以及 v1 retained-after-failure 測試重跑判定。
 - `eval/README.md` 補齊四步驟操作流程說明（第 6 節）。
-- 驗證：`npm run check-types`（0）、`npm run lint`（0）、`python python_scripts/secret_scan.py`（通過）、`test_eval_seeded_bugs.py`（4/4 通過）、`verificationRunner.test.ts`（16/16 通過）。
+- 驗證（Windows 原生）：`npm run check-types`（0）、`npm run lint`（0）、`python python_scripts/secret_scan.py`（通過）、`test_eval_seeded_bugs.py`（8/8 通過）。
 
 ---
 

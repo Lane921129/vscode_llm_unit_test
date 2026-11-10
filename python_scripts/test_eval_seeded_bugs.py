@@ -269,6 +269,203 @@ class TestEvalSeededBugs(unittest.TestCase):
             # For control: target A passed and failed on clean (1), target B failed on bug (0) -> 1/2 = 50%
             self.assertEqual(ctrl_res['bugWrittenAsCorrectAnswerRate'], 0.5)
 
+    def test_clean_recheck_runner_failure_marked_unavailable_not_counted(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            clean_dir = work / 'clean_proj'
+            clean_dir.mkdir()
+            (clean_dir / 'calc.py').write_text("def calc(x):\n    return x + 1\n", encoding='utf-8')
+
+            test_dir = work / 'test_dir'
+            test_dir.mkdir()
+            bad_test_file = test_dir / 'test_bad_import.py'
+            bad_test_file.write_text(
+                "import unittest\nfrom calc import calc\nimport non_existent_pkg_xyz\n\n"
+                "class BadTests(unittest.TestCase):\n"
+                "    def test_call(self):\n"
+                "        self.assertEqual(calc(1), 2)\n",
+                encoding='utf-8'
+            )
+
+            res = re_run_test_on_clean(
+                python=sys.executable,
+                test_file_path=bad_test_file,
+                clean_dir=clean_dir,
+                source_filename='calc.py',
+                target='calc',
+                temp_workdir=work / 'tmp'
+            )
+            self.assertEqual(res['cleanRecheck'], 'unavailable')
+            self.assertFalse(res['failedOnClean'])
+            self.assertIsNotNone(res['reason'])
+
+    def test_bug_passed_and_clean_assertion_failure_counted(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            clean_dir = work / 'clean_proj'
+            clean_dir.mkdir()
+            (clean_dir / 'math_mod.py').write_text("def add_ten(x):\n    return x + 10\n", encoding='utf-8')
+
+            bugs_dir = work / 'bugs'
+            bugs_dir.mkdir()
+            bug_dir = bugs_dir / 'bug_01'
+            bug_dir.mkdir()
+            (bug_dir / 'meta.json').write_text(json.dumps({
+                'id': 'bug_01',
+                'sourceFile': 'math_mod.py',
+                'target': 'add_ten',
+                'type': 'boundary-operator',
+                'description': 'returns x + 20 instead of x + 10'
+            }), encoding='utf-8')
+            (bug_dir / 'patch').write_text(
+                "--- a/math_mod.py\n+++ b/math_mod.py\n@@ -1,2 +1,2 @@\n def add_ten(x):\n-    return x + 10\n+    return x + 20\n",
+                encoding='utf-8'
+            )
+
+            results_dir = work / 'results'
+            results_dir.mkdir()
+            target_dir = results_dir / 'math_mod_add_ten'
+            target_dir.mkdir()
+            (target_dir / 'test_case_table.py').write_text(
+                "import unittest\nfrom math_mod import add_ten\n\n"
+                "class BugAssertTests(unittest.TestCase):\n"
+                "    def test_math(self):\n"
+                "        self.assertEqual(add_ten(5), 25)\n",
+                encoding='utf-8'
+            )
+
+            analysis = analyze_seeded_bugs(
+                clean_dir=clean_dir,
+                bugs_dir=bugs_dir,
+                method_results={'v2': {'bugs': results_dir, 'clean': None}},
+                output_dir=work / 'out',
+                python=sys.executable
+            )
+            v2_res = analysis['methods'][0]
+            rec = v2_res['perBugRecords'][0]
+            self.assertTrue(rec['formalPassedOnBug'])
+            self.assertEqual(rec['cleanRecheck'], 'failed')
+            self.assertTrue(rec['failedOnClean'])
+            self.assertTrue(rec['writtenAsCorrect'])
+            self.assertEqual(v2_res['bugWrittenAsCorrectAnswerRate'], 1.0)
+            self.assertEqual(v2_res['bugWrittenAsCorrectAnswerRatio'], '1/1')
+
+    def test_bug_passed_and_clean_target_exception_error_counted(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            clean_dir = work / 'clean_proj'
+            clean_dir.mkdir()
+            (clean_dir / 'div_mod.py').write_text(
+                "def safe_div(x, y):\n    if y == 0:\n        raise ZeroDivisionError('cannot divide by zero')\n    return x // y\n",
+                encoding='utf-8'
+            )
+
+            bugs_dir = work / 'bugs'
+            bugs_dir.mkdir()
+            bug_dir = bugs_dir / 'bug_02'
+            bug_dir.mkdir()
+            (bug_dir / 'meta.json').write_text(json.dumps({
+                'id': 'bug_02',
+                'sourceFile': 'div_mod.py',
+                'target': 'safe_div',
+                'type': 'unhandled-exception',
+                'description': 'returns 0 instead of raising ZeroDivisionError'
+            }), encoding='utf-8')
+            (bug_dir / 'patch').write_text(
+                "--- a/div_mod.py\n+++ b/div_mod.py\n@@ -1,4 +1,2 @@\n def safe_div(x, y):\n-    if y == 0:\n-        raise ZeroDivisionError('cannot divide by zero')\n-    return x // y\n+    return 0 if y == 0 else x // y\n",
+                encoding='utf-8'
+            )
+
+            results_dir = work / 'results'
+            results_dir.mkdir()
+            target_dir = results_dir / 'div_mod_safe_div'
+            target_dir.mkdir()
+            (target_dir / 'test_case_table.py').write_text(
+                "import unittest\nfrom div_mod import safe_div\n\n"
+                "class DivTests(unittest.TestCase):\n"
+                "    def test_zero(self):\n"
+                "        self.assertEqual(safe_div(10, 0), 0)\n",
+                encoding='utf-8'
+            )
+
+            analysis = analyze_seeded_bugs(
+                clean_dir=clean_dir,
+                bugs_dir=bugs_dir,
+                method_results={'v2': {'bugs': results_dir, 'clean': None}},
+                output_dir=work / 'out',
+                python=sys.executable
+            )
+            v2_res = analysis['methods'][0]
+            rec = v2_res['perBugRecords'][0]
+            self.assertTrue(rec['formalPassedOnBug'])
+            self.assertEqual(rec['cleanRecheck'], 'failed')
+            self.assertTrue(rec['failedOnClean'])
+            self.assertTrue(rec['writtenAsCorrect'])
+            self.assertEqual(v2_res['bugWrittenAsCorrectAnswerRate'], 1.0)
+
+    def test_v1_retained_after_failure_has_test_file_re_run_and_judged(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            clean_dir = work / 'clean_proj'
+            clean_dir.mkdir()
+            (clean_dir / 'greet.py').write_text("def hello(name):\n    return f'Hello, {name}'\n", encoding='utf-8')
+
+            bugs_dir = work / 'bugs'
+            bugs_dir.mkdir()
+            bug_dir = bugs_dir / 'bug_03'
+            bug_dir.mkdir()
+            (bug_dir / 'meta.json').write_text(json.dumps({
+                'id': 'bug_03',
+                'sourceFile': 'greet.py',
+                'target': 'hello',
+                'type': 'wrong-default',
+                'description': 'buggy greeting'
+            }), encoding='utf-8')
+            (bug_dir / 'patch').write_text(
+                "--- a/greet.py\n+++ b/greet.py\n@@ -1,2 +1,2 @@\n def hello(name):\n-    return f'Hello, {name}'\n+    return f'Hi, {name}'\n",
+                encoding='utf-8'
+            )
+
+            results_dir = work / 'results'
+            results_dir.mkdir()
+            target_dir = results_dir / 'greet_hello'
+            target_dir.mkdir()
+            run_dir = target_dir / 'loop' / '_run'
+            run_dir.mkdir(parents=True)
+            v1_code = (
+                "import unittest\nfrom greet import hello\n\n"
+                "class V1RetainedTests(unittest.TestCase):\n"
+                "    def test_greet(self):\n"
+                "        self.assertEqual(hello('world'), 'Hi, world')\n"
+            )
+            (run_dir / 'executable_baseline.json').write_text(json.dumps({'code': v1_code}), encoding='utf-8')
+
+            (results_dir / 'batch_manifest.json').write_text(json.dumps({
+                'targets': [{
+                    'file': 'bugs/bug_03/greet.py',
+                    'target': 'hello',
+                    'terminalStatus': 'retained-after-failure',
+                    'reportDirectory': 'greet_hello'
+                }]
+            }), encoding='utf-8')
+
+            analysis = analyze_seeded_bugs(
+                clean_dir=clean_dir,
+                bugs_dir=bugs_dir,
+                method_results={'v1': {'bugs': results_dir, 'clean': None}},
+                output_dir=work / 'out',
+                python=sys.executable
+            )
+            v1_res = analysis['methods'][0]
+            rec = v1_res['perBugRecords'][0]
+            self.assertTrue(rec['hasTestFile'])
+            self.assertEqual(rec['formalTestStatus'], 'delivered')
+            self.assertTrue(rec['formalPassedOnBug'])
+            self.assertEqual(rec['cleanRecheck'], 'failed')
+            self.assertTrue(rec['failedOnClean'])
+            self.assertTrue(rec['writtenAsCorrect'])
+            self.assertEqual(v1_res['bugWrittenAsCorrectAnswerRate'], 1.0)
+
 
 if __name__ == '__main__':
     unittest.main()

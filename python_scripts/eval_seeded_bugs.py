@@ -223,33 +223,37 @@ def _run_python_guarded(python: str, script_name: str, args: list[str], cwd: Pat
     )
 
 
-def re_run_test_on_clean(python: str,
-                         test_file_path: Path,
-                         clean_dir: Path,
-                         source_filename: str,
-                         target: str,
-                         temp_workdir: Path,
-                         timeout: int = 60) -> dict[str, Any]:
-    """Re-run a formal test against the clean version of the target.
-    
-    Returns {'cleanRunStatus': 'passed' | 'failed' | 'error', 'failedOnClean': bool}
-    """
-    clean_source_file = clean_dir / source_filename
-    if not clean_source_file.is_file():
-        raise FileNotFoundError(f"Clean source file not found: {clean_source_file}")
+def run_test_in_isolation(python: str,
+                          test_file_path: Path,
+                          source_dir: Path,
+                          source_filename: str,
+                          target: str,
+                          temp_workdir: Path,
+                          timeout: int = 60) -> dict[str, Any]:
+    """Execute a test file with generated_test_runner in isolation against a given source."""
+    source_file = source_dir / source_filename
+    if not source_file.is_file():
+        return {
+            'status': 'unavailable',
+            'reason': 'source-not-found',
+            'observed': False,
+            'testFailures': [],
+            'detail': f"Source file not found: {source_file}"
+        }
 
     temp_workdir.mkdir(parents=True, exist_ok=True)
-    evidence_file = temp_workdir / f"clean_recheck_{uuid.uuid4().hex[:8]}.invocation.json"
-    result_file = temp_workdir / f"clean_recheck_{uuid.uuid4().hex[:8]}.result.json"
-    violation_file = temp_workdir / f"clean_recheck_{uuid.uuid4().hex[:8]}.isolation.jsonl"
+    token = uuid.uuid4().hex[:8]
+    evidence_file = temp_workdir / f"recheck_{token}.invocation.json"
+    result_file = temp_workdir / f"recheck_{token}.result.json"
+    violation_file = temp_workdir / f"recheck_{token}.isolation.jsonl"
 
     module_name = test_file_path.stem
-    import_paths = [str(clean_dir), str(test_file_path.parent)]
+    import_paths = [str(source_dir), str(test_file_path.parent)]
 
     args = [
         module_name,
         '-v',
-        '--target-file', str(clean_source_file),
+        '--target-file', str(source_file),
         '--target-name', target,
         '--target-test-file', str(test_file_path),
         '--target-evidence', str(evidence_file),
@@ -261,7 +265,37 @@ def re_run_test_on_clean(python: str,
     try:
         run = _run_python_guarded(python, 'generated_test_runner.py', args, test_file_path.parent, import_paths, timeout)
     except subprocess.TimeoutExpired:
-        return {'cleanRunStatus': 'timeout', 'failedOnClean': False, 'detail': 'timeout'}
+        return {
+            'status': 'unavailable',
+            'reason': 'timeout',
+            'observed': False,
+            'testFailures': [],
+            'detail': 'timeout'
+        }
+
+    if violation_file.is_file():
+        try:
+            for line in violation_file.read_text(encoding='utf-8').splitlines():
+                if line.strip():
+                    ev = json.loads(line)
+                    if ev.get('event') == 'completed' and ev.get('status') == 'isolation-blocked':
+                        return {
+                            'status': 'unavailable',
+                            'reason': 'isolation-blocked',
+                            'observed': False,
+                            'testFailures': [],
+                            'detail': ev.get('operation', 'isolation-blocked')
+                        }
+        except Exception:
+            pass
+
+    observed = False
+    if evidence_file.is_file():
+        try:
+            ev_data = json.loads(evidence_file.read_text(encoding='utf-8'))
+            observed = bool(ev_data.get('observed', False))
+        except Exception:
+            pass
 
     result_data = None
     if result_file.is_file():
@@ -270,17 +304,116 @@ def re_run_test_on_clean(python: str,
         except Exception:
             pass
 
-    status = (result_data.get('status') if isinstance(result_data, dict) else None)
-    if status is None:
-        status = 'passed' if run.returncode == 0 else 'failed'
+    if not isinstance(result_data, dict):
+        return {
+            'status': 'unavailable',
+            'reason': 'missing-result',
+            'observed': observed,
+            'testFailures': [],
+            'detail': (run.stdout + run.stderr)[-1000:]
+        }
 
-    failed_on_clean = (status != 'passed')
+    runner_status = result_data.get('status')
+    failures = result_data.get('testFailures', [])
+
+    if runner_status == 'passed' and run.returncode == 0:
+        if observed:
+            return {
+                'status': 'passed',
+                'reason': None,
+                'observed': True,
+                'testFailures': []
+            }
+        else:
+            return {
+                'status': 'unavailable',
+                'reason': 'target-not-observed',
+                'observed': False,
+                'testFailures': []
+            }
+
+    if runner_status == 'failed':
+        if not observed:
+            return {
+                'status': 'unavailable',
+                'reason': 'target-not-observed',
+                'observed': False,
+                'testFailures': failures
+            }
+        target_behavior_failures = [
+            f for f in failures
+            if f.get('phase') == 'test' and f.get('kind') in ('failure', 'error')
+        ]
+        if target_behavior_failures:
+            return {
+                'status': 'failed',
+                'reason': None,
+                'observed': True,
+                'testFailures': target_behavior_failures
+            }
+        else:
+            return {
+                'status': 'unavailable',
+                'reason': 'runner-error',
+                'observed': observed,
+                'testFailures': failures
+            }
+
     return {
-        'cleanRunStatus': status,
-        'failedOnClean': failed_on_clean,
-        'returncode': run.returncode,
-        'output': (run.stdout + run.stderr)[-1000:]
+        'status': 'unavailable',
+        'reason': runner_status or 'runner-error',
+        'observed': observed,
+        'testFailures': failures,
+        'detail': (run.stdout + run.stderr)[-1000:]
     }
+
+
+def re_run_test_on_clean(python: str,
+                         test_file_path: Path,
+                         clean_dir: Path,
+                         source_filename: str,
+                         target: str,
+                         temp_workdir: Path,
+                         timeout: int = 60) -> dict[str, Any]:
+    """Re-run a formal test against the clean version of the target.
+
+    Only when runner completes normally, invocation evidence shows target was observed,
+    and test result is failure/error from target behavior, is failedOnClean=True.
+    Other situations are cleanRecheck='unavailable'.
+    """
+    clean_source_file = clean_dir / source_filename
+    if not clean_source_file.is_file():
+        raise FileNotFoundError(f"Clean source file not found: {clean_source_file}")
+
+    res = run_test_in_isolation(python, test_file_path, clean_dir, source_filename, target, temp_workdir, timeout)
+    if res['status'] == 'failed':
+        return {
+            'cleanRunStatus': 'failed',
+            'cleanRecheck': 'failed',
+            'failedOnClean': True,
+            'reason': None,
+            'observed': True,
+            'testFailures': res.get('testFailures', [])
+        }
+    elif res['status'] == 'passed':
+        return {
+            'cleanRunStatus': 'passed',
+            'cleanRecheck': 'passed',
+            'failedOnClean': False,
+            'reason': None,
+            'observed': True,
+            'testFailures': []
+        }
+    else:
+        return {
+            'cleanRunStatus': 'unavailable',
+            'cleanRecheck': 'unavailable',
+            'failedOnClean': False,
+            'reason': res.get('reason', 'unavailable'),
+            'observed': res.get('observed', False),
+            'testFailures': res.get('testFailures', []),
+            'detail': res.get('detail')
+        }
 
 
 def find_formal_test_file(target_dir: Path) -> Path | None:
@@ -295,18 +428,24 @@ def find_formal_test_file(target_dir: Path) -> Path | None:
     if control_test.is_file():
         return control_test
 
-    # 3. v1 executable baseline
-    exec_baseline = target_dir / 'loop' / '_run' / 'executable_baseline.json'
-    if exec_baseline.is_file():
-        try:
-            data = json.loads(exec_baseline.read_text(encoding='utf-8'))
-            code = data.get('code')
-            if code and isinstance(code, str):
-                temp_test = target_dir / 'v1_formal_test.py'
-                temp_test.write_text(code, encoding='utf-8')
-                return temp_test
-        except Exception:
-            pass
+    # 3. v1 quality_baseline or executable_baseline
+    for baseline_name in ('quality_baseline.json', 'executable_baseline.json'):
+        candidates = [
+            target_dir / baseline_name,
+            target_dir / 'loop' / '_run' / baseline_name,
+        ]
+        candidates.extend(list(target_dir.glob(f"**/{baseline_name}")))
+        for base_file in candidates:
+            if base_file.is_file():
+                try:
+                    data = json.loads(base_file.read_text(encoding='utf-8'))
+                    code = data.get('code')
+                    if code and isinstance(code, str):
+                        temp_test = target_dir / 'v1_formal_test.py'
+                        temp_test.write_text(code, encoding='utf-8')
+                        return temp_test
+                except Exception:
+                    pass
 
     # 4. Search for other test_*.py or *_test.py in target_dir or loop subdirs
     candidates = list(target_dir.glob('**/*test*.py'))
@@ -410,6 +549,8 @@ def analyze_seeded_bugs(clean_dir: Path | str,
         spec_mismatch_detected_count = 0
         needs_review_detected_count = 0
         written_as_correct_count = 0
+        clean_unavailable_count = 0
+        no_test_count = 0
         evaluated_bugs_count = 0
 
         per_bug_records = []
@@ -427,14 +568,21 @@ def analyze_seeded_bugs(clean_dir: Path | str,
 
                 target_dir = find_target_directory(bugs_root, bug_id, target, source_file)
                 if not target_dir:
+                    no_test_count += 1
                     per_bug_records.append({
                         'bugId': bug_id,
                         'target': target,
                         'sourceFile': source_file,
+                        'hasTestFile': False,
+                        'formalTestStatus': 'no-test',
                         'status': 'missing-target-run',
-                        'detectedMismatch': False,
-                        'detectedNeedsReview': False,
-                        'writtenAsCorrect': False
+                        'formalPassedOnBug': False,
+                        'cleanRecheck': 'not-run',
+                        'cleanRecheckReason': 'missing-target-run',
+                        'failedOnClean': False,
+                        'writtenAsCorrect': False,
+                        'detectedMismatch': False if is_v2 else 'N/A',
+                        'detectedNeedsReview': False if is_v2 else 'N/A'
                     })
                     continue
 
@@ -449,35 +597,66 @@ def analyze_seeded_bugs(clean_dir: Path | str,
                         needs_review_detected_count += 1
 
                 # 2. Bug written as correct answer
-                # Check if formal test passed on bug
-                formal_passed = False
-                manifest_file = bugs_root / 'batch_manifest.json'
-                if manifest_file.is_file():
-                    try:
-                        mf = json.loads(manifest_file.read_text(encoding='utf-8'))
-                        for item in mf.get('targets', []):
-                            if item.get('target') == target and (bug_id in item.get('file', '') or bug_id in item.get('reportDirectory', '')):
-                                formal_passed = item.get('terminalStatus') in ('passed', 'quality-passed', 'usable', 'execution-passed')
-                                break
-                    except Exception:
-                        pass
-                else:
-                    # Check function_knowledge.json
-                    fk = target_dir / 'function_knowledge.json'
-                    if fk.is_file():
-                        try:
-                            fk_data = json.loads(fk.read_text(encoding='utf-8'))
-                            formal_passed = fk_data.get('terminalStatus') in ('passed', 'quality-passed', 'usable', 'execution-passed')
-                        except Exception:
-                            pass
-
                 test_file = find_formal_test_file(target_dir)
-                failed_on_clean = False
-                if formal_passed and test_file and clean_dir.is_dir():
-                    clean_res = re_run_test_on_clean(python, test_file, clean_dir, source_file, target, temp_dir)
-                    failed_on_clean = clean_res['failedOnClean']
+                if not test_file:
+                    no_test_count += 1
+                    per_bug_records.append({
+                        'bugId': bug_id,
+                        'target': target,
+                        'sourceFile': source_file,
+                        'hasTestFile': False,
+                        'formalTestStatus': 'no-test',
+                        'formalPassedOnBug': False,
+                        'cleanRecheck': 'not-run',
+                        'cleanRecheckReason': 'no-formal-test',
+                        'failedOnClean': False,
+                        'writtenAsCorrect': False,
+                        'detectedMismatch': spec_info['detectedMismatch'] if is_v2 else 'N/A',
+                        'detectedNeedsReview': spec_info['detectedNeedsReview'] if is_v2 else 'N/A'
+                    })
+                    continue
 
-                written_as_correct = (formal_passed and failed_on_clean)
+                # Locate or create bug source directory
+                bug_source_dir = None
+                cand_dirs = [
+                    clean_dir.parent / 'bugs' / bug_id,
+                    clean_dir.parent / bug_id,
+                    bugs_root / 'bugs' / bug_id,
+                    bugs_root.parent / 'bugs' / bug_id
+                ]
+                for d in cand_dirs:
+                    if (d / source_file).is_file():
+                        bug_source_dir = d
+                        break
+
+                if bug_source_dir is None:
+                    bug_env = temp_dir / f"bug_env_{bug_id}"
+                    bug_env.mkdir(parents=True, exist_ok=True)
+                    for pf in clean_dir.iterdir():
+                        if pf.is_file() and pf.name.endswith('.py'):
+                            shutil.copy2(pf, bug_env / pf.name)
+                    orig_content = (clean_dir / source_file).read_text(encoding='utf-8')
+                    patched = apply_patch(orig_content, bug['patch'])
+                    (bug_env / source_file).write_text(patched, encoding='utf-8')
+                    bug_source_dir = bug_env
+
+                # Re-run formal test on bug version
+                bug_res = run_test_in_isolation(python, test_file, bug_source_dir, source_file, target, temp_dir)
+                formal_passed = (bug_res['status'] == 'passed' and bug_res.get('observed') is True)
+
+                failed_on_clean = False
+                clean_recheck = 'not-run'
+                clean_recheck_reason = 'failed-on-bug' if not formal_passed else None
+
+                if formal_passed and clean_dir.is_dir():
+                    clean_res = re_run_test_on_clean(python, test_file, clean_dir, source_file, target, temp_dir)
+                    clean_recheck = clean_res['cleanRecheck']
+                    clean_recheck_reason = clean_res.get('reason')
+                    failed_on_clean = clean_res['failedOnClean']
+                    if clean_recheck == 'unavailable':
+                        clean_unavailable_count += 1
+
+                written_as_correct = bool(formal_passed and failed_on_clean)
                 if written_as_correct:
                     written_as_correct_count += 1
 
@@ -485,7 +664,11 @@ def analyze_seeded_bugs(clean_dir: Path | str,
                     'bugId': bug_id,
                     'target': target,
                     'sourceFile': source_file,
+                    'hasTestFile': True,
+                    'formalTestStatus': 'delivered',
                     'formalPassedOnBug': formal_passed,
+                    'cleanRecheck': clean_recheck,
+                    'cleanRecheckReason': clean_recheck_reason,
                     'failedOnClean': failed_on_clean,
                     'writtenAsCorrect': written_as_correct,
                     'detectedMismatch': spec_info['detectedMismatch'] if is_v2 else 'N/A',
@@ -526,6 +709,10 @@ def analyze_seeded_bugs(clean_dir: Path | str,
             'specMismatchPlusNeedsReviewRatio': (f"{needs_review_detected_count}/{eval_count}" if is_v2 else 'N/A'),
             'bugWrittenAsCorrectAnswerRate': round(written_as_correct_count / eval_count, 4),
             'bugWrittenAsCorrectAnswerRatio': f"{written_as_correct_count}/{eval_count}",
+            'cleanUnavailableCount': clean_unavailable_count,
+            'cleanUnavailableRatio': f"{clean_unavailable_count}/{eval_count}",
+            'noTestCount': no_test_count,
+            'noTestRatio': f"{no_test_count}/{eval_count}",
             'cleanFalsePositiveAverage': false_positive_avg,
             'cleanEvaluatedFunctions': clean_functions_count if is_v2 else 'N/A',
             'perBugRecords': per_bug_records
@@ -549,8 +736,8 @@ def analyze_seeded_bugs(clean_dir: Path | str,
         '',
         '## 1. 三大指標綜整比較',
         '',
-        '| 方法 (Method) | 評估 Bug 數 | 偵測率 (spec-mismatch) | 偵測率 (+ needs-review) | Bug 被寫成正確答案比例 | 乾淨版誤報 (每函式平均) |',
-        '| --- | --- | --- | --- | --- | --- |'
+        '| 方法 (Method) | 評估 Bug 數 | 偵測率 (spec-mismatch) | 偵測率 (+ needs-review) | Bug 被寫成正確答案比例 | 乾淨版無法重驗 | 沒有測試 | 乾淨版誤報 (每函式平均) |',
+        '| --- | --- | --- | --- | --- | --- | --- | --- |'
     ]
 
     for m in report_methods:
@@ -559,16 +746,20 @@ def analyze_seeded_bugs(clean_dir: Path | str,
         det_review = (f"{m['specMismatchPlusNeedsReviewRate'] * 100:.1f}% ({m['specMismatchPlusNeedsReviewRatio']})"
                       if isinstance(m['specMismatchPlusNeedsReviewRate'], float) else 'N/A')
         written_correct = f"{m['bugWrittenAsCorrectAnswerRate'] * 100:.1f}% ({m['bugWrittenAsCorrectAnswerRatio']})"
+        clean_unavail = str(m.get('cleanUnavailableRatio', '0/0'))
+        no_test = str(m.get('noTestRatio', '0/0'))
         fp_str = str(m['cleanFalsePositiveAverage']) if m['cleanFalsePositiveAverage'] != 'N/A' else 'N/A'
-        md_lines.append(f"| {m['method']} | {m['totalBugs']} | {det_mismatch} | {det_review} | {written_correct} | {fp_str} |")
+        md_lines.append(f"| {m['method']} | {m['totalBugs']} | {det_mismatch} | {det_review} | {written_correct} | {clean_unavail} | {no_test} | {fp_str} |")
 
     md_lines.extend([
         '',
         '## 2. 指標定義與說明',
         '',
         '1. **偵測率 (Detection rate)**：該 bug 對應目標被列為 `spec-mismatch`（以及加上 `needs-review`）之比例。只有具備規格預測之 v2 計算此項，對照組與 v1 不支援規格預測標為 N/A。',
-        '2. **Bug 被寫成正確答案比例 (Bug written as correct answer rate)**：正式測試在埋有 bug 的程式上全部通過、且對乾淨版本重跑 (`generated_test_runner.py`) 時失敗的比例。本系統 (v1/v2) 與對照組均量測此項，為核心比較指標。',
-        '3. **乾淨版誤報 (False positive rate on clean code)**：在未埋 bug 的乾淨版本上，每個函式產生的 `spec-mismatch` 列平均數。對照組與 v1 標為 N/A。',
+        '2. **Bug 被寫成正確答案比例 (Bug written as correct answer rate)**：正式測試在埋有 bug 的程式上重跑通過、且對乾淨版本重跑 (`generated_test_runner.py`) 時確認失敗的比例。本系統 (v1/v2) 與對照組均量測此項，為核心比較指標。',
+        '3. **乾淨版無法重驗 (Clean recheck unavailable)**：測試在 bug 版通過，但在乾淨版重跑時因 runner 錯誤、環境阻擋、目標未呼叫或逾時等非被測行為因素無法重驗之數量；不計入分子。',
+        '4. **沒有測試 (No test delivered)**：該目標未交付正式測試檔之數量；計入分母、不計入分子。',
+        '5. **乾淨版誤報 (False positive rate on clean code)**：在未埋 bug 的乾淨版本上，每個函式產生的 `spec-mismatch` 列平均數。對照組與 v1 標為 N/A。',
         ''
     ])
 
