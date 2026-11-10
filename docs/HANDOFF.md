@@ -128,7 +128,62 @@
 
 ---
 
-## 2. PR #10 進度（最新）
+## 2. PR #12a～#13 一次驗收（最新）
+
+### 四個分支最終疊加順序與 HEAD 雜湊
+本條線由 4 個 PR 依序疊加（非合併至主線、未 push）：
+`lane_edition(8126f94)` → `pr/12a-eval-recording(57acf0d)` → `pr/12b-seeded-bugs(b11cce0)` → `pr/10-survivor-rows(f19e7d1)` → `pr/13-sidebar`
+
+- **`pr/12a-eval-recording`**：HEAD `57acf0d`
+- **`pr/12b-seeded-bugs`**：HEAD `b11cce0`
+- **`pr/10-survivor-rows`**：HEAD `d11ee25`
+- **`pr/13-sidebar`**：最新 HEAD 見 git log
+
+### 各 PR 實際交付內容摘要（只列程式庫中真實存在者）
+1. **PR #12a（評估紀錄與對照組）**：
+   - `src/pipeline/caseTable/runCaseTablePipeline.ts`、`runRowStage.ts`：以 v1 `role_events.jsonl` 格式記錄所有 v2 模型呼叫事件（角色名、tokens、耗時、結束原因），產出 `function_knowledge.json` 與 `run_manifest.json` 供批次彙總。
+   - `python_scripts/eval_aggregate.py`：支援讀取 `v2_result.json`，新增方法、可用列比例、規格不符數、needs-review 數欄位；占位事件 tokens 標示為「未記錄」。
+   - `python_scripts/eval_baseline_plain_llm.py`：一般 LLM 對照組（固定 3 段提示詞：任務說明、`檔案：<檔名>.py`、函式源碼；temperature 0；突變量測失敗標為 `failed`／`mutation-unmeasured`，標準與 v2 統一）。
+   - 測試與文件：`python_scripts/test_eval_baseline_plain_llm.py`、`test_eval_aggregate.py`；`eval/README.md` 說明輸出長度無上限差異。
+
+2. **PR #12b（埋 Bug 評估）**：
+   - `eval/seeded_bugs/`：建立 16 個語意 bug 目錄（含 `patch.diff`、`mutated.py`、`metadata.json` 與 `witness.py`），涵蓋 6 大類別，均通過語法與行為差異驗證。
+   - `python_scripts/eval_seeded_bugs.py`：
+     - `prepare` 子命令：將 16 個 bug patch 套用至評估目標副本。
+     - `analyze` 子命令：以隔離 runner 在 bug 版環境重跑交付之正式測試檔（支援 `quality_baseline.json` 與 `executable_baseline.json`；無測試檔記為「沒有測試」計入分母）；乾淨版重跑時，僅當 runner 正常、目標被呼叫且來自目標引發之 failure/error 時才算 `failedOnClean=True`（非目標問題記為 `cleanRecheck='unavailable'` 並分開列出）。
+   - 測試：`python_scripts/test_eval_seeded_bugs.py`（8/8 全過）。
+
+3. **PR #10（案例表存活突變列）**：
+   - `src/roles/qualityAnalyst.ts`：新增 `getSurvivorRowPrompt`（每輪針對單一存活突變提議一組輸入，不寫預期值）與 `parseSurvivorRow`。
+   - `python_scripts/basic_mutation_runner.py`：新增 `--capture-mutant` 旗標與 `dual_capture_mutant`（雙版本環境獨立執行比對，相同則判定 `survivor-row-indistinguishable`）。
+   - `src/pipeline/caseTable/runRowStage.ts`：整合存活突變補強迴圈（最多 3 次嘗試且依 `qualityNoImprovementLimit=3` 停止；提升分數之案例合併進正式測試）。
+   - `src/pipeline/caseTable/rowExecution.ts`：新增 `captureSurvivorRow`；`measureCoverage` 採用動態唯一模組名稱，避免多次量測碰撞。
+   - `src/orchestrator.ts`、`package.json`、`package.nls*.json`：新增設定項 `llmUnitTest.qualityAnalyst`（`auto` | `off`，預設 `auto`）。
+   - 快照與測試：新增 `test/fixtures/golden/v2/bmi-quality-analyst.json`（已錄製通過），既有 `bmi.json` 與 `database.json` 零變更；`python_scripts/test_mutant_capture.py`（5/5）、`src/test/survivorRow.test.ts`（7/7）、`src/test/caseTableGolden.test.ts`（3/3）。
+
+4. **PR #13（側欄精簡與進階設定收合）**：
+   - `src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`：
+     - 精簡側欄版面配置：主要控制常駐顯示；進階設定（context、thinking、突變設定、需求檔、目標清單匯出入）預設收合且保存使用者狀態。
+     - 移除側欄「開始前要求通過角色資格測試」勾選框，「測試連線」直接執行角色資格測試並顯示狀態摘要。
+     - 函式選擇改為勾選／取消勾選全檔函式，新增動態「已選 N／M」即時計數。
+     - 在「v2 設定」區塊新增「存活突變補強」下拉選單（`auto` 開啟預設 | `off` 關閉），綁定 `llmUnitTest.qualityAnalyst`。
+   - 字典與測試：`src/i18n/zh-tw.ts` 與 `src/i18n/en.ts` 中英更新；`src/test/sidebarSimplification.test.ts`（6/6 全過）、`src/test/sidebarPreferences.test.ts`、`src/test/connectionQualification.test.ts`。
+
+### 使用者驗收指令（在 `pr/13-sidebar` 上原生 Windows 執行）
+```powershell
+npm run test:fast
+npm run test:python
+npm run test:golden
+npm run test:integration
+```
+> **注意**：`npm run test:integration` 約需 37 分鐘，請在背景執行並只讀取摘要，失敗清單須與第 5 節之 14 個既有失敗逐案比對，不得新增任何失敗。
+
+### 實驗室使用前審閱提醒
+> `docs/v2_提示詞_待審.md` 中標示「待審（PR #10）」的 Quality Analyst 存活突變提示詞段落，必須經使用者審閱核准後，方可用於實驗室正式評估。
+
+---
+
+## 2. PR #10 進度（歷史）
 
 ### PR #10 案例表存活突變列（2026-11-10 Antigravity）
 
@@ -767,7 +822,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-10 09:40 | Antigravity | PR #13 側欄精簡 | 模型選擇常駐並顯式連線與角色資格摘要、進階設定預設收合、移除事先資格勾選框、函式勾選與「已選 N／M」即時計數、目標清單按鈕改名；check-types／lint 0、test:webview 通過、related 16/16 全過、secret scan 通過 | 本筆 |
+| 2026-11-10 16:45 | Antigravity | PR #12a～#13 疊加與一次驗收收尾 | 完成 4 個 PR 線性疊加（#12a 57acf0d → #12b b11cce0 → #10 d11ee25 → #13）；v2 側欄新增存活突變補強選單（auto/off，綁定 qualityAnalyst）；Windows 原生 fast、webview、related、v2 golden 全過 | 本筆 |
+| 2026-11-10 09:40 | Antigravity | PR #13 側欄精簡 | 模型選擇常駐並顯式連線與角色資格摘要、進階設定預設收合、移除事先資格勾選框、函式勾選與「已選 N／M」即時計數、目標清單按鈕改名；check-types／lint 0、test:webview 通過、related 16/16 全過、secret scan 通過 | `ef4e723` |
 | 2026-11-10 10:25 | Antigravity | PR #10 存活突變轉案例列 | 實作 Quality Analyst 提示詞、雙版本捕獲與存活突變迴圈；check-types/lint 0、secret scan 通過、Node 10/10、Python 5/5、v2 golden 3/3 無差異；提示詞納入待審檔 | `f19e7d1` |
 | 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（8/8 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | `b11cce0` |
 | 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `57acf0d` |
