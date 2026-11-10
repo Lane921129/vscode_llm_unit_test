@@ -1,0 +1,28 @@
+{
+  "id": "bug_11_get_remaining_text_return_order",
+  "sourceFile": "vehicle_time_utils.py",
+  "target": "get_remaining_text",
+  "type": "wrong-field",
+  "description": "回傳元組欄位順序錯誤，誤將 (is_overdue, text) 順序回傳而非 (text, is_overdue)",
+  "expectedSpecSentence": "回傳剩餘或超時文字說明與是否超時之布林值元組 (text, is_overdue)",
+  "witness": {
+    "call": "get_remaining_text(\"\")",
+    "clean": {
+      "status": "ok",
+      "value": [
+        "",
+        false
+      ],
+      "repr": "('', False)"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        false,
+        ""
+      ],
+      "repr": "(False, '')"
+    }
+  },
+  "docstringAdded": true
+}

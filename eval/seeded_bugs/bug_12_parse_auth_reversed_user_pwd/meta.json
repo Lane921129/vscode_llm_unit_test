@@ -1,0 +1,28 @@
+{
+  "id": "bug_12_parse_auth_reversed_user_pwd",
+  "sourceFile": "bottle_utils.py",
+  "target": "parse_auth",
+  "type": "wrong-field",
+  "description": "解析 Basic Auth 標頭回傳 tuple 時，誤將 (pwd, user) 顛倒回傳",
+  "expectedSpecSentence": "Parse rfc2617 HTTP authentication header string (basic) and return (user,pass) tuple or None",
+  "witness": {
+    "call": "parse_auth(\"Basic YWxhZGRpbjpvcGVuc2VzYW1l\")",
+    "clean": {
+      "status": "ok",
+      "value": [
+        "aladdin",
+        "opensesame"
+      ],
+      "repr": "('aladdin', 'opensesame')"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        "opensesame",
+        "aladdin"
+      ],
+      "repr": "('opensesame', 'aladdin')"
+    }
+  },
+  "docstringAdded": false
+}

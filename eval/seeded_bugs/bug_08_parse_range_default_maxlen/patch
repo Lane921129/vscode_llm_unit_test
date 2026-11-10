@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -52,7 +52,7 @@
+         return None
+ 
+ 
+-def parse_range_header(header, maxlen=0):
++def parse_range_header(header, maxlen=100):
+     """ Yield (start, end) ranges parsed from a HTTP Range header. Skip
+         unsatisfiable ranges. The end index is non-inclusive."""
+     if not header or header[:6] != 'bytes=': return

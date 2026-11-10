@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -71,7 +71,7 @@
+             pass
+ 
+ 
+-def path_shift(script_name, path_info, shift=1):
++def path_shift(script_name, path_info, shift=0):
+     """ Shift path fragments from PATH_INFO to SCRIPT_NAME and vice versa.
+ 
+         :return: The modified paths.

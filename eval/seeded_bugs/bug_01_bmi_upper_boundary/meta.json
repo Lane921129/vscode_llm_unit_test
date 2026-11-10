@@ -1,0 +1,28 @@
+{
+  "id": "bug_01_bmi_upper_boundary",
+  "sourceFile": "bmi.py",
+  "target": "calculate_bmi",
+  "type": "boundary-operator",
+  "description": "將健康體位上限 18.5 <= bmi < 24 誤寫為閉區間 18.5 <= bmi <= 24",
+  "expectedSpecSentence": "判斷體重狀態（依據台灣衛福部標準）：18.5 <= bmi < 24 健康體位，24 <= bmi < 27 體重過重",
+  "witness": {
+    "call": "calculate_bmi(76.8, 178.8854376378933)",
+    "clean": {
+      "status": "ok",
+      "value": [
+        24.0,
+        "體重過重"
+      ],
+      "repr": "(24.0, '體重過重')"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        24.0,
+        "健康體位"
+      ],
+      "repr": "(24.0, '健康體位')"
+    }
+  },
+  "docstringAdded": false
+}

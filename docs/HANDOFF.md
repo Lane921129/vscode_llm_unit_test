@@ -122,13 +122,35 @@
 | 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
 | 12a | 評估紀錄（v2 role_events）、彙總支援 v2、一般 LLM 對照組 | **完成待驗收：VM 驗證通過，待使用者 Windows 驗證；未合併、未 push** | `pr/12a-eval-recording`（自 `lane_edition` 8126f94） | 2026-11-09 Claude Code |
-| 12 | 埋 bug 評估（對照組執行器已拆到 12a） | 未開始 | | |
+| 12b | **埋 bug 評估**（16 個語意 bug、eval_seeded_bugs.py prepare/analyze、報告產出） | **完成待驗收：Windows 原生驗證全過；未合併、未 push** | `pr/12b-seeded-bugs`（自 `pr/12a-eval-recording` 57acf0d） | 2026-11-09 Antigravity |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #12a 進度（最新）
+## 2. PR #12b 進度（最新）
+
+### PR #12b 埋 bug 評估（2026-11-09 Antigravity）
+
+- 依架構 6.4 節於 `eval/seeded_bugs/` 建立 16 個語意 bug，涵蓋 6 大類型（每類至少 2 個、每個目標最多 2 個，目標選自 `eval_screening/` 有規格來源之函式）：
+  - 邊界運算子 (boundary-operator)：3 個（bug_01_bmi_upper_boundary、bug_02_range_non_inclusive、bug_03_char_value_digit_boundary）。
+  - 單位或換算 (unit-or-conversion)：2 個（bug_04_bmi_height_unit_scale、bug_05_mod_check_rearrange）。
+  - 漏處理的例外 (unhandled-exception)：2 個（bug_06_parse_date_overflow、bug_07_parse_excel_datetime_unhandled_type）。
+  - 錯誤的預設值 (wrong-default)：3 個（bug_08_parse_range_default_maxlen、bug_09_html_quote_tab_replacement、bug_10_path_shift_default_shift）。
+  - 回傳錯欄位 (wrong-field)：3 個（bug_11_get_remaining_text_return_order、bug_12_parse_auth_reversed_user_pwd、bug_13_format_eta_time_field_order）。
+  - 條件反向 (condition-inversion)：3 個（bug_14_html_escape_quote_inversion、bug_15_iban_empty_string_check、bug_16_char_value_digit_condition）。
+  - 每個 bug 均驗證：unified diff patch 能乾淨套用、套用後模組仍可 import、witness 呼叫在乾淨版與 bug 版產出不同輸出（記錄於 `meta.json`）。
+  - `vehicle_time_utils.py` 原無 docstring，僅在評估副本補上並註明 `docstringAdded: true`。
+- 新增 `python_scripts/eval_seeded_bugs.py`：
+  - `prepare` 子命令：將每個 bug 套用到獨立副本（輸出於指定資料夾，不寫入 repo），產生乾淨版副本與它的 `targets.json`，以及合併所有 bug 的 `targets.json`（路徑為 `bugs/<bug_id>/<sourceFile>`）。
+  - `analyze` 子命令：讀取 v1、v2、對照組在 bug 版與乾淨版上的結果資料夾，重跑乾淨版（使用 `generated_test_runner.py`）量測 bug 被寫成正確答案之比例，並計算偵測率（`spec-mismatch` 與 `needs-review`，對照組與 v1 標為 N/A）與乾淨版誤報平均數，產出 `seeded_bug_report.md` 與 `seeded_bug_report.json`。
+- 新增 `python_scripts/test_eval_seeded_bugs.py`：驗證 patch 套用、`prepare` 結構、重跑乾淨版失敗判定、以及三大指標計算；登記於 `test/verificationConfig.js`（Python 模組數 63→64）與 `src/test/verificationRunner.test.ts`。
+- `eval/README.md` 補齊四步驟操作流程說明（第 6 節）。
+- 驗證：`npm run check-types`（0）、`npm run lint`（0）、`python python_scripts/secret_scan.py`（通過）、`test_eval_seeded_bugs.py`（4/4 通過）、`verificationRunner.test.ts`（16/16 通過）。
+
+---
+
+## 2. PR #12a 進度（歷史）
 
 ### PR #12a 修正（2026-11-09 Antigravity）
 
@@ -632,6 +654,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-09（Antigravity／PR #12b 埋 bug 評估）：沒有 AOCI MCP。新增 `eval/seeded_bugs/**`、`python_scripts/{eval_seeded_bugs,test_eval_seeded_bugs,setup_seeded_bugs}.py`；修改 `test/verificationConfig.js`、`src/test/verificationRunner.test.ts`、`eval/README.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Antigravity／PR #12a 修正）：沒有 AOCI MCP。修改 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`eval/README.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Claude Code／PR #12a）：沒有 AOCI MCP。新增 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`test/fixtures/eval_three_groups/**`；修改 `python_scripts/{eval_aggregate,test_eval_aggregate}.py`、`src/pipeline/caseTable/{runCaseTablePipeline,runRowStage,oracleDecision}.ts`、`src/orchestrator.ts`、`src/test/{caseRowStageIntegration,caseSpecOracleIntegration,verificationRunner}.test.ts`、`test/verificationConfig.js`、`eval/README.md`。
 - 2026-11-09（Claude Code／PR #7 契約加嚴）：修改 `python_scripts/{case_row_assertions,test_case_row_assertions}.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/test/caseRowStageIntegration.test.ts`。
@@ -723,6 +746,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（4/4 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | 本筆 |
 | 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `55f5448` |
 | 2026-11-09 23:30 | Claude Code | PR #12a 彙總支援 v2、對照組執行器、三組測試 | VM 非正式：types／lint 0、related 26/26、Python 10/10、v2 golden 2/2 無差異；待使用者 Windows fast／python／golden／integration；未合併、未 push | 本筆 |
 | 2026-11-09 22:20 | Claude Code | 記錄 PR #5～#8 驗收與合併、v2 提示詞核准；開 `pr/12a-eval-recording` | 由監督完成合併；本筆只更新文件 | 本筆 |

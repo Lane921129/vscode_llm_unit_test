@@ -1,0 +1,11 @@
+--- a/validators_basic.py
++++ b/validators_basic.py
+@@ -12,7 +12,7 @@
+ 
+ def _char_value(char: str):
+     """A=10, B=11, ..., Z=35 (case-insensitive)."""
+-    return char if char.isdigit() else str(10 + ord(char.upper()) - ord("A"))
++    return char if char.isdigit() else str(9 + ord(char.upper()) - ord("A"))
+ 
+ 
+ def _mod_check(value: str):

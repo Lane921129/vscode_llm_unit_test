@@ -1,0 +1,11 @@
+--- a/vehicle_time_utils.py
++++ b/vehicle_time_utils.py
+@@ -13,7 +13,7 @@
+ 
+     try:
+         eta = datetime.strptime(eta_time, "%Y-%m-%d %H:%M:%S")
+-        return eta.strftime("%m/%d %H:%M")
++        return eta.strftime("%H:%M %m/%d")
+     except Exception:
+         return ""
+ 

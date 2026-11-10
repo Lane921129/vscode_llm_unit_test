@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-09 PR #12b（埋 Bug 評估）
+- 於 `eval/seeded_bugs/` 人工建立 16 個語意 bug，涵蓋 6 大類別，均通過 patch 套用、模組匯入與 witness 輸出差異驗證。
+- 新增 `python_scripts/eval_seeded_bugs.py`：`prepare` 建立評估副本與合併 `targets.json`；`analyze` 讀取 v1／v2／對照組結果，重跑乾淨版量測 bug 被寫成正確答案比例、偵測率與誤報，輸出報告。
+- 新增 `python_scripts/test_eval_seeded_bugs.py` 驗證套用與指標計算，於 `eval/README.md` 補齊四步驟操作說明。
+
 ## 2026-11-09 PR #12a（評估紀錄與對照組）
 - v2 每次模型請求都以 v1 格式寫入 `role_events.jsonl`（角色名、tokens、結束原因、耗時），並寫 `function_knowledge.json`／`run_manifest.json` 供批次彙總。
 - `eval_aggregate.py` 支援 v2：讀 `v2_result.json`，新增「方法」「可用列比例」「規格不符數」「needs-review 數」欄；只有占位事件時 tokens 與截斷顯示「未記錄」而非 0。

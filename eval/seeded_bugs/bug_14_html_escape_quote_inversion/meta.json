@@ -1,0 +1,22 @@
+{
+  "id": "bug_14_html_escape_quote_inversion",
+  "sourceFile": "bottle_utils.py",
+  "target": "html_escape",
+  "type": "condition-inversion",
+  "description": "跳脫 HTML 特殊字元時，單引號與雙引號之跳脫替換對調",
+  "expectedSpecSentence": "Escape HTML special characters ``&<>`` and quotes ``'\"``.",
+  "witness": {
+    "call": "html_escape('\"')",
+    "clean": {
+      "status": "ok",
+      "value": "&quot;",
+      "repr": "'&quot;'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "&#039;",
+      "repr": "'&#039;'"
+    }
+  },
+  "docstringAdded": false
+}

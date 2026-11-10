@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -29,7 +29,7 @@
+ def html_quote(string):
+     """ Escape and quote a string to be used as an HTTP attribute."""
+     return '"%s"' % html_escape(string).replace('\n', '&#10;') \
+-        .replace('\r', '&#13;').replace('\t', '&#9;')
++        .replace('\r', '&#13;').replace('\t', '')
+ 
+ 
+ def parse_auth(header):

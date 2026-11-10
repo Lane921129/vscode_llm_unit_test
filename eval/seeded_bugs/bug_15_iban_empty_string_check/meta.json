@@ -1,0 +1,22 @@
+{
+  "id": "bug_15_iban_empty_string_check",
+  "sourceFile": "validators_basic.py",
+  "target": "iban",
+  "type": "condition-inversion",
+  "description": "檢查是否為非空字串之條件反向，將 if value else False 誤寫為 if not value else False",
+  "expectedSpecSentence": "Return whether or not given value is a valid IBAN code.",
+  "witness": {
+    "call": "bool(iban(\"DE29100500001061045672\"))",
+    "clean": {
+      "status": "ok",
+      "value": true,
+      "repr": "True"
+    },
+    "bug": {
+      "status": "ok",
+      "value": false,
+      "repr": "False"
+    }
+  },
+  "docstringAdded": false
+}

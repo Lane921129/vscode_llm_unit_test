@@ -1,0 +1,28 @@
+{
+  "id": "bug_10_path_shift_default_shift",
+  "sourceFile": "bottle_utils.py",
+  "target": "path_shift",
+  "type": "wrong-default",
+  "description": "shift 參數預設值應為 1，誤設為 0（不移動路徑片段）",
+  "expectedSpecSentence": ":param shift: The number of path fragments to shift. (default: 1)",
+  "witness": {
+    "call": "path_shift(\"/a\", \"/b\")",
+    "clean": {
+      "status": "ok",
+      "value": [
+        "/a/b",
+        "/"
+      ],
+      "repr": "('/a/b', '/')"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        "/a",
+        "/b"
+      ],
+      "repr": "('/a', '/b')"
+    }
+  },
+  "docstringAdded": false
+}

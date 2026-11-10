@@ -16,15 +16,16 @@ const options = (mode: string, list = false) => ({ mode, list, node: [], python:
 
 test('fast and integration partition every current Node and original Python test without overlap', () => {
     const inventory = config.discoverTests();
-    assert.equal(inventory.python.length, 63, 'preserve the prior modules and append diagnostics/alias/eval/case-table/baseline coverage');
-    assert.equal(new Set(inventory.python).size, 63);
+    assert.equal(inventory.python.length, 64, 'preserve the prior modules and append diagnostics/alias/eval/case-table/baseline coverage');
+    assert.equal(new Set(inventory.python).size, 64);
     const additions = new Set(['python_scripts/test_parameter_fixture_experiments.py', 'python_scripts/test_mutation_activation.py',
         'python_scripts/test_edit_test_methods.py', 'python_scripts/test_dependency_skill_facts.py',
         'python_scripts/test_skill_ab_summary.py', 'python_scripts/test_resource_diagnostics.py',
         'python_scripts/test_target_alias_bindings.py', 'python_scripts/test_eval_aggregate.py',
         'python_scripts/test_case_row_validator.py', 'python_scripts/test_case_table_facts.py',
         'python_scripts/test_case_capture_runner.py', 'python_scripts/test_case_row_assertions.py',
-        'python_scripts/test_case_oracle_compare.py', 'python_scripts/test_eval_baseline_plain_llm.py']);
+        'python_scripts/test_case_oracle_compare.py', 'python_scripts/test_eval_baseline_plain_llm.py',
+        'python_scripts/test_eval_seeded_bugs.py']);
     const originalPython = inventory.python.filter((file: string) => !additions.has(file));
     // Snapshot of the original runner's ordered 49-module list, not of tier output.
     assert.equal(createHash('sha256').update(JSON.stringify(originalPython)).digest('hex'),
@@ -188,16 +189,16 @@ test('legacy Python entry retains the complete original list and scans history o
     const calls: string[][] = [];
     assert.equal(pythonRunner.runPythonTests([], { ...quiet, fileSystem: { existsSync: () => true },
         spawn: (_command: string, args: string[]) => { calls.push(args); return { status: 0 }; } }), 0);
-    assert.equal(calls[0].length, 65, '63 modules plus -m unittest');
+    assert.equal(calls[0].length, 66, '64 modules plus -m unittest');
     assert.deepEqual(calls[0].slice(2), config.pythonTests, 'the legacy entry runs every current module in order');
     assert.deepEqual(calls[0].slice(0, 4), ['-m', 'unittest', 'python_scripts/test_rescue_unittest.py', 'python_scripts/test_ast_pipeline.py']);
-    assert.deepEqual(calls[0].slice(-13), ['python_scripts/test_secret_scan.py', 'python_scripts/test_edit_test_methods.py',
+    assert.deepEqual(calls[0].slice(-14), ['python_scripts/test_secret_scan.py', 'python_scripts/test_edit_test_methods.py',
         'python_scripts/test_dependency_skill_facts.py', 'python_scripts/test_skill_ab_summary.py',
         'python_scripts/test_resource_diagnostics.py', 'python_scripts/test_target_alias_bindings.py',
         'python_scripts/test_eval_aggregate.py', 'python_scripts/test_case_row_validator.py',
         'python_scripts/test_case_table_facts.py', 'python_scripts/test_case_capture_runner.py',
         'python_scripts/test_case_row_assertions.py', 'python_scripts/test_case_oracle_compare.py',
-        'python_scripts/test_eval_baseline_plain_llm.py'],
+        'python_scripts/test_eval_baseline_plain_llm.py', 'python_scripts/test_eval_seeded_bugs.py'],
         'the former list remains in order and the new suite is appended');
     assert.deepEqual(calls[1], ['python_scripts/secret_scan.py', '--history']);
     let failures = 0;

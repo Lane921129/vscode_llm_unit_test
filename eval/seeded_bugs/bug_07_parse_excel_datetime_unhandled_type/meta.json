@@ -1,0 +1,22 @@
+{
+  "id": "bug_07_parse_excel_datetime_unhandled_type",
+  "sourceFile": "vehicle_time_utils.py",
+  "target": "parse_excel_datetime",
+  "type": "unhandled-exception",
+  "description": "處理非字串且非 datetime 的型別時未安全檢查直接呼叫 strip，拋出 AttributeError",
+  "expectedSpecSentence": "將 Excel A欄的出差時間轉成 datetime。支援 Excel 真正時間，也支援文字時間。",
+  "witness": {
+    "call": "parse_excel_datetime(12345)",
+    "clean": {
+      "status": "ok",
+      "value": null,
+      "repr": "None"
+    },
+    "bug": {
+      "status": "exception",
+      "type": "AttributeError",
+      "msg": "'int' object has no attribute 'strip'"
+    }
+  },
+  "docstringAdded": false
+}

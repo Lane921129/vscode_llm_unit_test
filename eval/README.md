@@ -129,3 +129,58 @@ python python_scripts/eval_aggregate.py D:/read/專題/test/result/model_test --
 - 三組請**依序**執行（先 v1，再 v2，最後對照組），不要同時跑；同時跑會搶 GPU 與 Ollama 佇列，耗時與逾時數據就不能比較。
 - 三組使用同一個模型、同一個 `num_ctx`、同一個突變引擎與相同目標清單。
 - 倉庫內的範例資料在 `test/fixtures/eval_three_groups/`（測試用，數字非實驗結果）。
+
+---
+
+## 6. 埋 Bug 評估流程（`eval/seeded_bugs/`、`python_scripts/eval_seeded_bugs.py`，架構 6.4）
+
+埋 bug 評估在 `eval/seeded_bugs/` 中人工設計 16 個語意 bug，涵蓋 6 大類型（邊界運算子、單位或換算、漏處理的例外、錯誤的預設值、回傳錯欄位、條件反向），驗證測試生成系統能否有效區分正確規格與人為錯誤。
+
+### 四步驟評估流程
+
+#### 步驟 1：準備評估副本（prepare）
+在工作區外建立乾淨版與 16 個獨立 bug 副本，並產生合併目標清單：
+
+```bash
+python python_scripts/eval_seeded_bugs.py prepare -o D:/read/專題/test/seeded_bugs_eval
+```
+
+- 產出 `clean/`（含 `clean/targets.json`）與 `bugs/<bug_id>/`（每個 bug 一個獨立副本）。
+- 產出合併的 `targets.json`（路徑格式為 `bugs/<bug_id>/<sourceFile>`）。
+
+#### 步驟 2：擴充套件執行 v1 與 v2
+1. 以 VS Code 開啟 `D:/read/專題/test/seeded_bugs_eval` 資料夾。
+2. 側欄目標清單點擊「從檔案載入目標清單…」，選擇該目錄下的 `targets.json`。
+3. 先以 v1 執行批次（輸出到例如 `result/v1_bugs`）。
+4. 切換管線版本為 `v2-case-table`，執行批次（輸出到例如 `result/v2_bugs`）。
+5. 針對乾淨版誤報評估：載入 `clean/targets.json`，以 v2 執行批次（輸出到例如 `result/v2_clean`）。
+
+#### 步驟 3：執行對照組
+對相同合併目標清單執行對照組單次請求腳本：
+
+```bash
+python python_scripts/eval_baseline_plain_llm.py \
+  --targets D:/read/專題/test/seeded_bugs_eval/targets.json \
+  --model gpt-oss:20b --num-ctx 8192 \
+  --output D:/read/專題/test/result/control_bugs
+```
+
+#### 步驟 4：彙總分析（analyze）
+讀取各組在 bug 版與乾淨版上的結果資料夾，重跑乾淨版驗證並產出報告：
+
+```bash
+python python_scripts/eval_seeded_bugs.py analyze \
+  --clean-dir D:/read/專題/test/seeded_bugs_eval/clean \
+  --v2-bugs-result D:/read/專題/test/result/v2_bugs \
+  --v2-clean-result D:/read/專題/test/result/v2_clean \
+  --v1-bugs-result D:/read/專題/test/result/v1_bugs \
+  --control-bugs-result D:/read/專題/test/result/control_bugs \
+  --output-dir D:/read/專題/test/result/seeded_bugs_summary
+```
+
+- 產出 `seeded_bug_report.md` 與 `seeded_bug_report.json`。
+- 計算三大指標：
+  1. **偵測率**：v2 將該 bug 標記為 `spec-mismatch`（及包含 `needs-review`）之比例（v1 與對照組標為 N/A）。
+  2. **Bug 被寫成正確答案比例**：正式測試在有 bug 的程式上通過、且以 `generated_test_runner.py` 對乾淨版重跑時失敗的比例（三組均量測，為核心比較指標）。
+  3. **乾淨版誤報**：v2 在未埋 bug 的乾淨版上，每函式平均產生的 `spec-mismatch` 數（v1 與對照組標為 N/A）。
+

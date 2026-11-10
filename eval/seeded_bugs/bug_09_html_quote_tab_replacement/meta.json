@@ -1,0 +1,22 @@
+{
+  "id": "bug_09_html_quote_tab_replacement",
+  "sourceFile": "bottle_utils.py",
+  "target": "html_quote",
+  "type": "wrong-default",
+  "description": "跳脫 HTTP 屬性中的 tab 字元應替換為 \"&#9;\"，誤替換為空字串",
+  "expectedSpecSentence": "Escape and quote a string to be used as an HTTP attribute.",
+  "witness": {
+    "call": "html_quote(\"a\\tb\")",
+    "clean": {
+      "status": "ok",
+      "value": "\"a&#9;b\"",
+      "repr": "'\"a&#9;b\"'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "\"ab\"",
+      "repr": "'\"ab\"'"
+    }
+  },
+  "docstringAdded": false
+}

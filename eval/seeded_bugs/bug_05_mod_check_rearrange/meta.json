@@ -1,0 +1,22 @@
+{
+  "id": "bug_05_mod_check_rearrange",
+  "sourceFile": "validators_basic.py",
+  "target": "_mod_check",
+  "type": "unit-or-conversion",
+  "description": "IBAN 檢查碼搬移應將前 4 碼移到末尾，誤切為前 2 碼",
+  "expectedSpecSentence": "move country code and check numbers to end",
+  "witness": {
+    "call": "_mod_check(\"DE29100500001061045672\")",
+    "clean": {
+      "status": "ok",
+      "value": true,
+      "repr": "True"
+    },
+    "bug": {
+      "status": "ok",
+      "value": false,
+      "repr": "False"
+    }
+  },
+  "docstringAdded": false
+}

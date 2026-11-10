@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -48,7 +48,7 @@
+     try:
+         ts = email.utils.parsedate_tz(ims)
+         return calendar.timegm(ts[:8] + (0, )) - (ts[9] or 0)
+-    except (TypeError, ValueError, IndexError, OverflowError):
++    except (TypeError, ValueError, IndexError):
+         return None
+ 
+ 

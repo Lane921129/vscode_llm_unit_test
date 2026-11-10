@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -38,7 +38,7 @@
+         method, data = header.split(None, 1)
+         if method.lower() == 'basic':
+             user, pwd = touni(base64.b64decode(tob(data))).split(':', 1)
+-            return user, pwd
++            return pwd, user
+     except (KeyError, ValueError):
+         return None
+ 

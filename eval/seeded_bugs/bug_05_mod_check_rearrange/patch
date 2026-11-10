@@ -1,0 +1,11 @@
+--- a/validators_basic.py
++++ b/validators_basic.py
+@@ -18,7 +18,7 @@
+ def _mod_check(value: str):
+     """Check if the value string passes the mod97-test."""
+     # move country code and check numbers to end
+-    rearranged = value[4:] + value[:4]
++    rearranged = value[2:] + value[:2]
+     return int("".join(_char_value(char) for char in rearranged)) % 97 == 1
+ 
+ 
