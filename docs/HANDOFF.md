@@ -28,11 +28,11 @@
 
 ### 使用者已確認的決策（不需再問）
 
-**2026-11-09 22:45 使用者決定**：
-1. `usable` 的標準在 v1、v2、對照組完全相同：測試通過、確實呼叫真實目標、且量到突變分數。
-2. 對照組提示詞在原始碼前加一行「檔案：<檔名>.py」，其餘照架構 6.3 原文。
+**2026-11-09 22:45 使用者決定（過夜任務四階段）**：
+1. `usable` 的標準在 v1、v2、對照組完全相同：測試通過、確實呼叫真實目標、且量到突變分數。（已實作於 `57acf0d`）
+2. 對照組提示詞在原始碼前加一行「檔案：<檔名>.py」，其餘照架構 6.3 原文。（即原第 3 節「對照組提示詞沒有模組名稱」的選項 (B)；已實作於 `57acf0d`，11/11 自第 3 節移除）
 3. 對照組沒有輸出長度上限、v1／v2 有：只在 `eval/README.md` 註明，不改設定。
-4. PR #13 側欄精簡照使用者核准配置做。
+4. PR #13 側欄精簡照使用者核准配置做（主要控制常駐、進階設定收合、移除事先資格勾選框、測試連線顯示角色結果、「已選 N／M」即時計數）。摺疊狀態記住使用者上次的選擇；Webview 重建時的還原錯誤已於 11/11 修正（`b994811`）。
 5. PR #10 授權依架構第 5 節撰寫 Quality Analyst 存活突變提示詞（只放在新的 v2 函式），全文加進 `docs/v2_提示詞_待審.md`，標為「待審（PR #10）」，使用者審閱前不可用於實驗室；每個目標最多處理 3 個存活突變（沿用已核准的 qualityNoImprovementLimit=3）。
 仍然禁止：修改 v1 的提示詞、預算、重試、停止條件、通過標準或預設值；更新 v1 golden；修改 PR #6～#8 已核准的 v2 提示詞。
 
@@ -40,7 +40,6 @@
 - 21:17 使用者已審閱並**核准 v2 提示詞用於實驗室**（`docs/v2_提示詞_待審.md`，檔名不改，開頭狀態已改為「已核准（2026-11-09 使用者）」）。
 - 22:15 使用者驗收 PR #5～#8；監督已在本機以四個 no-ff 等效合併 commit 併入 `lane_edition`：#5 `29b4c9d`、#6 `674dab1`、#7 `a52900f`、#8 `8126f94`（內容等於 `d79f3fa`），並刪除已合併的本機 `pr/*` 分支。
 - 實驗室的 v1／v2 比較**依序執行、不並行**。
-
 **2026-11-09 監督核對 PR #6～#8 後的決定（在 `pr/08-spec-oracle` 上修正）**：
 1. （C 類）單列 Bug Fixer 修正後必須同時滿足：(a) 對被測目標的每一次呼叫（名稱與全部參數）與修正前 AST 相同；(b) 每個 `self.assert*` 呼叫整個（含第一個參數）與修正前 AST 相同、數量相同；(c) 所有 patch／mock 設定相同；(d) 不可新增包住被測呼叫或斷言的 try／except、if 或 return。只允許改 setup、import 等周邊程式；違反任一項就拒絕，照舊算在 2 次額度內。
 2. （B 類，使用者 11/09 核准）規格預測請求使用 temperature 0.7，其他角色維持原本設定；`requestModel` 可帶單次請求選項，v1 呼叫路徑與預設值不變。
@@ -119,17 +118,99 @@
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **完成：使用者驗收（11/09 22:15），已合併主線（`a52900f`）** | `lane_edition` | 2026-11-09 監督 |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **完成：使用者驗收（11/09 22:15），已合併主線（`8126f94`）** | `lane_edition` | 2026-11-09 監督 |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
-| 10 | **Quality Analyst 存活突變轉案例列**（提示詞、雙版本捕獲、存活迴圈） | **完成待驗收：原生驗證全過（Node 10/10、Python 5/5、v2 golden 2/2）；未合併、未 push** | `pr/10-survivor-rows`（自 `pr/12b-seeded-bugs` 9f9b987） | 2026-11-10 Antigravity |
+| 10 | **Quality Analyst 存活突變轉案例列**（提示詞、雙版本捕獲、存活迴圈） | **完成待驗收：11/11 規格預測測試修正，Windows 3/3 通過；未合併、未 push** | `pr/10-survivor-rows`（自 `pr/12b-seeded-bugs` b11cce0） | 2026-11-11 Codex |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
-| 12a | 評估紀錄（v2 role_events）、彙總支援 v2、一般 LLM 對照組 | **完成待驗收：VM 驗證通過，待使用者 Windows 驗證；未合併、未 push** | `pr/12a-eval-recording`（自 `lane_edition` 8126f94） | 2026-11-09 Claude Code |
-| 12b | **埋 bug 評估**（16 個語意 bug、eval_seeded_bugs.py prepare/analyze、報告產出） | **完成待驗收：Windows 原生驗證全過；未合併、未 push** | `pr/12b-seeded-bugs`（自 `pr/12a-eval-recording` 57acf0d） | 2026-11-09 Antigravity |
-| 13 | **側欄精簡**（三區塊折疊、資格徽章、首跑指引、無效選項停用） | **完成待驗收：原生驗證全過（Node 26/26）；未合併、未 push** | `pr/13-sidebar`（自 `lane_edition` 8126f94） | 2026-11-10 Antigravity |
+| 12a | 評估紀錄（v2 role_events）、彙總支援 v2、一般 LLM 對照組 | **完成待驗收：Windows 原生驗證通過；未合併、未 push** | `pr/12a-eval-recording`（自 `lane_edition` 8126f94） | 2026-11-09 Claude Code |
+| 12b | **埋 bug 評估**（16 個語意 bug、eval_seeded_bugs.py prepare/analyze、報告產出） | **完成待驗收：Windows 原生驗證全過（8/8 全過）；未合併、未 push** | `pr/12b-seeded-bugs`（自 `pr/12a-eval-recording` 57acf0d） | 2026-11-09 Antigravity |
+| 13 | **側欄精簡與進階設定收合** | **測試回歸修正完成：Windows check-types、lint、指定 related 10/10 通過；待完整重驗，未合併、未 push** | `pr/13-sidebar`（自 `pr/10-survivor-rows`） | 2026-11-11 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #10 進度（最新）
+## 2. PR #12a～#13 一次驗收（最新）
+
+### 2026-11-11 23:00 進階設定重建還原修正（Claude Code，`pr/13-sidebar`）
+
+- **最終 HEAD**：程式與測試在 `b994811`（`fix(pr13)`）；其後只有本筆 docs commit（只改 HANDOFF），測試對象即 `b994811` 的程式。未合併、未 push。
+- **原因**：Webview 腳本先依保存的 `envType` 呼叫 `applyEnvTypeUi` → `saveUiState`，後者讀 DOM 當下的 `details.open`（仍是 HTML 預設 false）寫回狀態，把已保存的 `advancedSettingsOpen: true` 蓋掉，之後的還原段讀到 false。
+- **修正**（只改 `src/ui/webviewContent.ts` 還原順序）：先還原 `advanced-settings-details.open`，再還原 `envType`，最後登記 `toggle` 監聽。HTML 未改，預設仍收起；`sidebarSimplification` 的預設收起斷言照過。
+- **測試**：`sidebarDashboardReplay.test.ts` 加回完整狀態重建檢查，展開與收起各一次：重建後 `open` 等於保存值、`env-type` 等於保存值、保存值未被覆寫，並補一次延遲 `toggle` 通知後仍不變。修正前此檢查失敗（`log/pr13-details-before-fix-vm.log`，expected true／actual false），修正後 13/13（含 sidebarSimplification，`log/pr13-details-fix-vm.log`）。
+- **本機驗證（非正式）**：本次對話的 shell 是使用者筆電上的 Linux VM，不是 Windows 原生；以下皆為 VM 結果。
+  - `npm run test:fast`：check-types、lint、compile 皆過；Node 753/759，6 個失敗全為 VM 平台問題（測試找 `.venv/bin/python`，但倉庫 `.venv` 是 Windows 版；`@esbuild/win32-x64` 不能在 Linux 執行），與本次修改無關。runner 在 Node 失敗後停止，另以 `python3 -B -m unittest` 跑 fast 的 5 個 Python 模組：52 OK。log：`log/pr13-final-fast-vm.log`、`log/pr13-final-fast-python-vm.log`。
+  - `npm run test:golden`（分段執行）：編譯 0；**v2 3/3**（bmi、bmi-quality-analyst、database），快照未變動，VM 無 coverage 故覆蓋率成功路徑未驗證（`log/pr13-final-golden-v2-vm.log`）。**v1 在 VM 無法驗證**：VM 的 Python 沒有 coverage 且無法安裝（網路 403），`full`／`execution`／`batch` 在 coverage-preflight 判為環境受阻（`log/pr13-final-golden-v1-vm.log`），不是快照差異。沒有遇到 `log/golden-runtime` EEXIST。
+  - `npm run test:related -- --node caseSpecOracleIntegration --node sidebarDashboardReplay`：10/10（`log/pr13-final-related-vm.log`）。
+- **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:golden`（v1 必須 11/11、v2 必須 3/3；若遇 `log/golden-runtime` EEXIST 先改名保留再重跑）、`npm run test:related -- --node caseSpecOracleIntegration --node sidebarDashboardReplay`。完整 integration 留到 11/15 凍結前。
+
+### 2026-11-11 測試回歸修正（Codex，Windows）
+
+- **僅修改測試與本交接文件**：產品程式、設定、提示詞、所有 golden 快照與 CHANGELOG 均保持 `pr/13-sidebar` 原 `7d27a02` 的內容。未合併主線、未 push。
+- **PR #10**：從 `d11ee25` 建立 `9d8c69a`（`test(pr10)`）。`caseSpecOracleIntegration.test.ts` 的共用 pipeline fixture 明確傳入 `qualityAnalyst: 'off'`，涵蓋原有三個規格預測測試；原列內容與所有斷言不變。
+- **PR #13**：原有三筆提交已 rebase 到 `9d8c69a`，沒有衝突。`sidebarDashboardReplay.test.ts` 的假 DOM 登記加入 `details` 並讀取 `open` 布林屬性，沿用可延遲派送的 `toggle` 事件。原有六個測試及斷言不變；另加一個中英文 replay 案例，驗證進階設定的開合／toggle 保存、角色資格摘要、存活突變下拉選單的設定訊息。
+- 使用者 11/11 完整驗收原有九個新增失敗是本次修正對象；完整 integration 仍需按下方指令重跑並與第 5 節既有 14 案逐案比對，不能以本輪局部通過代替完整驗收。
+
+| 本輪驗證 | 環境 | 結果 | 日誌 |
+| --- | --- | --- | --- |
+| PR #10 `test:related -- --node caseSpecOracleIntegration` | **Windows 原生** | 3/3 通過，退出碼 0 | `log/pr1111-pr10-spec-windows.log` |
+| `npm run check-types` | **Windows 原生** | 通過，退出碼 0 | `log/pr1111-check-types-windows.log` |
+| `npm run lint` | **Windows 原生** | 通過，退出碼 0 | `log/pr1111-lint-windows.log` |
+| `npm run test:related -- --node caseSpecOracleIntegration --node sidebarDashboardReplay` | **Windows 原生** | 10/10 通過（規格 3、原 sidebar 6、新增 replay 1），退出碼 0 | `log/pr1111-related-windows-final.log` |
+
+
+### 四個分支最終疊加順序與 HEAD 雜湊
+本條線由 4 個 PR 依序疊加（非合併至主線、未 push）：
+`lane_edition(8126f94)` → `pr/12a-eval-recording(57acf0d)` → `pr/12b-seeded-bugs(b11cce0)` → `pr/10-survivor-rows(9d8c69a)` → `pr/13-sidebar`
+
+- **`pr/12a-eval-recording`**：HEAD `57acf0d`
+- **`pr/12b-seeded-bugs`**：HEAD `b11cce0`
+- **`pr/10-survivor-rows`**：HEAD `9d8c69a`
+- **`pr/13-sidebar`**：最新 HEAD 見 git log
+
+### 各 PR 實際交付內容摘要（只列程式庫中真實存在者）
+1. **PR #12a（評估紀錄與對照組）**：
+   - `src/pipeline/caseTable/runCaseTablePipeline.ts`、`runRowStage.ts`：以 v1 `role_events.jsonl` 格式記錄所有 v2 模型呼叫事件（角色名、tokens、耗時、結束原因），產出 `function_knowledge.json` 與 `run_manifest.json` 供批次彙總。
+   - `python_scripts/eval_aggregate.py`：支援讀取 `v2_result.json`，新增方法、可用列比例、規格不符數、needs-review 數欄位；占位事件 tokens 標示為「未記錄」。
+   - `python_scripts/eval_baseline_plain_llm.py`：一般 LLM 對照組（固定 3 段提示詞：任務說明、`檔案：<檔名>.py`、函式源碼；temperature 0；突變量測失敗標為 `failed`／`mutation-unmeasured`，標準與 v2 統一）。
+   - 測試與文件：`python_scripts/test_eval_baseline_plain_llm.py`、`test_eval_aggregate.py`；`eval/README.md` 說明輸出長度無上限差異。
+
+2. **PR #12b（埋 Bug 評估）**：
+   - `eval/seeded_bugs/`：建立 16 個語意 bug 目錄（含 `patch.diff`、`mutated.py`、`metadata.json` 與 `witness.py`），涵蓋 6 大類別，均通過語法與行為差異驗證。
+   - `python_scripts/eval_seeded_bugs.py`：
+     - `prepare` 子命令：將 16 個 bug patch 套用至評估目標副本。
+     - `analyze` 子命令：以隔離 runner 在 bug 版環境重跑交付之正式測試檔（支援 `quality_baseline.json` 與 `executable_baseline.json`；無測試檔記為「沒有測試」計入分母）；乾淨版重跑時，僅當 runner 正常、目標被呼叫且來自目標引發之 failure/error 時才算 `failedOnClean=True`（非目標問題記為 `cleanRecheck='unavailable'` 並分開列出）。
+   - 測試：`python_scripts/test_eval_seeded_bugs.py`（8/8 全過）。
+
+3. **PR #10（案例表存活突變列）**：
+   - `src/roles/qualityAnalyst.ts`：新增 `getSurvivorRowPrompt`（每輪針對單一存活突變提議一組輸入，不寫預期值）與 `parseSurvivorRow`。
+   - `python_scripts/basic_mutation_runner.py`：新增 `--capture-mutant` 旗標與 `dual_capture_mutant`（雙版本環境獨立執行比對，相同則判定 `survivor-row-indistinguishable`）。
+   - `src/pipeline/caseTable/runRowStage.ts`：整合存活突變補強迴圈（最多 3 次嘗試且依 `qualityNoImprovementLimit=3` 停止；提升分數之案例合併進正式測試）。
+   - `src/pipeline/caseTable/rowExecution.ts`：新增 `captureSurvivorRow`；`measureCoverage` 採用動態唯一模組名稱，避免多次量測碰撞。
+   - `src/orchestrator.ts`、`package.json`、`package.nls*.json`：新增設定項 `llmUnitTest.qualityAnalyst`（`auto` | `off`，預設 `auto`）。
+   - 快照與測試：新增 `test/fixtures/golden/v2/bmi-quality-analyst.json`（已錄製通過），既有 `bmi.json` 與 `database.json` 零變更；`python_scripts/test_mutant_capture.py`（5/5）、`src/test/survivorRow.test.ts`（7/7）、`src/test/caseTableGolden.test.ts`（3/3）。
+
+4. **PR #13（側欄精簡與進階設定收合）**：
+   - `src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`：
+     - 精簡側欄版面配置：主要控制常駐顯示；進階設定（context、thinking、突變設定、需求檔、目標清單匯出入）預設收合且保存使用者狀態。
+     - 移除側欄「開始前要求通過角色資格測試」勾選框，「測試連線」直接執行角色資格測試並顯示狀態摘要。
+     - 函式選擇改為勾選／取消勾選全檔函式，新增動態「已選 N／M」即時計數。
+     - 在「v2 設定」區塊新增「存活突變補強」下拉選單（`auto` 開啟預設 | `off` 關閉），綁定 `llmUnitTest.qualityAnalyst`。
+   - 字典與測試：`src/i18n/zh-tw.ts` 與 `src/i18n/en.ts` 中英更新；`src/test/sidebarSimplification.test.ts`（6/6 全過）、`src/test/sidebarPreferences.test.ts`、`src/test/connectionQualification.test.ts`。
+
+### 使用者驗收指令（11/11 測試修正後，在 `pr/13-sidebar` 上原生 Windows 執行）
+Python 沿用使用者 11/11 的全過結果；本輪只改 Node 測試。請依序執行以下三個指令：
+```powershell
+npm run test:fast
+npm run test:golden
+npm run test:integration
+```
+> **注意**：`npm run test:integration` 約需 37 分鐘，請在背景執行並只讀取摘要，失敗清單須與第 5 節之 14 個既有失敗逐案比對，不得新增任何失敗。
+
+### 實驗室使用前審閱提醒
+> `docs/v2_提示詞_待審.md` 中標示「待審（PR #10）」的 Quality Analyst 存活突變提示詞段落，必須經使用者審閱核准後，方可用於實驗室正式評估。
+
+---
+
+## 2. PR #10 進度（歷史）
 
 ### PR #10 案例表存活突變列（2026-11-10 Antigravity）
 
@@ -664,8 +745,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 3. 需要使用者決定
 
-- **（PR #12a，B 類，未改）對照組提示詞沒有模組名稱**：架構 6.3 規定提示詞逐字為「以下是一個 Python 函式，請為它寫 unittest」＋函式原始碼，不告知檔名／模組名。模型只能猜 `from xxx import ...`，猜錯就會被記為失敗（`tests-failed`／`test-runner-error`），這會讓對照組看起來比實際差。選項：(A) 維持逐字，報告中註明此限制；(B) 在原始碼前加一行 `# 檔案：<檔名>`（改提示詞，需核准）；(C) 執行時把常見猜測名稱也放進 import 路徑（不改提示詞，但改了執行環境）。目前照 (A) 實作。
-- **（PR #12a）對照組 usable 標準**：已依監督指示恢復與 v2 相同標準（測試通過、確實呼叫真實目標、且量到突變分數）。
+目前沒有待決項目。
 
 - 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
 - Windows 原子改名有限重試已依 11/7 批准條件完成。
@@ -674,8 +754,11 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
-- 2026-11-10（Antigravity／PR #10 存活突變轉案例列）：沒有 AOCI MCP。新增 `python_scripts/test_mutant_capture.py`、`src/test/survivorRow.test.ts`；修改 `python_scripts/basic_mutation_runner.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/pipeline/caseTable/runCaseTablePipeline.ts`、`src/pipeline/caseTable/runRowStage.ts`、`src/roles/qualityAnalyst.ts`、`src/test/caseRowStageIntegration.test.ts`、`src/test/caseTableGolden.test.ts`、`test/verificationConfig.js`、`docs/v2_提示詞_待審.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
+- 2026-11-11（Claude Code／PR #13 重建還原修正）：沒有 AOCI MCP。修改 `src/ui/webviewContent.ts`、`src/test/sidebarDashboardReplay.test.ts`、`CHANGELOG.zh-TW.md`、本交接文件。
+- 2026-11-11（Codex／測試修正）：本次沒有 AOCI MCP，未呼叫工具；受管理修改僅 `src/test/caseSpecOracleIntegration.test.ts`、`src/test/sidebarDashboardReplay.test.ts` 與本交接文件，留待具工具能力的 agent 維護。
 
+- 2026-11-10（Antigravity／PR #13 側欄精簡）：無 AOCI 工具，請具工具能力的 agent 處理。新增／修改的受管理檔案：`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/sidebarSimplification.test.ts`、`src/test/sidebarPreferences.test.ts`、`src/test/connectionQualification.test.ts`、`test/verificationConfig.js`。
+- 2026-11-10（Antigravity／PR #10 存活突變轉案例列）：沒有 AOCI MCP。新增 `python_scripts/test_mutant_capture.py`、`src/test/survivorRow.test.ts`、`test/fixtures/golden/v2/bmi-quality-analyst.json`；修改 `package.json`、`package.nls*.json`、`src/orchestrator.ts`、`python_scripts/basic_mutation_runner.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/pipeline/caseTable/runCaseTablePipeline.ts`、`src/pipeline/caseTable/runRowStage.ts`、`src/roles/qualityAnalyst.ts`、`src/test/caseScenarioPrompt.test.ts`、`src/test/caseRowStageIntegration.test.ts`、`src/test/caseTableGolden.test.ts`、`test/verificationConfig.js`、`docs/v2_提示詞_待審.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Antigravity／PR #12b 埋 bug 評估）：沒有 AOCI MCP。新增 `eval/seeded_bugs/**`、`python_scripts/{eval_seeded_bugs,test_eval_seeded_bugs,setup_seeded_bugs}.py`；修改 `test/verificationConfig.js`、`src/test/verificationRunner.test.ts`、`eval/README.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Antigravity／PR #12a 修正）：沒有 AOCI MCP。修改 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`eval/README.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Claude Code／PR #12a）：沒有 AOCI MCP。新增 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`test/fixtures/eval_three_groups/**`；修改 `python_scripts/{eval_aggregate,test_eval_aggregate}.py`、`src/pipeline/caseTable/{runCaseTablePipeline,runRowStage,oracleDecision}.ts`、`src/orchestrator.ts`、`src/test/{caseRowStageIntegration,caseSpecOracleIntegration,verificationRunner}.test.ts`、`test/verificationConfig.js`、`eval/README.md`。
@@ -768,12 +851,13 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-10 10:25 | Antigravity | PR #10 存活突變轉案例列 | 實作 Quality Analyst 提示詞、雙版本捕獲與存活突變迴圈；check-types/lint 0、secret scan 通過、Node 10/10、Python 5/5、v2 golden 2/2 無差異；提示詞納入待審檔 | `1797d05` |
-| 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（4/4 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | `816d515` |
-| 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `55f5448` |
-| 2026-11-09 23:30 | Claude Code | PR #12a 彙總支援 v2、對照組執行器、三組測試 | VM 非正式：types／lint 0、related 26/26、Python 10/10、v2 golden 2/2 無差異；待使用者 Windows fast／python／golden／integration；未合併、未 push | 本筆 |
-| 2026-11-09 22:20 | Claude Code | 記錄 PR #5～#8 驗收與合併、v2 提示詞核准；開 `pr/12a-eval-recording` | 由監督完成合併；本筆只更新文件 | 本筆 |
-| 2026-11-09 19:20 | Claude Code | PR #6～#8 記錄 Windows integration | Node 1065／1048 pass／17 fail（14 葉＋3 父），與第 5 節既有清單逐案相同，新增 0；v2 整合 10 項全過；Python integration 因 runner 在 Node 失敗後停止而未跑（test:python 全量已於 7fe7530 通過） | 本筆 |
+| 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
+| 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |
+| 2026-11-10 16:45 | Antigravity | PR #12a～#13 疊加與一次驗收收尾 | 完成 4 個 PR 線性疊加（#12a 57acf0d → #12b b11cce0 → #10 d11ee25 → #13）；v2 側欄新增存活突變補強選單（auto/off，綁定 qualityAnalyst）；Windows 原生 fast、webview、related、v2 golden 全過 | 本筆 |
+| 2026-11-10 09:40 | Antigravity | PR #13 側欄精簡 | 模型選擇常駐並顯式連線與角色資格摘要、進階設定預設收合、移除事先資格勾選框、函式勾選與「已選 N／M」即時計數、目標清單按鈕改名；check-types／lint 0、test:webview 通過、related 16/16 全過、secret scan 通過 | `ef4e723` |
+| 2026-11-10 10:25 | Antigravity | PR #10 存活突變轉案例列 | 實作 Quality Analyst 提示詞、雙版本捕獲與存活突變迴圈；check-types/lint 0、secret scan 通過、Node 10/10、Python 5/5、v2 golden 3/3 無差異；提示詞納入待審檔 | `f19e7d1` |
+| 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（8/8 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | `b11cce0` |
+| 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `57acf0d` |
 | 2026-11-09 15:05 | Claude Code | PR #7 記錄 Windows related | 使用者 Windows：5 個 v2 Python 模組單獨 related 50/50 OK。待 integration | 本筆 |
 | 2026-11-09 15:05 | Claude Code | PR #7 Windows 結果與 Python 測試路徑 | Windows golden v1 11/11、v2 2/2（覆蓋率成功路徑通過）；related 單獨跑失敗→五個 v2 Python 測試補 sys.path，VM 單獨與合併執行皆通過。待使用者重跑 related 與 integration | 本筆 |
 | 2026-11-09 14:50 | Claude Code | PR #7 v2 golden 覆蓋率斷言 | 有 coverage 時強制斷言成功路徑，沒有時印出未驗證提示；VM：check-types／lint 0、v2 golden 2/2 並印出提示。待使用者在 Windows 跑 test:golden 與 test:related -- --python test_case_row_assertions | 本筆 |

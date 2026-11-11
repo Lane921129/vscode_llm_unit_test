@@ -12,14 +12,11 @@ import { getLanguage, setLanguage } from '../i18n/core';
 const writer = 'import unittest\nclass Tests(unittest.TestCase):\n    def test_positive(self):\n        self.assertEqual(increment(1), 2)\n    def test_negative(self):\n        self.assertEqual(increment(-1), 0)\n';
 const passed = async () => ({ state: 'passed' as const, reasonCode: 'probe-passed' as const });
 
-test('qualification is off by default in settings and the sidebar can explicitly opt in', () => {
+test('qualification is off by default in settings and the sidebar does not expose a checkbox', () => {
     const manifest = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf8'));
     assert.equal(manifest.contributes.configuration.properties['llmUnitTest.requireRoleQualification'].default, false);
-    for (const required of [false, true]) {
-        const html = getWebviewContent(key => key, 'en', 'full', undefined, 'full', 'builtin', 2, required);
-        const checkbox = html.match(/<input[^>]*id="require-role-qualification"[^>]*>/)![0];
-        assert.equal(checkbox.includes('checked'), required);
-    }
+    const html = getWebviewContent(key => key, 'en', 'full', undefined, 'full', 'builtin', 2, false);
+    assert.equal(html.includes('id="require-role-qualification"'), false);
 });
 
 test('an incomplete probe is undetermined rather than a failed model capability', () => {

@@ -29,7 +29,7 @@ const fastNodeTests = new Set([
     'rolePipeline', 'roleQualificationDiagnostics', 'roleTransportMatrix',
     'runtimeQualificationSession', 'seedCandidatePipeline', 'semanticAnalysisParser',
     'semanticContractRepair', 'semanticPromptBudget', 'semanticPromptCompaction',
-    'serialRequestQueue', 'sidebarProviderResponseDeadline', 'sourceExpectationPipeline',
+    'serialRequestQueue', 'sidebarProviderResponseDeadline', 'sidebarSimplification', 'sourceExpectationPipeline',
     'sourceImportProjection', 'specPromptBlindness', 'stubClassifier', 'stubSmokeAssertion', 'stubTestPlan',
     'supplementalProbeInputs', 'targetBudget', 'targetCoverage', 'testRuleLibrary',
     'tier1Literals', 'tier1TestBuilder', 'tier1TestFileBuilder', 'tier2SubtaskGate',
