@@ -105,6 +105,7 @@ const pythonTests = [
     'python_scripts/test_case_capture_runner.py',
     'python_scripts/test_case_row_assertions.py',
     'python_scripts/test_case_oracle_compare.py',
+    'python_scripts/test_mutant_capture.py',
     'python_scripts/test_eval_baseline_plain_llm.py',
     'python_scripts/test_eval_seeded_bugs.py'
 ];

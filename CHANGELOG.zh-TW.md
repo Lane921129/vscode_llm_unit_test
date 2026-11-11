@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-10 PR #10（案例表存活突變列）
+- Quality Analyst 新增單任務提示詞 `getSurvivorRowPrompt` 與 `parseSurvivorRow`，提示詞全文列入 `docs/v2_提示詞_待審.md`。
+- 新增 `captureSurvivorRow` 與 `basic_mutation_runner.py --capture-mutant` 雙版本獨立執行，輸出相同判定為 `survivor-row-indistinguishable`。
+- 案例表管線整合存活突變迴圈，最多 3 次嘗試且依 `qualityNoImprovementLimit=3` 停止；提升分數之案例合併進正式測試。
+- 新增 `llmUnitTest.qualityAnalyst` 設定（auto／off）與 `bmi-quality-analyst` v2 golden 快照，既有快照保持不變。
+
 ## 2026-11-09 PR #12b（埋 Bug 評估）
 - 於 `eval/seeded_bugs/` 建立 16 個語意 bug，涵蓋 6 大類別，均通過 patch 套用、模組匯入與 witness 輸出差異驗證。
 - `eval_seeded_bugs.py`：`prepare` 建立評估副本；`analyze` 實際重跑 bug 版測試，且乾淨版重跑要求 runner 成功、目標被呼叫且來自目標失敗／錯誤才計入（非目標問題記為 unavailable 並另列），無測試分開列出。

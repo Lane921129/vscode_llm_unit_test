@@ -1,5 +1,5 @@
 import { createResultLayout, roundDirectory, preserveCandidate } from './pipeline/resultLayout';
-import { readPipelineVersion, readSpecOracleSetting, runCaseTablePipeline } from './pipeline/caseTable/runCaseTablePipeline';
+import { readPipelineVersion, readQualityAnalystSetting, readSpecOracleSetting, runCaseTablePipeline } from './pipeline/caseTable/runCaseTablePipeline';
 import { loadTargetProbeFixtures, ProbeFixtureIdentity } from './pipeline/probeInputFixtures';
 import { traceTimingPreferences } from './pipeline/traceStartupBudget';
 import { generatedLoadRepairFeedback, readGeneratedRunnerDiagnostics, readNativeTimeoutFeedback } from './pipeline/generatedRunnerDiagnostics';
@@ -1912,6 +1912,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             onTargetDirectory: directory => { if (params.batchJournal && params.batchTargetId !== undefined) { params.batchJournal.attach(params.batchTargetId, directory); } },
             pythonExecutable: normalizePythonExecutable(params.pythonExecutable),
             requirementsFile: config.get<string>('requirementsFile', ''), specOracle: readSpecOracleSetting(config.get('specOracle', 'auto')),
+            qualityAnalyst: readQualityAnalystSetting(config.get('qualityAnalyst', 'auto')),
             mutation: { engine: params.mutationEngine, workers: params.mutationWorkers, stageSeconds: normalizeExecutionSettings(params).mutpyTimeout },
             postMessage: message => { void sidebarProvider.webview?.postMessage(message); },
             requestModel: (system, user, options) => requestLlmApi(options?.temperature === undefined ? params

@@ -27,7 +27,7 @@ async function run(source: string, specReplies: Record<string, string[]>, settin
     try {
         const result = await runCaseTablePipeline({
             filePath: path.join(project, 'limits.py'), funcName: 'clamp', projectRoot: project, outputPath: path.join(directory, 'out'),
-            sessionDate: 'spec', pythonExecutable: python, specOracle: setting, log: () => undefined,
+            sessionDate: 'spec', pythonExecutable: python, specOracle: setting, qualityAnalyst: 'off', log: () => undefined,
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },
             requestModel: async (system, user, options) => {
                 assert.equal(options?.temperature, system.startsWith('You predict') ? 0.7 : undefined,

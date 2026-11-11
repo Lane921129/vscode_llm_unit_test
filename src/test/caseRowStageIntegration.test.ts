@@ -22,7 +22,7 @@ async function run(target: string, replies: string[], extra: Partial<Parameters<
     try {
         const result = await runCaseTablePipeline({
             filePath: path.join(project, 'shapes.py'), funcName: target, projectRoot: project, outputPath: path.join(directory, 'out'),
-            sessionDate: 'rows', pythonExecutable: python, specOracle: 'off', log: () => undefined,
+            sessionDate: 'rows', pythonExecutable: python, specOracle: 'off', qualityAnalyst: 'off', log: () => undefined,
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },
             requestModel: async (_system, user, options) => {
                 prompts.push(user);

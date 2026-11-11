@@ -9,6 +9,9 @@ import { coverageGapIds } from '../pipeline/qualityRegression';
 import type { QualityTaskEvidence, QualityTaskIdentity } from '../pipeline/qualityTaskEvidence';
 import { qualityAnalystContractVersion } from './roleContracts';
 import { TestFocus } from '../pipeline/testFocus';
+import { CaseRow } from '../pipeline/caseTable/caseTable';
+import { parseCaseRows } from '../pipeline/caseTable/caseRowParser';
+import type { RolePrompt } from './semanticAnalyzer';
 
 export interface QualityTask {
     evidence: string;
@@ -204,4 +207,79 @@ export function qualityStrategyHints(survivors: string): string[] {
         hints.push('Arithmetic or unary operator survivor: avoid identity inputs such as 0 or 1 where operators coincide; choose non-trivial inputs and assert the exact computed result.');
     }
     return hints;
+}
+
+export interface SurvivorMutantFact {
+    line: number;
+    original: string;
+    mutated: string;
+    description?: string;
+}
+
+export interface SurvivorRowPromptOptions {
+    signature: string;
+    className?: string;
+    methodKind?: 'module' | 'instance' | 'static' | 'class';
+    source: string;
+    dependencies?: readonly { name: string }[];
+    survivor: SurvivorMutantFact;
+}
+
+export const SURVIVOR_ROW_SYSTEM_PROMPT = [
+    'You are the Quality Analyst for one Python function.',
+    'Your only task is to propose one test input scenario that kills a surviving mutation in the function.',
+    'Do not write test code. Do not predict or state the expected result.'
+].join('\n');
+
+export function getSurvivorRowPrompt(options: SurvivorRowPromptOptions): RolePrompt {
+    const isInstance = options.methodKind === 'instance' && Boolean(options.className);
+    const targetHeader = isInstance
+        ? `Target: ${options.signature} (method of class ${options.className})`
+        : `Target: ${options.signature}\nModule-level function`;
+
+    const depLines = options.dependencies && options.dependencies.length
+        ? options.dependencies.map(d => `- ${d.name}`)
+        : ['- (none)'];
+
+    const user = [
+        targetHeader,
+        '',
+        'Dependencies you may mock (use exactly these names):',
+        ...depLines,
+        '',
+        'Source:',
+        '```python',
+        options.source,
+        '```',
+        '',
+        `Surviving mutant at line ${options.survivor.line}:`,
+        'Original:',
+        options.survivor.original,
+        'Mutated:',
+        options.survivor.mutated,
+        ...(options.survivor.description ? [`Note: ${options.survivor.description}`] : []),
+        '',
+        'Write exactly 1 line proposing an input scenario that distinguishes the original function from this mutant.',
+        'Each line is one JSON object with exactly these keys:',
+        '- "scenario": what the case checks, at most 80 characters',
+        '- "category": one of normal, boundary, error, dependency-failure, state',
+        '- "args": a Python tuple literal of the positional arguments, e.g. "(1, 2)"; write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
+        '- "kwargs": a Python dict literal of keyword arguments, "{}" when there are none',
+        '- "mocks": "" or entries "name -> literal" or "name -> raise ExceptionName", separated by ";"',
+        '- "requirement": ""',
+        'Example line:',
+        '{"scenario":"input distinguishing original and mutant","category":"boundary","args":"(10, 0, 10)","kwargs":"{}","mocks":"","requirement":""}',
+        'Output only that one JSON line, with no other text.'
+    ].join('\n');
+
+    return { system: SURVIVOR_ROW_SYSTEM_PROMPT, user };
+}
+
+export function parseSurvivorRow(raw: string, options?: { firstIndex?: number }): CaseRow | undefined {
+    const parsed = parseCaseRows(raw, {
+        origin: 'quality-analyst',
+        requirementIds: [],
+        firstIndex: options?.firstIndex ?? 1
+    });
+    return parsed.rows[0];
 }

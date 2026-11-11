@@ -76,6 +76,66 @@ export async function captureRow(runtime: RowRuntime, row: CaptureRequestRow, de
     }
 }
 
+export interface MutantCaptureReport {
+    id: string;
+    status: 'distinguishable' | 'indistinguishable' | 'capture-failed';
+    distinguishable: boolean;
+    reason?: string;
+    clean: CaptureReport;
+    mutant?: CaptureReport;
+}
+
+export async function captureSurvivorRow(runtime: RowRuntime, row: CaptureRequestRow, mutant: {
+    id: string; line: number; from?: string; to?: string; codeChange?: { before: string; after: string };
+}, dependencies: readonly CaseTableDependency[]): Promise<MutantCaptureReport> {
+    const request = {
+        version: 'case-mutant-capture-request-v1',
+        file: runtime.sourceFile,
+        target: runtime.target,
+        importPaths: runtime.importPaths,
+        dependencies,
+        row,
+        mutant
+    };
+    let run: Awaited<ReturnType<typeof runSpawn>>;
+    try {
+        run = await runSpawn(runtime.python, ['-B', pythonToolPath('mutation'), '--capture-mutant'],
+            { cwd: runtime.artifacts, env: environment(runtime), timeout: CAPTURE_TIMEOUT_MS * 2, input: JSON.stringify(request) });
+    } catch (error) {
+        if ((error as Error)?.name === 'ProcessTimeoutError') {
+            return {
+                id: row.id,
+                status: 'capture-failed',
+                distinguishable: false,
+                reason: 'capture-timeout',
+                clean: { id: row.id, status: 'capture-failed', reason: 'capture-timeout' }
+            };
+        }
+        throw error;
+    }
+    try {
+        const report = JSON.parse(run.stdout) as MutantCaptureReport & { error?: string };
+        if (report.error || report.id !== row.id || !['distinguishable', 'indistinguishable', 'capture-failed'].includes(report.status)) {
+            return {
+                id: row.id,
+                status: 'capture-failed',
+                distinguishable: false,
+                reason: 'capture-tool-error',
+                clean: { id: row.id, status: 'capture-failed', reason: 'capture-tool-error' }
+            };
+        }
+        return report;
+    } catch {
+        return {
+            id: row.id,
+            status: 'capture-failed',
+            distinguishable: false,
+            reason: 'capture-tool-error',
+            clean: { id: row.id, status: 'capture-failed', reason: 'capture-tool-error' }
+        };
+    }
+}
+
 export interface MethodRun {
     passed: boolean;
     targetObserved: boolean;
@@ -133,7 +193,8 @@ export async function measureCoverage(runtime: RowRuntime, code: string): Promis
     const unavailable = (reasonCode: string): CoverageMeasurement => ({ available: false, linePercent: null, executableLines: 0,
         missingLines: [], branchesCovered: null, missingBranches: [], reasonCode });
     try {
-        const module = 'test_case_table_coverage';
+        const id = randomUUID().replace(/-/g, '').slice(0, 8);
+        const module = `test_case_table_coverage_${id}`;
         const run = await runTestFile(runtime, module, code, true);
         if (!run.passed || !run.targetObserved) { return unavailable('coverage-run-failed'); }
         const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);

@@ -119,16 +119,33 @@
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **完成：使用者驗收（11/09 22:15），已合併主線（`a52900f`）** | `lane_edition` | 2026-11-09 監督 |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **完成：使用者驗收（11/09 22:15），已合併主線（`8126f94`）** | `lane_edition` | 2026-11-09 監督 |
 | 9 | Reviewer 改審案例表 | 未開始 | | |
-| 10 | Quality Analyst 存活突變轉案例列 | 未開始 | | |
+| 10 | **Quality Analyst 存活突變轉案例列**（提示詞、雙版本捕獲、存活迴圈） | **完成待驗收：原生驗證全過（Node 10/10、Python 5/5、v2 golden 2/2）；未合併、未 push** | `pr/10-survivor-rows`（自 `pr/12b-seeded-bugs` 9f9b987） | 2026-11-10 Antigravity |
 | 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
 | 12a | 評估紀錄（v2 role_events）、彙總支援 v2、一般 LLM 對照組 | **完成待驗收：VM 驗證通過，待使用者 Windows 驗證；未合併、未 push** | `pr/12a-eval-recording`（自 `lane_edition` 8126f94） | 2026-11-09 Claude Code |
 | 12b | **埋 bug 評估**（16 個語意 bug、eval_seeded_bugs.py prepare/analyze、報告產出） | **完成待驗收：Windows 原生驗證全過；未合併、未 push** | `pr/12b-seeded-bugs`（自 `pr/12a-eval-recording` 57acf0d） | 2026-11-09 Antigravity |
+| 13 | **側欄精簡**（三區塊折疊、資格徽章、首跑指引、無效選項停用） | **完成待驗收：原生驗證全過（Node 26/26）；未合併、未 push** | `pr/13-sidebar`（自 `lane_edition` 8126f94） | 2026-11-10 Antigravity |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #12b 進度（最新）
+## 2. PR #10 進度（最新）
+
+### PR #10 案例表存活突變列（2026-11-10 Antigravity）
+
+- 依架構第 5 節、第 1.2 節與使用者 2026-11-09 22:45 決定實作：
+  - **Quality Analyst 存活突變提示詞**：`src/roles/qualityAnalyst.ts` 新增 `getSurvivorRowPrompt`（每輪針對單一存活突變，看得到簽名、相依、原始碼與突變點，提議 1 列區分用輸入情境，不允許寫預期值）與 `parseSurvivorRow`（解析為 `CaseRow`，`origin: 'quality-analyst'`）；提示詞全文加進 `docs/v2_提示詞_待審.md` 並標為「待審（PR #10）」。
+  - **雙版本捕獲（Dual-version capture）**：`python_scripts/basic_mutation_runner.py` 新增 `get_mutant_source`（AST 替換精確取得突變後原始碼）、`dual_capture_mutant`（在乾淨環境與突變環境分別跑獨立子行程執行並比對結果，相同時回傳 `distinguishable: false`、`reason: 'survivor-row-indistinguishable'`）與 CLI `--capture-mutant` 旗標；`src/pipeline/caseTable/rowExecution.ts` 新增 `captureSurvivorRow`。
+  - **案例表存活迴圈整合**：`src/pipeline/caseTable/runRowStage.ts` 於合併測試後，若有存活突變且 `qualityAnalyst !== false`，執行存活突變處理迴圈。每次挑選一個存活突變，請 Quality Analyst 提議一列，雙版本捕獲若無法區分則標為 `survivor-row-indistinguishable`；若能區分則產出單列測試由 runner 執行（可由 Bug Fixer 修正），通過後與既有測試集合併量測突變分數，分數提升則保留合併檔並重設 `noImprovementCount=0`；若未提升則恢復原本基線；受最多 3 次嘗試與 `qualityNoImprovementLimit=3` 門檻控制。
+  - **設定開關**：`src/pipeline/caseTable/runCaseTablePipeline.ts` 新增 `qualityAnalyst: 'auto' | 'off'` 設定與型別支援，基線 golden 測試以 `'off'` 執行保持快照零差異。
+- 新增單元與整合測試：
+  - `python_scripts/test_mutant_capture.py`（5/5 通過，驗證 AST 突變原始碼取得、乾淨/突變環境獨立執行、能區分與不能區分判定、CLI 旗標）。
+  - `src/test/survivorRow.test.ts`（7/7 通過，驗證 prompt 格式、解析器、無法區分時標記丢棄、能區分且提升分數時成功合併、最多 3 次嘗試與停止政策）。
+- 驗證全數通過：`npm run check-types`（0）、`npm run lint`（0）、`python python_scripts/secret_scan.py`（通過）、`python_scripts/test_mutant_capture.py`（5/5 通過）、Node 整合測試（`survivorRow.test.ts` 7/7、`caseRowStageIntegration.test.ts` 3/3）、`caseTableGolden.test.ts`（2/2 通過，BMI 與 database 快照零差異未重錄）。
+
+---
+
+## 2. PR #12b 進度（歷史）
 
 ### PR #12b 埋 bug 評估（2026-11-09 Antigravity，11/10 監督核對後修正）
 
@@ -657,6 +674,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-10（Antigravity／PR #10 存活突變轉案例列）：沒有 AOCI MCP。新增 `python_scripts/test_mutant_capture.py`、`src/test/survivorRow.test.ts`；修改 `python_scripts/basic_mutation_runner.py`、`src/pipeline/caseTable/rowExecution.ts`、`src/pipeline/caseTable/runCaseTablePipeline.ts`、`src/pipeline/caseTable/runRowStage.ts`、`src/roles/qualityAnalyst.ts`、`src/test/caseRowStageIntegration.test.ts`、`src/test/caseTableGolden.test.ts`、`test/verificationConfig.js`、`docs/v2_提示詞_待審.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
+
 - 2026-11-09（Antigravity／PR #12b 埋 bug 評估）：沒有 AOCI MCP。新增 `eval/seeded_bugs/**`、`python_scripts/{eval_seeded_bugs,test_eval_seeded_bugs,setup_seeded_bugs}.py`；修改 `test/verificationConfig.js`、`src/test/verificationRunner.test.ts`、`eval/README.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Antigravity／PR #12a 修正）：沒有 AOCI MCP。修改 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`eval/README.md`、`docs/HANDOFF.md`。
 - 2026-11-09（Claude Code／PR #12a）：沒有 AOCI MCP。新增 `python_scripts/{eval_baseline_plain_llm,test_eval_baseline_plain_llm}.py`、`test/fixtures/eval_three_groups/**`；修改 `python_scripts/{eval_aggregate,test_eval_aggregate}.py`、`src/pipeline/caseTable/{runCaseTablePipeline,runRowStage,oracleDecision}.ts`、`src/orchestrator.ts`、`src/test/{caseRowStageIntegration,caseSpecOracleIntegration,verificationRunner}.test.ts`、`test/verificationConfig.js`、`eval/README.md`。
@@ -749,6 +768,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-10 10:25 | Antigravity | PR #10 存活突變轉案例列 | 實作 Quality Analyst 提示詞、雙版本捕獲與存活突變迴圈；check-types/lint 0、secret scan 通過、Node 10/10、Python 5/5、v2 golden 2/2 無差異；提示詞納入待審檔 | `1797d05` |
 | 2026-11-10 00:15 | Antigravity | PR #12b 埋 bug 評估 | 建立 16 個語意 bug 與 witness；實作 eval_seeded_bugs.py（prepare/analyze）；新增 test_eval_seeded_bugs.py（4/4 通過）；更新 README 與註冊測試；check-types/lint 0、secret scan 通過 | `816d515` |
 | 2026-11-09 23:55 | Antigravity | PR #12a 修正 | 恢復對照組 usable 與 v2 一致（突變量不到為 failed）、提示詞加檔名、README 註明輸出上限差異；Windows原生 test_eval_baseline_plain_llm 3/3、test_eval_aggregate 8/8 通過 | `55f5448` |
 | 2026-11-09 23:30 | Claude Code | PR #12a 彙總支援 v2、對照組執行器、三組測試 | VM 非正式：types／lint 0、related 26/26、Python 10/10、v2 golden 2/2 無差異；待使用者 Windows fast／python／golden／integration；未合併、未 push | 本筆 |

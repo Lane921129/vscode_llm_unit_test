@@ -27,6 +27,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export type PipelineVersion = 'v1' | 'v2-case-table';
 export type SpecOracleSetting = 'auto' | 'off';
+export type QualityAnalystSetting = 'auto' | 'off';
 export const CASE_TABLE_REJECTIONS_FILE = 'case_table_rejections.json';
 export const CASE_TABLE_RESULT_FILE = 'v2_result.json';
 
@@ -35,6 +36,10 @@ export function readPipelineVersion(value: unknown): PipelineVersion {
 }
 
 export function readSpecOracleSetting(value: unknown): SpecOracleSetting {
+    return value === 'off' ? 'off' : 'auto';
+}
+
+export function readQualityAnalystSetting(value: unknown): QualityAnalystSetting {
     return value === 'off' ? 'off' : 'auto';
 }
 
@@ -47,7 +52,7 @@ export interface ModelRequestOptions {
 
 /** v2 role names recorded in role_events.jsonl (v1's event format is unchanged). */
 export type CaseTableRole = 'analyst-scenario' | 'analyst-scenario-correction' | 'writer-row-setup' | 'bug-fixer-row'
-    | 'analyst-spec' | 'analyst-spec-correction';
+    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst';
 
 export interface RoleAskOptions {
     role: CaseTableRole;
@@ -83,6 +88,8 @@ export interface CaseTablePipelineOptions {
     mutation?: { engine: unknown; workers: unknown; stageSeconds: number };
     /** Run capture, tests and mutation after the case table (default true). */
     runRows?: boolean;
+    /** PR #10 Quality Analyst survivor loop (default 'auto'; 'off' disables). */
+    qualityAnalyst?: QualityAnalystSetting | boolean;
     /** PR #8 hook passed to the row stage. */
     decideExpected?: RowStageOptions['decideExpected'];
     /** Sidebar result card updates (updateCoverage / updateOutcome with a caseTable summary). */
@@ -201,9 +208,13 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
             artifacts: path.join(directory, 'v2_runs') };
         const decideExpected = options.decideExpected
             ?? (specOracleUsed ? createSpecDecider({ spec, functionName: options.funcName, ask, python: options.pythonExecutable }) : undefined);
+        const qualityAnalystEnabled = typeof options.qualityAnalyst === 'boolean'
+            ? options.qualityAnalyst
+            : readQualityAnalystSetting(options.qualityAnalyst) !== 'off';
         stage = await runRowStage({
             runtime, facts, rows: outcome.rows, ask, log: options.log,
             mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
+            qualityAnalyst: qualityAnalystEnabled,
             ...(decideExpected ? { decideExpected } : {})
         });
         finalRows = stage.rows;
