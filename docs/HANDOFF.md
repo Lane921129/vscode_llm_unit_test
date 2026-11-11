@@ -29,10 +29,10 @@
 ### 使用者已確認的決策（不需再問）
 
 **2026-11-09 22:45 使用者決定（過夜任務四階段）**：
-1. `usable` 的標準在 v1、v2、對照組完全相同：測試通過、確實呼叫真實目標、且量到突變分數。
-2. 對照組提示詞在原始碼前加一行「檔案：<檔名>.py」，其餘照架構 6.3 原文。
+1. `usable` 的標準在 v1、v2、對照組完全相同：測試通過、確實呼叫真實目標、且量到突變分數。（已實作於 `57acf0d`）
+2. 對照組提示詞在原始碼前加一行「檔案：<檔名>.py」，其餘照架構 6.3 原文。（即原第 3 節「對照組提示詞沒有模組名稱」的選項 (B)；已實作於 `57acf0d`，11/11 自第 3 節移除）
 3. 對照組沒有輸出長度上限、v1／v2 有：只在 `eval/README.md` 註明，不改設定。
-4. PR #13 側欄精簡照使用者核准配置做（主要控制常駐、進階設定收合、移除事先資格勾選框、測試連線顯示角色結果、「已選 N／M」即時計數）。
+4. PR #13 側欄精簡照使用者核准配置做（主要控制常駐、進階設定收合、移除事先資格勾選框、測試連線顯示角色結果、「已選 N／M」即時計數）。摺疊狀態記住使用者上次的選擇；Webview 重建時的還原錯誤已於 11/11 修正（`b994811`）。
 5. PR #10 授權依架構第 5 節撰寫 Quality Analyst 存活突變提示詞（只放在新的 v2 函式），全文加進 `docs/v2_提示詞_待審.md`，標為「待審（PR #10）」，使用者審閱前不可用於實驗室；每個目標最多處理 3 個存活突變（沿用已核准的 qualityNoImprovementLimit=3）。
 仍然禁止：修改 v1 的提示詞、預算、重試、停止條件、通過標準或預設值；更新 v1 golden；修改 PR #6～#8 已核准的 v2 提示詞。
 
@@ -129,6 +129,18 @@
 ---
 
 ## 2. PR #12a～#13 一次驗收（最新）
+
+### 2026-11-11 23:00 進階設定重建還原修正（Claude Code，`pr/13-sidebar`）
+
+- **最終 HEAD**：程式與測試在 `b994811`（`fix(pr13)`）；其後只有本筆 docs commit（只改 HANDOFF），測試對象即 `b994811` 的程式。未合併、未 push。
+- **原因**：Webview 腳本先依保存的 `envType` 呼叫 `applyEnvTypeUi` → `saveUiState`，後者讀 DOM 當下的 `details.open`（仍是 HTML 預設 false）寫回狀態，把已保存的 `advancedSettingsOpen: true` 蓋掉，之後的還原段讀到 false。
+- **修正**（只改 `src/ui/webviewContent.ts` 還原順序）：先還原 `advanced-settings-details.open`，再還原 `envType`，最後登記 `toggle` 監聽。HTML 未改，預設仍收起；`sidebarSimplification` 的預設收起斷言照過。
+- **測試**：`sidebarDashboardReplay.test.ts` 加回完整狀態重建檢查，展開與收起各一次：重建後 `open` 等於保存值、`env-type` 等於保存值、保存值未被覆寫，並補一次延遲 `toggle` 通知後仍不變。修正前此檢查失敗（`log/pr13-details-before-fix-vm.log`，expected true／actual false），修正後 13/13（含 sidebarSimplification，`log/pr13-details-fix-vm.log`）。
+- **本機驗證（非正式）**：本次對話的 shell 是使用者筆電上的 Linux VM，不是 Windows 原生；以下皆為 VM 結果。
+  - `npm run test:fast`：check-types、lint、compile 皆過；Node 753/759，6 個失敗全為 VM 平台問題（測試找 `.venv/bin/python`，但倉庫 `.venv` 是 Windows 版；`@esbuild/win32-x64` 不能在 Linux 執行），與本次修改無關。runner 在 Node 失敗後停止，另以 `python3 -B -m unittest` 跑 fast 的 5 個 Python 模組：52 OK。log：`log/pr13-final-fast-vm.log`、`log/pr13-final-fast-python-vm.log`。
+  - `npm run test:golden`（分段執行）：編譯 0；**v2 3/3**（bmi、bmi-quality-analyst、database），快照未變動，VM 無 coverage 故覆蓋率成功路徑未驗證（`log/pr13-final-golden-v2-vm.log`）。**v1 在 VM 無法驗證**：VM 的 Python 沒有 coverage 且無法安裝（網路 403），`full`／`execution`／`batch` 在 coverage-preflight 判為環境受阻（`log/pr13-final-golden-v1-vm.log`），不是快照差異。沒有遇到 `log/golden-runtime` EEXIST。
+  - `npm run test:related -- --node caseSpecOracleIntegration --node sidebarDashboardReplay`：10/10（`log/pr13-final-related-vm.log`）。
+- **待使用者在 Windows 執行**：`npm run test:fast`、`npm run test:golden`（v1 必須 11/11、v2 必須 3/3；若遇 `log/golden-runtime` EEXIST 先改名保留再重跑）、`npm run test:related -- --node caseSpecOracleIntegration --node sidebarDashboardReplay`。完整 integration 留到 11/15 凍結前。
 
 ### 2026-11-11 測試回歸修正（Codex，Windows）
 
@@ -733,10 +745,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 3. 需要使用者決定
 
-- **2026-11-11 額外觀察（本輪不修產品）**：新增 replay 檢查時，先將進階設定展開並送出 `toggle`，取得同時含 `envType` 與 `advancedSettingsOpen: true` 的狀態；用完整狀態重建 Webview，`advanced-settings-details.open` 會變回 `false`。原九個指定測試皆已通過，這是額外檢查才發現的條件；初次日誌 `log/pr1111-related-windows.log` 為 9 pass／1 個新增檢查失敗。原腳本先依 `envType` 呼叫 `saveUiState`，再還原 details，可能覆寫已保存的 open 值。本輪新增測試只驗證使用者指定的 DOM 登記、open／toggle 與控制項訊息，未加入完整狀態重建的產品行為要求；原六個測試與所有原斷言完整保留。若要修正此產品行為，需另開任務。
-
-- **（PR #12a，B 類，未改）對照組提示詞沒有模組名稱**：架構 6.3 規定提示詞逐字為「以下是一個 Python 函式，請為它寫 unittest」＋函式原始碼，不告知檔名／模組名。模型只能猜 `from xxx import ...`，猜錯就會被記為失敗（`tests-failed`／`test-runner-error`），這會讓對照組看起來比實際差。選項：(A) 維持逐字，報告中註明此限制；(B) 在原始碼前加一行 `# 檔案：<檔名>`（改提示詞，需核准）；(C) 執行時把常見猜測名稱也放進 import 路徑（不改提示詞，但改了執行環境）。目前照 (A) 實作。
-- **（PR #12a）對照組 usable 標準**：已依監督指示恢復與 v2 相同標準（測試通過、確實呼叫真實目標、且量到突變分數）。
+目前沒有待決項目。
 
 - 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
 - Windows 原子改名有限重試已依 11/7 批准條件完成。
@@ -745,6 +754,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-11（Claude Code／PR #13 重建還原修正）：沒有 AOCI MCP。修改 `src/ui/webviewContent.ts`、`src/test/sidebarDashboardReplay.test.ts`、`CHANGELOG.zh-TW.md`、本交接文件。
 - 2026-11-11（Codex／測試修正）：本次沒有 AOCI MCP，未呼叫工具；受管理修改僅 `src/test/caseSpecOracleIntegration.test.ts`、`src/test/sidebarDashboardReplay.test.ts` 與本交接文件，留待具工具能力的 agent 維護。
 
 - 2026-11-10（Antigravity／PR #13 側欄精簡）：無 AOCI 工具，請具工具能力的 agent 處理。新增／修改的受管理檔案：`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/test/sidebarSimplification.test.ts`、`src/test/sidebarPreferences.test.ts`、`src/test/connectionQualification.test.ts`、`test/verificationConfig.js`。
@@ -841,6 +851,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
 | 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |
 | 2026-11-10 16:45 | Antigravity | PR #12a～#13 疊加與一次驗收收尾 | 完成 4 個 PR 線性疊加（#12a 57acf0d → #12b b11cce0 → #10 d11ee25 → #13）；v2 側欄新增存活突變補強選單（auto/off，綁定 qualityAnalyst）；Windows 原生 fast、webview、related、v2 golden 全過 | 本筆 |
 | 2026-11-10 09:40 | Antigravity | PR #13 側欄精簡 | 模型選擇常駐並顯式連線與角色資格摘要、進階設定預設收合、移除事先資格勾選框、函式勾選與「已選 N／M」即時計數、目標清單按鈕改名；check-types／lint 0、test:webview 通過、related 16/16 全過、secret scan 通過 | `ef4e723` |
