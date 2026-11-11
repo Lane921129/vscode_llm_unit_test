@@ -49,10 +49,11 @@ function replay(language: string, initialState: Record<string, unknown> = {}) {
     setLanguage(language);
     const html = getWebviewContent(t);
     const elements = new Map<string, ReplayElement>();
-    for (const match of html.matchAll(/<(input|select|button|textarea|p|span|div)[^>]*\bid="([^"]+)"[^>]*>/g)) {
+    for (const match of html.matchAll(/<(input|select|button|textarea|p|span|div|details)[^>]*\bid="([^"]+)"[^>]*>/g)) {
         const element = match[1] === 'input' ? new ReplayInput('input') : new ReplayElement(match[1]);
         element.value = match[0].match(/\bvalue="([^"]*)"/)?.[1] || '';
         element.root = true;
+        if (element.tag === 'details') { element.open = /\sopen(?:[\s=>])/.test(match[0]); }
         elements.set(match[2], element);
     }
     const element = (id: string) => { const item = elements.get(id); assert.ok(item, id); return item; };
@@ -282,6 +283,43 @@ test('Custom selection survives Webview rebuild and repeated menus preserve live
             assert.equal(restored.element('custom-api-select').value, 'first');
             assert.equal(restored.element('custom-model').value, 'first-model');
             assert.doesNotMatch(JSON.stringify(ui.persistedState), /fixture-.*-secret|example\.invalid/);
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('replay registers PR13 details, qualification summary and survivor control with live events', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            const details = ui.element('advanced-settings-details');
+            assert.equal(details.tag, 'details');
+            assert.equal(details.open, false);
+            details.open = true;
+            details.dispatch('toggle');
+            assert.equal(ui.persistedState.advancedSettingsOpen, true);
+            details.open = false;
+            details.dispatch('toggle');
+            assert.equal(ui.persistedState.advancedSettingsOpen, false);
+
+            const summary = ui.element('role-qualification-summary');
+            assert.equal(summary.tag, 'div');
+            ui.send({ command: 'modelProbeResult', profile: { roleQualification: {
+                writer: { state: 'verified' }, reviewer: { state: 'verified' }, bugFixer: { state: 'verified' }
+            } } });
+            assert.equal(summary.style.display, 'block');
+            assert.match(summary.innerHTML, /Writer/);
+            assert.match(summary.innerHTML, /Reviewer/);
+            assert.match(summary.innerHTML, /Bug Fixer/);
+
+            const qualityAnalyst = ui.element('quality-analyst');
+            assert.equal(qualityAnalyst.tag, 'select');
+            for (const value of ['off', 'auto']) {
+                qualityAnalyst.value = value;
+                qualityAnalyst.onchange!({ target: qualityAnalyst });
+                assert.equal(ui.messages.at(-1).command, 'setPipelineSetting');
+                assert.equal(ui.messages.at(-1).key, 'qualityAnalyst');
+                assert.equal(ui.messages.at(-1).value, value);
+            }
         }
     } finally { setLanguage('zh-tw'); }
 });
