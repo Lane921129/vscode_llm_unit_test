@@ -1,0 +1,25 @@
+{
+  "version": "case-table-result-v1",
+  "target": "calculate_bmi",
+  "terminal": "usable",
+  "rows": {
+    "total": 5,
+    "invalid": 1,
+    "captureFailed": 0,
+    "testPassed": 3,
+    "testFailed": 0
+  },
+  "mutation": {
+    "engine": "builtin",
+    "score": 65.625
+  },
+  "coverage": {
+    "available": true,
+    "linePercent": 90.0
+  },
+  "specOracle": {
+    "used": true,
+    "specMismatchCount": 1,
+    "needsReviewCount": 1
+  }
+}

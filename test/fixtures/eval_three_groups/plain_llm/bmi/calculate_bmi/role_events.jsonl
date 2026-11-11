@@ -1,0 +1,3 @@
+{"sequence": 1, "runId": "p", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "requested", "detail": {"role": "plain-llm", "pipeline": "plain-llm"}}
+{"sequence": 2, "runId": "p", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "timing", "detail": {"role": "plain-llm", "version": "model-request-timing-v1", "kind": "transport", "outcome": "completed", "ollama": {"promptEvalCount": 200, "evalCount": 250, "completionReason": "stop"}}}
+{"sequence": 3, "runId": "p", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "completed", "detail": {"role": "plain-llm", "elapsedMs": 3000}}

@@ -134,6 +134,8 @@ def _scan_role_events(role_events_path: Path) -> dict[str, Any]:
     completed = 0
     errors = 0
     by_role: dict[str, dict[str, int]] = {}
+    roles_recorded = False
+    output_tokens = 0
 
     for line in role_events_path.read_text(encoding="utf-8-sig").splitlines():
         text = line.strip()
@@ -152,6 +154,12 @@ def _scan_role_events(role_events_path: Path) -> dict[str, Any]:
         ) or detail.get("completionReason")
         if completion_reason == "length":
             length_count += 1
+
+        if event.get("stage") == "model-request" and isinstance(detail.get("role"), str):
+            roles_recorded = True
+        if event.get("stage") == "model-request" and event.get("status") == "timing" and isinstance(ollama, dict) \
+                and detail.get("kind") == "transport" and isinstance(ollama.get("evalCount"), int):
+            output_tokens += ollama["evalCount"]
 
         if event.get("stage") == "model-request":
             status = event.get("status")
@@ -172,6 +180,9 @@ def _scan_role_events(role_events_path: Path) -> dict[str, Any]:
         "completed": completed,
         "error": errors,
         "byRole": by_role,
+        # v2 runs from before role journaling wrote placeholder events without a role.
+        "rolesRecorded": roles_recorded or requested == 0,
+        "outputTokens": output_tokens,
     }
 
 
@@ -273,6 +284,13 @@ def evaluate_batch_manifest(
     role_completed_total = 0
     role_error_total = 0
     by_role_totals: dict[str, dict[str, int]] = {}
+    role_output_tokens = 0
+    tokens_recorded = True
+    v2_targets = 0
+    v2_passed_rows = 0
+    v2_total_rows = 0
+    spec_mismatch_total = 0
+    needs_review_total = 0
 
     for item in targets_raw:
         if not isinstance(item, dict):
@@ -299,6 +317,7 @@ def evaluate_batch_manifest(
 
         run_dir = _resolve_target_run_dir(batch_dir, item.get("reportDirectory"))
         fk_data: dict[str, Any] | None = None
+        v2_data: dict[str, Any] | None = None
         eb_data: dict[str, Any] | None = None
         qb_data: dict[str, Any] | None = None
 
@@ -313,10 +332,16 @@ def evaluate_batch_manifest(
             if qb_path.is_file():
                 qb_data = json.loads(qb_path.read_text(encoding="utf-8-sig"))
 
+            v2_path = run_dir / "v2_result.json"
+            if v2_path.is_file():
+                v2_data = json.loads(v2_path.read_text(encoding="utf-8-sig"))
             re_path = run_dir / "role_events.jsonl"
             if re_path.is_file():
                 role_events_found += 1
                 re_stats = _scan_role_events(re_path)
+                role_output_tokens += re_stats["outputTokens"]
+                if not re_stats["rolesRecorded"]:
+                    tokens_recorded = False
                 target_len_count = re_stats["lengthTruncatedCount"]
                 role_length_total += target_len_count
                 role_requested_total += re_stats["requested"]
@@ -353,8 +378,23 @@ def evaluate_batch_manifest(
         mut_score = _extract_mutation_score(fk_data)
         if mut_score is None:
             mut_score = _extract_mutation_score(qb_data)
+        if isinstance(v2_data, dict):
+            v2_targets += 1
+            v2_mutation = v2_data.get("mutation") if isinstance(v2_data.get("mutation"), dict) else {}
+            v2_coverage = v2_data.get("coverage") if isinstance(v2_data.get("coverage"), dict) else {}
+            v2_rows = v2_data.get("rows") if isinstance(v2_data.get("rows"), dict) else {}
+            v2_spec = v2_data.get("specOracle") if isinstance(v2_data.get("specOracle"), dict) else {}
+            if mut_score is None and _is_number(v2_mutation.get("score")):
+                mut_score = float(v2_mutation["score"])
+            if cov_pct is None and v2_coverage.get("available") is True and _is_number(v2_coverage.get("linePercent")):
+                cov_pct = float(v2_coverage["linePercent"])
+            v2_passed_rows += int(v2_rows.get("testPassed") or 0)
+            v2_total_rows += int(v2_rows.get("total") or 0)
+            spec_mismatch_total += int(v2_spec.get("specMismatchCount") or 0)
+            needs_review_total += int(v2_spec.get("needsReviewCount") or 0)
 
-        executable_test = cov_pct is not None
+        executable_test = cov_pct is not None or (isinstance(v2_data, dict) and int(
+            (v2_data.get("rows") or {}).get("testPassed") or 0) > 0)
         has_spec = spec_lookup.get((file_name, target_name))
 
         target_records.append(
@@ -399,8 +439,15 @@ def evaluate_batch_manifest(
         if isinstance(cost.get("outputTokens"), int)
         else int(cap_summary.get("outputTokens") or 0)
     )
+    if output_tokens == 0 and role_output_tokens > 0:
+        output_tokens = role_output_tokens
+    method = str(data.get("method") or ("v2-case-table" if v2_targets > 0 else "v1"))
 
-    if role_events_found == 0 and role_length_total == 0 and isinstance(cap_summary.get("lengthStoppedTransports"), int):
+    if not tokens_recorded:
+        # Placeholder role events (v2 runs before role journaling): tokens and truncation were never recorded.
+        length_truncated_count = None
+        length_truncation_source = "not-recorded"
+    elif role_events_found == 0 and role_length_total == 0 and isinstance(cap_summary.get("lengthStoppedTransports"), int):
         length_truncated_count = int(cap_summary["lengthStoppedTransports"])
         length_truncation_source = "batch_manifest.modelCapabilitySummary"
     else:
@@ -423,6 +470,7 @@ def evaluate_batch_manifest(
 
     return {
         "folder": batch_dir.name,
+        "method": method,
         "batchId": data.get("batchId"),
         "model": str(data.get("model") or batch_dir.name),
         "status": status,
@@ -447,8 +495,13 @@ def evaluate_batch_manifest(
         "elapsedMinutes": (elapsed_seconds / 60.0) if elapsed_seconds is not None else None,
         "avgTargetSeconds": (elapsed_seconds / denom) if (elapsed_seconds is not None and denom > 0) else None,
         "modelRequests": model_requests,
-        "outputTokens": output_tokens,
+        "outputTokens": output_tokens if tokens_recorded else None,
         "lengthTruncatedCount": length_truncated_count,
+        "tokensRecorded": tokens_recorded,
+        "usableRowRatio": (v2_passed_rows / v2_total_rows) if v2_total_rows > 0 else None,
+        "v2Rows": {"testPassed": v2_passed_rows, "total": v2_total_rows} if v2_targets > 0 else None,
+        "specMismatchCount": spec_mismatch_total if v2_targets > 0 else None,
+        "needsReviewCount": needs_review_total if v2_targets > 0 else None,
         "lengthTruncationSource": length_truncation_source,
         "roleReplySummary": {
             "requested": role_requested_total,
@@ -512,6 +565,11 @@ def _fmt_pct(value: float | None, decimals: int = 1) -> str:
     return f"{value:.{decimals}f}%"
 
 
+def _fmt_count(value: int | None, missing: str = "未記錄") -> str:
+    """Counts that were never recorded print as 未記錄, never as 0."""
+    return missing if value is None else f"{value:,}"
+
+
 def _fmt_minutes(minutes: float | None) -> str:
     if minutes is None:
         return "N/A"
@@ -525,8 +583,8 @@ def format_markdown(summary: dict[str, Any]) -> str:
         "",
         "## 模型比較總表（僅含已完成批次）",
         "",
-        "| 模型 | 資料夾 | 完整通過 | 保留可用 | 審查阻擋 | 失敗 | 其他終態 | 產生可執行測試 | 平均覆蓋率 | 量到突變分數 | 平均突變分數 | 耗時 | 請求數 | 輸出 tokens | 輸出被截斷 |",
-        "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| 模型 | 方法 | 資料夾 | 完整通過 | 保留可用 | 審查阻擋 | 失敗 | 其他終態 | 產生可執行測試 | 平均覆蓋率 | 量到突變分數 | 平均突變分數 | 耗時 | 請求數 | 輸出 tokens | 輸出被截斷 | 可用列比例 | 規格不符數 | needs-review 數 |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
     for b in summary.get("comparableBatches", []):
@@ -539,16 +597,20 @@ def format_markdown(summary: dict[str, Any]) -> str:
             if b.get("otherStatuses")
             else "—"
         )
+        rows = b.get("v2Rows")
+        row_cell = (f"{rows['testPassed']}／{rows['total']}（{_fmt_pct(b['usableRowRatio'] * 100 if b['usableRowRatio'] is not None else None)}）"
+                    if rows else "—")
         lines.append(
-            f"| {b['model']} | `{b['folder']}` | {b['passed']} | {b['retained']} | "
+            f"| {b['model']} | {b.get('method', 'v1')} | `{b['folder']}` | {b['passed']} | {b['retained']} | "
             f"{b['reviewBlocked']} | {b['failed']} | {other_cell} | {exec_cell} | "
             f"{_fmt_pct(b['avgCoverage'])} | {b['mutationMeasuredCount']} | "
             f"{_fmt_pct(b['avgMutationScore'])} | {_fmt_minutes(b['elapsedMinutes'])} | "
-            f"{b['modelRequests']} | {b['outputTokens']:,} | {b['lengthTruncatedCount']} |"
+            f"{b['modelRequests']} | {_fmt_count(b['outputTokens'])} | {_fmt_count(b['lengthTruncatedCount'])} | "
+            f"{row_cell} | {_fmt_count(b.get('specMismatchCount'), missing='—')} | {_fmt_count(b.get('needsReviewCount'), missing='—')} |"
         )
 
     if not summary.get("comparableBatches"):
-        lines.append("| （無已完成的可比較批次） | — | — | — | — | — | — | — | — | — | — | — | — | — | — |")
+        lines.append("| （無已完成的可比較批次） | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |")
 
     excluded = summary.get("excludedBatches", [])
     lines.extend(
@@ -570,7 +632,7 @@ def format_markdown(summary: dict[str, Any]) -> str:
             lines.append(
                 f"| {b['model']} | `{b['folder']}` | `{b['status']}` | "
                 f"{b['finishedTargets']}／{b['expectedTargets']} | {reasons} | "
-                f"{b['modelRequests']} | {b['outputTokens']:,} |"
+                f"{b['modelRequests']} | {_fmt_count(b['outputTokens'])} |"
             )
     else:
         lines.append("無被取消或未完成的批次。")

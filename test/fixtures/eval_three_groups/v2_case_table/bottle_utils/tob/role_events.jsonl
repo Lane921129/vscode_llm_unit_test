@@ -1,0 +1,2 @@
+{"sequence": 7, "runId": "r", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "requested", "detail": {"role": "analyst-scenario", "pipeline": "v2-case-table"}}
+{"sequence": 8, "runId": "r", "sourceHash": "h", "loop": 1, "stage": "model-request", "status": "error", "detail": {"role": "analyst-scenario", "elapsedMs": 100}}

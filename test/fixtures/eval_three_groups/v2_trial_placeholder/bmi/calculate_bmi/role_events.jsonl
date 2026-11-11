@@ -1,0 +1,3 @@
+{"runId": "r", "sourceHash": "h", "stage": "v2-case-table", "status": "usable"}
+{"runId": "r", "sourceHash": "h", "stage": "model-request", "status": "requested", "detail": {"pipeline": "v2"}}
+{"runId": "r", "sourceHash": "h", "stage": "model-request", "status": "requested", "detail": {"pipeline": "v2"}}

@@ -104,7 +104,8 @@ const pythonTests = [
     'python_scripts/test_case_table_facts.py',
     'python_scripts/test_case_capture_runner.py',
     'python_scripts/test_case_row_assertions.py',
-    'python_scripts/test_case_oracle_compare.py'
+    'python_scripts/test_case_oracle_compare.py',
+    'python_scripts/test_eval_baseline_plain_llm.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',

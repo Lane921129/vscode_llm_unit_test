@@ -184,5 +184,70 @@ class EvalSetAndAggregateTests(unittest.TestCase):
             self.assertEqual(parsed["excludedCount"], 1)
 
 
+
+class ThreeGroupTests(unittest.TestCase):
+    """v1, v2 (with and without recorded role events) and the plain-llm control group side by side."""
+
+    def setUp(self):
+        groups = ROOT / "test" / "fixtures" / "eval_three_groups"
+        self.paths = [ROOT / "test" / "fixtures" / "eval_screening" / "gpt_oss20b" / "batch_manifest.json",
+                      groups / "v2_case_table" / "batch_manifest.json",
+                      groups / "v2_trial_placeholder" / "batch_manifest.json",
+                      groups / "plain_llm" / "batch_manifest.json"]
+        self.summary = aggregate_batches([str(path) for path in self.paths], eval_set_path=None)
+        self.by_folder = {item["folder"]: item for item in self.summary["comparableBatches"]}
+
+    def test_all_three_methods_are_comparable_groups(self):
+        self.assertEqual({folder: item["method"] for folder, item in self.by_folder.items()},
+                         {"gpt_oss20b": "v1", "v2_case_table": "v2-case-table", "v2_trial_placeholder": "v2-case-table",
+                          "plain_llm": "plain-llm"})
+        v1 = self.by_folder["gpt_oss20b"]
+        self.assertEqual((v1["usableRowRatio"], v1["specMismatchCount"], v1["needsReviewCount"]), (None, None, None))
+        self.assertEqual(v1["outputTokens"], 28227, "v1 numbers are unchanged")
+
+    def test_v2_reads_tier_mutation_coverage_rows_and_spec_counts_from_v2_result(self):
+        v2 = self.by_folder["v2_case_table"]
+        self.assertEqual((v2["retained"], v2["failed"]), (1, 1))
+        self.assertEqual(v2["avgMutationScore"], 65.625)
+        self.assertEqual(v2["avgCoverage"], 90.0)
+        self.assertEqual(v2["v2Rows"], {"testPassed": 3, "total": 8})
+        self.assertAlmostEqual(v2["usableRowRatio"], 3 / 8)
+        self.assertEqual((v2["specMismatchCount"], v2["needsReviewCount"]), (1, 1))
+        self.assertEqual(v2["outputTokens"], 420, "summed from v1-format transport timing events")
+        self.assertEqual(v2["lengthTruncatedCount"], 1)
+        self.assertEqual(v2["roleReplySummary"]["byRole"]["analyst-scenario"], {"requested": 2, "completed": 1, "error": 1})
+        self.assertEqual(v2["roleReplySummary"]["byRole"]["analyst-spec"], {"requested": 1, "completed": 1, "error": 0})
+
+    def test_placeholder_role_events_show_tokens_as_not_recorded_never_zero(self):
+        trial = self.by_folder["v2_trial_placeholder"]
+        self.assertFalse(trial["tokensRecorded"])
+        self.assertIsNone(trial["outputTokens"])
+        self.assertIsNone(trial["lengthTruncatedCount"])
+        self.assertEqual(trial["modelRequests"], 2)
+        self.assertEqual(trial["v2Rows"], {"testPassed": 4, "total": 4})
+        md = format_markdown(self.summary)
+        row = next(line for line in md.splitlines() if "`v2_trial_placeholder`" in line)
+        header = next(line for line in md.splitlines() if line.startswith("| 模型 |"))
+        columns = [cell.strip() for cell in header.strip("|").split("|")]
+        cells = dict(zip(columns, [cell.strip() for cell in row.strip("|").split("|")]))
+        self.assertEqual((cells["輸出 tokens"], cells["輸出被截斷"]), ("未記錄", "未記錄"))
+        self.assertEqual((cells["規格不符數"], cells["needs-review 數"]), ("0", "0"), "row counts are recorded, so 0 is real")
+
+    def test_control_group_and_markdown_columns(self):
+        plain = self.by_folder["plain_llm"]
+        self.assertEqual((plain["retained"], plain["failed"], plain["expectedTargets"]), (1, 1, 2))
+        self.assertEqual(plain["avgMutationScore"], 40.0)
+        self.assertEqual(plain["avgCoverage"], 50.0)
+        self.assertEqual(plain["outputTokens"], 250)
+        md = format_markdown(self.summary)
+        self.assertIn("| 模型 | 方法 | 資料夾 |", md)
+        self.assertIn("| 可用列比例 | 規格不符數 | needs-review 數 |", md)
+        v2_row = next(line for line in md.splitlines() if "`v2_case_table`" in line)
+        self.assertIn("| 3／8（37.5%） | 1 | 1 |", v2_row)
+        plain_row = next(line for line in md.splitlines() if "`plain_llm`" in line)
+        self.assertTrue(plain_row.startswith("| gpt-oss:20b (plain-llm) | plain-llm |"))
+        self.assertTrue(plain_row.endswith("| — | — | — |"))
+
+
 if __name__ == "__main__":
     unittest.main()
