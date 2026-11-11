@@ -301,6 +301,23 @@ test('replay registers PR13 details, qualification summary and survivor control 
             details.dispatch('toggle');
             assert.equal(ui.persistedState.advancedSettingsOpen, false);
 
+            // Rebuilding from the full saved state (envType included) keeps the user's last choice.
+            for (const open of [true, false]) {
+                details.open = open;
+                details.dispatch('toggle');
+                const saved = { ...ui.persistedState };
+                assert.ok(['cloud', 'local', 'custom'].includes(String(saved.envType)), 'the full state carries envType');
+                assert.equal(saved.advancedSettingsOpen, open);
+                const rebuilt = replay(language, saved);
+                const rebuiltDetails = rebuilt.element('advanced-settings-details');
+                assert.equal(rebuiltDetails.open, open, `rebuild restores advancedSettingsOpen=${open}`);
+                assert.equal(rebuilt.element('env-type').value, saved.envType);
+                assert.equal(rebuilt.persistedState.advancedSettingsOpen, open, 'restoring envType must not overwrite the saved choice');
+                rebuiltDetails.dispatch('toggle'); // delayed notification for the programmatic restore
+                assert.equal(rebuilt.persistedState.advancedSettingsOpen, open);
+            }
+            assert.equal(details.open, false);
+
             const summary = ui.element('role-qualification-summary');
             assert.equal(summary.tag, 'div');
             ui.send({ command: 'modelProbeResult', profile: { roleQualification: {

@@ -533,15 +533,16 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             document.getElementById('custom-ui').style.display = val === 'custom' ? 'block' : 'none';
             saveUiState({ envType: val });
         }
+        // Restore the details choice before envType: applyEnvTypeUi saves the live details.open.
+        const advancedDetails = document.getElementById('advanced-settings-details');
+        if (advancedDetails && typeof savedUiState.advancedSettingsOpen === 'boolean') {
+            advancedDetails.open = savedUiState.advancedSettingsOpen;
+        }
         if (savedUiState.envType && ['cloud', 'local', 'custom'].includes(savedUiState.envType)) {
             document.getElementById('env-type').value = savedUiState.envType;
             applyEnvTypeUi(savedUiState.envType);
         }
-        const advancedDetails = document.getElementById('advanced-settings-details');
         if (advancedDetails) {
-            if (typeof savedUiState.advancedSettingsOpen === 'boolean') {
-                advancedDetails.open = savedUiState.advancedSettingsOpen;
-            }
             advancedDetails.addEventListener('toggle', () => {
                 saveUiState({ advancedSettingsOpen: advancedDetails.open });
             });

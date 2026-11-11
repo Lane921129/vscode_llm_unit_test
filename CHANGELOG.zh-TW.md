@@ -7,6 +7,7 @@
 - 移除側欄「開始前要求通過角色資格測試」勾選框，設定項 `llmUnitTest.requireRoleQualification` 保留預設 false；「測試連線」一併執行既有角色資格測試並在下方顯示各角色結果摘要。
 - 函式選擇改為「勾選此檔全部函式／取消勾選」，並新增動態「已選 N／M」即時計數標籤；目標清單按鈕改名為「從檔案載入目標清單…」「把目前清單存成檔案…」。
 - 側欄 v2 設定新增「存活突變補強」下拉選單（auto／off，綁定 `llmUnitTest.qualityAnalyst`）；更新中英字典與 Webview 測試。
+- 修正 Webview 重建時進階設定開合被環境類型還原覆寫成收起：先還原開合再還原環境類型，重建後等於使用者上次選擇（預設仍收起），replay 測試涵蓋展開與收起。
 
 ## 2026-11-10 PR #10（案例表存活突變列）
 - Quality Analyst 新增單任務提示詞 `getSurvivorRowPrompt` 與 `parseSurvivorRow`，提示詞全文列入 `docs/v2_提示詞_待審.md`。
