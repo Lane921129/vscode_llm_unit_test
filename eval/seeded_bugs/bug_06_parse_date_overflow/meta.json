@@ -1,0 +1,22 @@
+{
+  "id": "bug_06_parse_date_overflow",
+  "sourceFile": "bottle_utils.py",
+  "target": "parse_date",
+  "type": "unhandled-exception",
+  "description": "解析時間戳記時漏捕捉 OverflowError，導致超範圍年份直接拋出未捕捉例外",
+  "expectedSpecSentence": "Parse rfc1123, rfc850 and asctime timestamps and return UTC epoch or None.",
+  "witness": {
+    "call": "parse_date(\"Sunday, 06-Nov-99999999999 08:49:37 GMT\")",
+    "clean": {
+      "status": "ok",
+      "value": null,
+      "repr": "None"
+    },
+    "bug": {
+      "status": "exception",
+      "type": "OverflowError",
+      "msg": "Python int too large to convert to C long"
+    }
+  },
+  "docstringAdded": false
+}

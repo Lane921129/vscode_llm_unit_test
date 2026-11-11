@@ -1,0 +1,28 @@
+{
+  "id": "bug_04_bmi_height_unit_scale",
+  "sourceFile": "bmi.py",
+  "target": "calculate_bmi",
+  "type": "unit-or-conversion",
+  "description": "身高公分換算為公尺應除以 100，誤以毫米單位除以 1000",
+  "expectedSpecSentence": ":param height_cm: 身高（公分），將身高由公分換算為公尺",
+  "witness": {
+    "call": "calculate_bmi(70, 175)",
+    "clean": {
+      "status": "ok",
+      "value": [
+        22.86,
+        "健康體位"
+      ],
+      "repr": "(22.86, '健康體位')"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        2285.71,
+        "肥胖"
+      ],
+      "repr": "(2285.71, '肥胖')"
+    }
+  },
+  "docstringAdded": false
+}

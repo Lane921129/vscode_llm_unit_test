@@ -1,0 +1,11 @@
+--- a/bmi.py
++++ b/bmi.py
+@@ -13,7 +13,7 @@
+     # 判斷體重狀態（依據台灣衛福部標準）
+     if bmi < 18.5:
+         status = "體重過輕"
+-    elif 18.5 <= bmi < 24:
++    elif 18.5 <= bmi <= 24:
+         status = "健康體位"
+     elif 24 <= bmi < 27:
+         status = "體重過重"

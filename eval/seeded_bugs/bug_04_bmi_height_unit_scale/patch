@@ -1,0 +1,11 @@
+--- a/bmi.py
++++ b/bmi.py
+@@ -5,7 +5,7 @@
+     :param height_cm: 身高（公分）
+     """
+     # 將身高由公分換算為公尺
+-    height_m = height_cm / 100
++    height_m = height_cm / 1000
+ 
+     # 計算 BMI（保留小數點後兩位）
+     bmi = round(weight_kg / (height_m**2), 2)

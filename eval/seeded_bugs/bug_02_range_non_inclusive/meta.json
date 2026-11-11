@@ -1,0 +1,32 @@
+{
+  "id": "bug_02_range_non_inclusive",
+  "sourceFile": "bottle_utils.py",
+  "target": "parse_range_header",
+  "type": "boundary-operator",
+  "description": "結束索引應為 non-inclusive，誤將包含式 end 轉為非包含式時漏加 1",
+  "expectedSpecSentence": "The end index is non-inclusive.",
+  "witness": {
+    "call": "list(parse_range_header(\"bytes=100-200\", 300))",
+    "clean": {
+      "status": "ok",
+      "value": [
+        [
+          100,
+          201
+        ]
+      ],
+      "repr": "[(100, 201)]"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        [
+          100,
+          200
+        ]
+      ],
+      "repr": "[(100, 200)]"
+    }
+  },
+  "docstringAdded": false
+}

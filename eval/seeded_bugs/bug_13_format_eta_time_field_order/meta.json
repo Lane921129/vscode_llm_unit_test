@@ -1,0 +1,22 @@
+{
+  "id": "bug_13_format_eta_time_field_order",
+  "sourceFile": "vehicle_time_utils.py",
+  "target": "format_eta_time",
+  "type": "wrong-field",
+  "description": "時間格式化回傳欄位順序錯誤，誤回傳時:分 月/日 (%H:%M %m/%d) 而非月/日 時:分 (%m/%d %H:%M)",
+  "expectedSpecSentence": "將預計到達時間字串轉為月/日 時:分格式字串 (%m/%d %H:%M)",
+  "witness": {
+    "call": "format_eta_time(\"2026-11-09 10:30:00\")",
+    "clean": {
+      "status": "ok",
+      "value": "11/09 10:30",
+      "repr": "'11/09 10:30'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "10:30 11/09",
+      "repr": "'10:30 11/09'"
+    }
+  },
+  "docstringAdded": true
+}

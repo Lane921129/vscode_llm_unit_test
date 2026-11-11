@@ -1,0 +1,22 @@
+{
+  "id": "bug_16_char_value_digit_condition",
+  "sourceFile": "validators_basic.py",
+  "target": "_char_value",
+  "type": "condition-inversion",
+  "description": "數字判斷條件反向，誤寫為 char if not char.isdigit() else str(...)",
+  "expectedSpecSentence": "A=10, B=11, ..., Z=35 (case-insensitive).",
+  "witness": {
+    "call": "_char_value(\"5\")",
+    "clean": {
+      "status": "ok",
+      "value": "5",
+      "repr": "'5'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "-2",
+      "repr": "'-2'"
+    }
+  },
+  "docstringAdded": false
+}

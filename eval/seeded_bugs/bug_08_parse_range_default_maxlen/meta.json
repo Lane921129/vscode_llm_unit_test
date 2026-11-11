@@ -1,0 +1,27 @@
+{
+  "id": "bug_08_parse_range_default_maxlen",
+  "sourceFile": "bottle_utils.py",
+  "target": "parse_range_header",
+  "type": "wrong-default",
+  "description": "maxlen 預設值應為 0，誤設為 100",
+  "expectedSpecSentence": "parse_range_header(header, maxlen=0)",
+  "witness": {
+    "call": "list(parse_range_header(\"bytes=10-20\"))",
+    "clean": {
+      "status": "ok",
+      "value": [],
+      "repr": "[]"
+    },
+    "bug": {
+      "status": "ok",
+      "value": [
+        [
+          10,
+          21
+        ]
+      ],
+      "repr": "[(10, 21)]"
+    }
+  },
+  "docstringAdded": false
+}

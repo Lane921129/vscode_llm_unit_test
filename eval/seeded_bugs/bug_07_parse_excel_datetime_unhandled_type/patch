@@ -1,0 +1,11 @@
+--- a/vehicle_time_utils.py
++++ b/vehicle_time_utils.py
+@@ -73,7 +73,7 @@
+     if isinstance(value, datetime):
+         return value
+ 
+-    if isinstance(value, str):
++    if value:
+         value = value.strip()
+ 
+         formats = [

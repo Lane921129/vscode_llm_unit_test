@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -64,7 +64,7 @@
+             elif not end:  # bytes=100-    -> all but the first 99 bytes
+                 start, end = int(start), maxlen
+             else:  # bytes=100-200 -> bytes 100-200 (inclusive)
+-                start, end = int(start), min(int(end) + 1, maxlen)
++                start, end = int(start), min(int(end), maxlen)
+             if 0 <= start < end <= maxlen:
+                 yield start, end
+         except ValueError:

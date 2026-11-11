@@ -1,0 +1,22 @@
+{
+  "id": "bug_03_char_value_digit_boundary",
+  "sourceFile": "validators_basic.py",
+  "target": "_char_value",
+  "type": "boundary-operator",
+  "description": "字母 A 轉數值應為 10，計算公式誤減 1 導致 A 轉為 9",
+  "expectedSpecSentence": "A=10, B=11, ..., Z=35 (case-insensitive).",
+  "witness": {
+    "call": "_char_value(\"A\")",
+    "clean": {
+      "status": "ok",
+      "value": "10",
+      "repr": "'10'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "9",
+      "repr": "'9'"
+    }
+  },
+  "docstringAdded": false
+}
