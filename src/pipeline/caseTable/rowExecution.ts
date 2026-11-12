@@ -118,7 +118,7 @@ export interface MethodRun {
 /** Run one test file through generated_test_runner; `module` is the file stem inside runtime.artifacts. */
 export async function runTestFile(runtime: RowRuntime, module: string, code: string, useCoverage = false): Promise<MethodRun> {
     const testFile = path.join(runtime.artifacts, `${module}.py`);
-    fs.writeFileSync(testFile, code, { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(testFile, code, 'utf8');
     const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);
     const resultFile = path.join(runtime.artifacts, `${module}.runner.json`);
     const args = [...generatedUnittestArguments(module, path.dirname(runtime.sourceFile), useCoverage, true),

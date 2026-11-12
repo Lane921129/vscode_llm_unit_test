@@ -8,6 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { renameAtomicSync } from '../../utils/atomicRename';
+import { isTestFocus } from '../testFocus';
 import {
     CASE_ORIGINS, CASE_ROW_STATUSES, CASE_TABLE_VERSION, CaseRow, CaseTableFile, EXPECTED_SOURCES,
     ORACLE_STATUSES, OUTCOME_KINDS, SCENARIO_MAX_LENGTH, isCaseCategory
@@ -46,7 +47,7 @@ export function readCaseTable(directory: string): CaseTableFile {
 export function validateCaseTable(value: unknown): CaseTableFile {
     const table = record(value, '$');
     for (const key of Object.keys(table)) {
-        if (!['version', 'target', 'rows'].includes(key)) { fail(key, 'unknown field'); }
+        if (!['version', 'target', 'rows', 'testFocus'].includes(key)) { fail(key, 'unknown field'); }
     }
     if (table.version !== CASE_TABLE_VERSION) { fail('version', `expected ${CASE_TABLE_VERSION}`); }
     const target = text(table.target, 'target');
@@ -58,7 +59,8 @@ export function validateCaseTable(value: unknown): CaseTableFile {
         ids.add(row.id);
         return row;
     });
-    return { version: CASE_TABLE_VERSION, target, rows };
+    const testFocus = table.testFocus !== undefined ? (isTestFocus(table.testFocus) ? table.testFocus : fail('testFocus', 'unknown test focus')) : undefined;
+    return { version: CASE_TABLE_VERSION, target, rows, ...(testFocus ? { testFocus } : {}) };
 }
 
 function validateRow(value: unknown, at: string): CaseRow {

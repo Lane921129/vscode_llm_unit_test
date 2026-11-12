@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CaseRow, needsSetup, nextCaseRowIndex, transitionCaseRow } from './caseTable';
 import { CaseTableFacts } from './caseTableFacts';
+import { TestFocus } from '../testFocus';
 import { buildCaseTableTestFile, buildRowTestMethod, RowExpectation, RowTestContext, rowTestMethodName } from './rowToTest';
 import { captureRow, captureSurvivorRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile, validateRowSetup } from './rowExecution';
 import { getRowSetupPrompt, parseRowSetupResponse } from '../../roles/unittestWriter';
@@ -30,6 +31,11 @@ export interface RowStageOptions {
     log: (text: string) => void;
     /** PR #10: whether to run Quality Analyst survivor loop (default true). */
     qualityAnalyst?: boolean;
+    /** PR #13b: test focus (e.g. mutation increases survivor attempts from 3 to 6). */
+    testFocus?: TestFocus;
+    /** Preserved passing row methods when running supplementary rows. */
+    initialPassing?: ReadonlyMap<string, string>;
+    initialSetups?: ReadonlyMap<string, string>;
     /** PR #8 hook: decide the expected value after capture; default keeps the observed outcome. */
     decideExpected?: (row: CaseRow, capture: CaptureReport) => Promise<{ row: CaseRow; expectation: RowExpectation | null }>;
 }
@@ -45,6 +51,7 @@ export interface RowStageResult {
     passingMethods: number;
     /** Model-written setup per row id (needed again for test_spec_mismatch.py). */
     setups: Map<string, string>;
+    passing?: Map<string, string>;
 }
 
 export function rowTestContext(runtime: RowRuntime, facts: CaseTableFacts): RowTestContext {
@@ -66,8 +73,8 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     const context = rowTestContext(runtime, facts);
     const callees = [facts.methodKind === 'instance' ? `instance.${runtime.target.split('.').pop()}` : `target_module.${runtime.target}`];
     const rows = [...options.rows];
-    const passing = new Map<string, string>();
-    const setups = new Map<string, string>();
+    const passing = new Map<string, string>(options.initialPassing);
+    const setups = new Map<string, string>(options.initialSetups);
     for (let index = 0; index < rows.length; index++) {
         let row = rows[index];
         if (row.status !== 'proposed') { continue; }
@@ -144,7 +151,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     if (options.qualityAnalyst !== false && survivors.length > 0) {
         const stopPolicy = currentStopPolicy();
         const qualityNoImprovementLimit = stopPolicy?.settings.qualityNoImprovementLimit ?? 3;
-        const maxAttempts = 3;
+        const maxAttempts = options.testFocus === 'mutation' ? 6 : 3;
         let attempts = 0;
         let noImprovementCount = 0;
         const attemptedIds = new Set<string>();
@@ -296,6 +303,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
         mutation: currentMutation,
         coverage: currentCoverage,
         passingMethods: passing.size,
-        setups
+        setups,
+        passing
     };
 }

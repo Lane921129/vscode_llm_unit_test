@@ -2,6 +2,13 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-12 PR #13b（側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2）
+- 側欄重排為六大區塊（執行環境、測試資料與輸出、測試方式、基礎設定、進階設定、開始/停止與紀錄），①～④ 預設展開，⑤ 預設摺疊並記住選擇。
+- 流程版本提供「?」說明面板與動態選項摘要（中英文 i18n）；測試方式區新增「套用 demo 設定」按鈕（一鍵配置 local、gpt-oss:20b、8192 context、mutatest、full、5/3/0 停止政策）。
+- 測試重點（promptStrategy）完整接進 v2：完整（不變）、邊界優先（提示詞加一句並前排邊界/錯誤案例）、覆蓋率優先（補問未涵蓋分支案例）、突變強化（存活突變重試上限升為 6 次，並在 Quality Analyst 關閉時提示）。
+- v2 結果卡片支援規格不符 N 個標籤與展開比對表格（含輸入、規格預期、實際、依據及需人工確認清單）。
+- 新增 `bmi-boundary-first` v2 golden 快照，既有快照保持不變；v1 行為、提示詞與預設值全數維持。
+
 ## 2026-11-12 PR #15（v2 setup 與 runner 失敗收尾）
 - v2 setup 重用 target-rebound 檢查禁止環境／模組修改；違反列為 capture-failed／setup-forbidden-mutation，不要求 Bug Fixer。
 - runner 逾時、異常退出或雙版本內層遺失結果會保存 failed 與 reasonCode，後續目標可繼續核對報告。
