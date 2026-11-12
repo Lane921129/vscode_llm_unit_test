@@ -156,7 +156,8 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
   - 覆蓋率優先（`coverage`）：合併測試與量測覆蓋率後，若有未覆蓋的分支條件，以 `getCaseScenarioPrompt` 追加一句 `"Only propose scenarios that reach these uncovered branch conditions: <conditions>"` 再向 Analyst 要一輪；同樣走驗證、捕獲、規格預測；新列合併進測試；總列數上限 8 列；最多追加一輪。
   - 突變強化（`mutation`）：存活突變補強最大嘗試次數由 3 次放寬為 6 次；當 `qualityAnalyst === 'off'` 時在側欄測試重點旁顯示提醒（`focus-mutation-hint`）。
   - `case_table.json` 與 `v2_result.json` 記錄 `testFocus`；`caseTableStore.ts` 嚴格欄位檢查允許並驗證 `testFocus`。
-  - `rowExecution.ts` 寫入測試檔允許覆寫（`flag: 'w'`），支援覆蓋率補問輪次的安全重寫。
+  - `rowExecution.ts` 改回維持 `flag: 'wx'` 保護，同名測試檔第二次寫入拋出 `EEXIST`；覆蓋率補問輪次產生的測試檔與合併檔使用 `_followup` 後綴（`test_case_table_followup.py`、`row_c*_0_test_followup.py`），不覆蓋既有檔；`src/test/caseTableTestFocus.test.ts` 補測試驗證同名檔第二次寫入拋錯。
+  - `src/test/caseTable.test.ts` 的「所有選填欄位往返」與格式錯誤測試加入 `testFocus` 欄位（11/08 決策）。
   - 新增 v2 golden 情境 `bmi-boundary-first`（已錄製通過），既有三個 v2 golden 快照零差異。
 - [x] **D. Demo 支援**：
   - (a) v2 結果卡片在 `specMismatchCount > 0` 時顯示「規格不符 N 個」（`spec-mismatch-badge`），點擊可展開／收合規格不符表格面板（`spec-mismatch-panel`），呈現輸入、規格預期、實際回傳、依據，並附待人工確認項目清單。
@@ -958,8 +959,9 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 ## 6. 工作階段紀錄（最新的放最上面）
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
-| 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 見分支 pr/13b-sidebar-layout 最新 commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-12 23:20 | Antigravity | fix(pr13b) | rowExecution 改回 flag: 'wx' 保護、覆蓋率補問輪次產生的測試檔與合併檔使用 _followup 後綴避免覆蓋既有檔、補 runTestFile 重複寫入拋 EEXIST 測試；caseTable.test.ts 補 testFocus 往返與格式驗證；check-types 0、lint 0、related 34/34 全過 | 最新 commit |
+| 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 5ae34ac |
 | 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合／兩項邊界回歸；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | `7b51079`（程式）；本筆 docs 收尾 |
 | 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
 | 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |

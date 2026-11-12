@@ -7,6 +7,7 @@ import { runCaseTablePipeline } from '../pipeline/caseTable/runCaseTablePipeline
 import { readCaseTable } from '../pipeline/caseTable/caseTableStore';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { getCaseScenarioPrompt, CaseScenarioPromptFacts } from '../roles/semanticAnalyzer';
+import { runTestFile, RowRuntime } from '../pipeline/caseTable/rowExecution';
 
 const root = path.resolve(__dirname, '../..');
 const python = resolvePythonExecutable(undefined, root);
@@ -203,10 +204,41 @@ test('PR #13b: coverage test focus calls supplementary round when missing branch
                 'supplementary prompt must include uncovered branches instruction');
             assert.ok(table.rows.length >= 2, 'supplementary rows added');
             assert.ok(table.rows.length <= 8, 'total rows must not exceed 8');
+            const v2Runs = path.join(result.directory, 'v2_runs');
+            assert.ok(fs.existsSync(path.join(v2Runs, 'test_case_table.py')), 'initial merged test exists');
+            assert.ok(fs.existsSync(path.join(v2Runs, 'test_case_table_followup.py')), 'followup merged test exists');
         }
 
         const v2Result = JSON.parse(fs.readFileSync(path.join(result.directory, 'v2_result.json'), 'utf8'));
         assert.equal(v2Result.testFocus, 'coverage');
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test('PR #13b: runTestFile throws EEXIST when writing a test file with the same module name a second time', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-wx-flag-'));
+    try {
+        const runtime: RowRuntime = {
+            python,
+            sourceFile: path.join(directory, 'target.py'),
+            target: 'dummy',
+            importPaths: [directory],
+            artifacts: directory
+        };
+        fs.writeFileSync(runtime.sourceFile, 'def dummy(): return 1\n', 'utf8');
+
+        // First write creates test_sample.py
+        await runTestFile(runtime, 'test_sample', 'import unittest\nclass T(unittest.TestCase):\n    def test_1(self): pass\n');
+        assert.ok(fs.existsSync(path.join(directory, 'test_sample.py')));
+
+        // Second write with same module name must throw EEXIST due to flag: 'wx'
+        await assert.rejects(async () => {
+            await runTestFile(runtime, 'test_sample', 'import unittest\n');
+        }, (err: NodeJS.ErrnoException) => {
+            assert.equal(err.code, 'EEXIST');
+            return true;
+        });
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }

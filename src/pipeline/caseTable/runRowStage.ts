@@ -36,6 +36,8 @@ export interface RowStageOptions {
     /** Preserved passing row methods when running supplementary rows. */
     initialPassing?: ReadonlyMap<string, string>;
     initialSetups?: ReadonlyMap<string, string>;
+    /** PR #13b: file suffix for followup/supplementary rounds (e.g. '_followup'). */
+    fileSuffix?: string;
     /** PR #8 hook: decide the expected value after capture; default keeps the observed outcome. */
     decideExpected?: (row: CaseRow, capture: CaptureReport) => Promise<{ row: CaseRow; expectation: RowExpectation | null }>;
 }
@@ -71,6 +73,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     const { runtime, facts } = options;
     fs.mkdirSync(runtime.artifacts, { recursive: true });
     const context = rowTestContext(runtime, facts);
+    const suffix = options.fileSuffix ?? '';
     const callees = [facts.methodKind === 'instance' ? `instance.${runtime.target.split('.').pop()}` : `target_module.${runtime.target}`];
     const rows = [...options.rows];
     const passing = new Map<string, string>(options.initialPassing);
@@ -106,7 +109,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
         let method = buildRowTestMethod(row, context, decided.expectation, setup);
         row = { ...transitionCaseRow(row, 'test-generated'), testMethod: rowTestMethodName(row) };
         let attempt = 0;
-        let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test`, buildCaseTableTestFile(context, [method]));
+        let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test${suffix}`, buildCaseTableTestFile(context, [method]));
         while (!(run.passed && run.targetObserved) && attempt < ROW_FIX_MAX_ATTEMPTS) {
             attempt += 1;
             const prompt = getRowFixPrompt({ signature: facts.signature, scenario: row.scenario, methodName: row.testMethod!,
@@ -119,7 +122,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 continue;
             }
             method = fixed!;
-            run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test`, buildCaseTableTestFile(context, [method]));
+            run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test${suffix}`, buildCaseTableTestFile(context, [method]));
         }
         if (run.passed && run.targetObserved) {
             passing.set(row.id, method);
@@ -130,7 +133,8 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     }
     if (!passing.size) { return { rows, terminal: 'failed', reasonCode: 'no-passing-row-tests', passingMethods: 0, setups }; }
     const merged = buildCaseTableTestFile(context, rows.filter(row => passing.has(row.id)).map(row => passing.get(row.id)!));
-    const mergedRun = await runTestFile(runtime, path.basename(CASE_TABLE_TEST_FILE, '.py'), merged);
+    const mergedModuleName = `${path.basename(CASE_TABLE_TEST_FILE, '.py')}${suffix}`;
+    const mergedRun = await runTestFile(runtime, mergedModuleName, merged);
     if (!(mergedRun.passed && mergedRun.targetObserved)) {
         return { rows, terminal: 'failed', reasonCode: 'merged-test-failed', testFile: mergedRun.testFile, passingMethods: passing.size, setups };
     }
@@ -240,7 +244,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
             let method = buildRowTestMethod(row, context, decided.expectation, setup);
             row = { ...transitionCaseRow(row, 'test-generated'), testMethod: rowTestMethodName(row) };
             let attempt = 0;
-            let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test`, buildCaseTableTestFile(context, [method]));
+            let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test${suffix}`, buildCaseTableTestFile(context, [method]));
             while (!(run.passed && run.targetObserved) && attempt < ROW_FIX_MAX_ATTEMPTS) {
                 attempt += 1;
                 const fixPrompt = getRowFixPrompt({ signature: facts.signature, scenario: row.scenario, methodName: row.testMethod!,
@@ -253,7 +257,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                     continue;
                 }
                 method = fixed!;
-                run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test`, buildCaseTableTestFile(context, [method]));
+                run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test${suffix}`, buildCaseTableTestFile(context, [method]));
             }
 
             if (!(run.passed && run.targetObserved)) {
@@ -268,7 +272,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
 
             // Candidate merged test run to check mutation score improvement
             const candidateMerged = buildCaseTableTestFile(context, rows.filter(r => passing.has(r.id)).map(r => passing.get(r.id)!));
-            const candidateRun = await runTestFile(runtime, `test_candidate_${row.id.toLowerCase()}`, candidateMerged);
+            const candidateRun = await runTestFile(runtime, `test_candidate_${row.id.toLowerCase()}${suffix}`, candidateMerged);
             if (!(candidateRun.passed && candidateRun.targetObserved)) {
                 options.log(`[v2] Candidate merged test for survivor row ${row.id} failed; reverting.`);
                 passing.delete(row.id);
@@ -293,13 +297,14 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     }
 
     // Ensure the final test file contains the accepted tests
-    fs.writeFileSync(path.join(runtime.artifacts, CASE_TABLE_TEST_FILE), currentMerged, 'utf8');
+    const finalTestFileName = `${path.basename(CASE_TABLE_TEST_FILE, '.py')}${suffix}.py`;
+    fs.writeFileSync(path.join(runtime.artifacts, finalTestFileName), currentMerged, 'utf8');
 
     return {
         rows,
         terminal: 'usable',
         reasonCode: 'usable',
-        testFile: path.join(runtime.artifacts, CASE_TABLE_TEST_FILE),
+        testFile: path.join(runtime.artifacts, finalTestFileName),
         mutation: currentMutation,
         coverage: currentCoverage,
         passingMethods: passing.size,

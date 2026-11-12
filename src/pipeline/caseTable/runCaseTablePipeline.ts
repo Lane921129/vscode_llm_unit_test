@@ -317,6 +317,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
                                 mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
                                 qualityAnalyst: qualityAnalystEnabled,
                                 testFocus,
+                                fileSuffix: '_followup',
                                 initialPassing: stage.passing,
                                 initialSetups: stage.setups,
                                 ...(decideExpected ? { decideExpected } : {})
