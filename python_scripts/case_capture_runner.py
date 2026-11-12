@@ -131,6 +131,11 @@ def capture(request):
     row = request['row']
     report = {'version': REPORT_VERSION, 'id': row.get('id')}
     file, target = request['file'], request['target']
+    if row.get('setup'):
+        from case_row_assertions import validate_setup
+        verdict = validate_setup({'setup': row['setup'], 'module': os.path.splitext(os.path.basename(file))[0], 'target': target})
+        if not verdict['accepted']:
+            return {**report, 'status': 'capture-failed', 'reason': 'setup-forbidden-mutation'}
     import_paths = [path for path in request.get('importPaths', []) if isinstance(path, str)]
     from runtime_policy import RuntimePolicyError, guarded_runtime
     try:

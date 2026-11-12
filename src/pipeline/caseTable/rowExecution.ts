@@ -18,6 +18,8 @@ import { assessTargetCoverageEvidence } from '../../mutation/targetCoverage';
 import { CaseMock } from './caseTable';
 import { CaseTableDependency } from './caseTableFacts';
 import { ExceptionReference } from './rowToTest';
+import { runnerCrashed, runRowProcess } from './runnerFailure';
+import { AnalysisStageError } from '../../utils/executionFailureCategory';
 
 export interface CaptureRequestRow {
     id: string;
@@ -57,23 +59,15 @@ function environment(runtime: RowRuntime): NodeJS.ProcessEnv {
 export async function captureRow(runtime: RowRuntime, row: CaptureRequestRow, dependencies: readonly CaseTableDependency[]): Promise<CaptureReport> {
     const request = { version: 'case-capture-request-v1', file: runtime.sourceFile, target: runtime.target,
         importPaths: runtime.importPaths, dependencies, row };
-    let run: Awaited<ReturnType<typeof runSpawn>>;
-    try {
-        run = await runSpawn(runtime.python, ['-B', pythonToolPath('caseCapture')],
-            { cwd: runtime.artifacts, env: environment(runtime), timeout: CAPTURE_TIMEOUT_MS, input: JSON.stringify(request) });
-    } catch (error) {
-        if ((error as Error)?.name === 'ProcessTimeoutError') { return { id: row.id, status: 'capture-failed', reason: 'capture-timeout' }; }
-        throw error;
+    const run = await runRowProcess(runtime.python, ['-B', pythonToolPath('caseCapture')],
+        { cwd: runtime.artifacts, env: environment(runtime), timeout: CAPTURE_TIMEOUT_MS, input: JSON.stringify(request) }, 'capture');
+    if (run.code !== 0) { throw runnerCrashed('capture', run.code); }
+    let report: CaptureReport & { error?: string };
+    try { report = JSON.parse(run.stdout); } catch { throw runnerCrashed('capture', run.code); }
+    if (report.error || report.id !== row.id || !['captured', 'capture-failed'].includes(report.status)) {
+        throw runnerCrashed('capture', run.code);
     }
-    try {
-        const report = JSON.parse(run.stdout) as CaptureReport & { error?: string };
-        if (report.error || report.id !== row.id || !['captured', 'capture-failed'].includes(report.status)) {
-            return { id: row.id, status: 'capture-failed', reason: 'capture-tool-error' };
-        }
-        return report;
-    } catch {
-        return { id: row.id, status: 'capture-failed', reason: 'capture-tool-error' };
-    }
+    return report;
 }
 
 export interface MutantCaptureReport {
@@ -97,43 +91,21 @@ export async function captureSurvivorRow(runtime: RowRuntime, row: CaptureReques
         row,
         mutant
     };
-    let run: Awaited<ReturnType<typeof runSpawn>>;
-    try {
-        run = await runSpawn(runtime.python, ['-B', pythonToolPath('mutation'), '--capture-mutant'],
-            { cwd: runtime.artifacts, env: environment(runtime), timeout: CAPTURE_TIMEOUT_MS * 2, input: JSON.stringify(request) });
-    } catch (error) {
-        if ((error as Error)?.name === 'ProcessTimeoutError') {
-            return {
-                id: row.id,
-                status: 'capture-failed',
-                distinguishable: false,
-                reason: 'capture-timeout',
-                clean: { id: row.id, status: 'capture-failed', reason: 'capture-timeout' }
-            };
-        }
-        throw error;
+    const run = await runRowProcess(runtime.python, ['-B', pythonToolPath('mutation'), '--capture-mutant'],
+        { cwd: runtime.artifacts, env: environment(runtime), timeout: CAPTURE_TIMEOUT_MS * 2, input: JSON.stringify(request) }, 'survivor-capture');
+    if (run.code !== 0) { throw runnerCrashed('survivor-capture', run.code); }
+    let report: MutantCaptureReport & { error?: string };
+    try { report = JSON.parse(run.stdout); } catch { throw runnerCrashed('survivor-capture', run.code); }
+    if (report.error || report.id !== row.id || !['distinguishable', 'indistinguishable', 'capture-failed'].includes(report.status)) {
+        throw runnerCrashed('survivor-capture', run.code);
     }
-    try {
-        const report = JSON.parse(run.stdout) as MutantCaptureReport & { error?: string };
-        if (report.error || report.id !== row.id || !['distinguishable', 'indistinguishable', 'capture-failed'].includes(report.status)) {
-            return {
-                id: row.id,
-                status: 'capture-failed',
-                distinguishable: false,
-                reason: 'capture-tool-error',
-                clean: { id: row.id, status: 'capture-failed', reason: 'capture-tool-error' }
-            };
-        }
-        return report;
-    } catch {
-        return {
-            id: row.id,
-            status: 'capture-failed',
-            distinguishable: false,
-            reason: 'capture-tool-error',
-            clean: { id: row.id, status: 'capture-failed', reason: 'capture-tool-error' }
-        };
+    // A killed nested capture can be wrapped in a normal dual-capture reply.
+    // Missing worker JSON is infrastructure failure, never mutant behavior.
+    if ([report.clean?.reason, report.mutant?.reason].some(reason =>
+        reason === 'clean-capture-parse-failed' || reason === 'mutant-capture-parse-failed')) {
+        throw runnerCrashed('survivor-capture', null);
     }
+    return report;
 }
 
 export interface MethodRun {
@@ -154,18 +126,21 @@ export async function runTestFile(runtime: RowRuntime, module: string, code: str
         '--target-evidence', evidence, '--target-run-id', randomUUID(),
         '--violation-report', path.join(runtime.artifacts, `${module}.isolation.jsonl`),
         '--result-json', resultFile];
-    let run: Awaited<ReturnType<typeof runSpawn>>;
-    try {
-        run = await runSpawn(runtime.python, args, { cwd: runtime.artifacts, env: environment(runtime), timeout: METHOD_TIMEOUT_MS });
-    } catch (error) {
-        if ((error as Error)?.name === 'ProcessTimeoutError') { return { passed: false, targetObserved: false, error: 'Test method timed out.', testFile }; }
-        throw error;
-    }
+    const run = await runRowProcess(runtime.python, args,
+        { cwd: runtime.artifacts, env: environment(runtime), timeout: METHOD_TIMEOUT_MS }, 'test');
     const read = (file: string): Record<string, unknown> | undefined => {
         try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; }
     };
     const result = read(resultFile);
     const invocation = read(evidence);
+    if (run.code === null || !result || result.schemaVersion !== 'generated-test-result-v1'
+        || (run.code !== 0 && result.status === 'passed')) {
+        // Coverage is optional. A normal interpreter exit reporting its absent
+        // package remains unavailable coverage, rather than a killed test worker.
+        if (!(useCoverage && run.code !== null && /ModuleNotFoundError: No module named ['"]coverage['"]/.test(run.stderr))) {
+            throw runnerCrashed('test', run.code);
+        }
+    }
     const passed = run.code === 0 && result?.status === 'passed';
     const targetObserved = invocation?.observed === true && invocation?.status === 'passed';
     const output = `${run.stdout}\n${run.stderr}`.trim();
@@ -212,7 +187,8 @@ export async function measureCoverage(runtime: RowRuntime, code: string): Promis
         return { available: true, linePercent: executable ? Math.round(((executable - missing.length) / executable) * 1000) / 10 : null,
             executableLines: executable, missingLines: missing, branchesCovered: assessment.targetBranchesCovered ?? null,
             missingBranches: assessment.missingTargetBranches ?? [] };
-    } catch {
+    } catch (error) {
+        if (error instanceof AnalysisStageError && error.stage === 'case-table-runner') { throw error; }
         return unavailable('coverage-failed');
     }
 }
@@ -253,10 +229,23 @@ export async function fixPreservesContract(runtime: RowRuntime, before: string, 
     callees: readonly string[]): Promise<{ accepted: boolean; violations: string[] }> {
     const run = await runSpawn(runtime.python, ['-B', pythonToolPath('caseRowAssertions')],
         { env: environment(runtime), timeout: 10000, input: JSON.stringify({ before, after, method, callees,
-            module: path.basename(runtime.sourceFile, '.py'), target: runtime.target }) });
+            module: path.basename(runtime.sourceFile, '.py'), target: runtime.target, protectEnvironment: true }) });
     try {
         const report = JSON.parse(run.stdout);
         const violations = Array.isArray(report.violations) ? report.violations.filter((item: unknown) => typeof item === 'string') : ['invalid-report'];
         return { accepted: report.accepted === true && violations.length === 0, violations };
     } catch { return { accepted: false, violations: ['invalid-report'] }; }
+}
+
+/** Reuse the Python target-rebound guard, with environment roots enabled only for v2 setup. */
+export async function validateRowSetup(runtime: RowRuntime, setup: string): Promise<boolean> {
+    const run = await runRowProcess(runtime.python, ['-B', pythonToolPath('caseRowAssertions')],
+        { env: environment(runtime), timeout: 10000, input: JSON.stringify({ operation: 'setup', setup,
+            module: path.basename(runtime.sourceFile, '.py'), target: runtime.target }) }, 'setup-validation');
+    let report: { accepted?: unknown; violations?: unknown };
+    try { report = JSON.parse(run.stdout); } catch { throw runnerCrashed('setup-validation', run.code); }
+    if (run.code !== 0 || typeof report.accepted !== 'boolean' || !Array.isArray(report.violations)) {
+        throw runnerCrashed('setup-validation', run.code);
+    }
+    return report.accepted && report.violations.length === 0;
 }

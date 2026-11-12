@@ -123,22 +123,45 @@ def _first_call_index(method, callees):
     return None
 
 
-def _rebinds_target(statements, module, target):
+def _rebinds_target(statements, module, target, *, protect_environment=False):
     """True when setup touches the module under test or the target itself."""
     parts = target.split('.')
     protected_names = {'target_module', parts[0], parts[-1]}
     roots = {'target_module'}
+    module_roots = {'sys', 'os', 'builtins', '__builtins__'} if protect_environment else set()
+    target_roots = {'target_module'}
+    patch_names = {'mock.patch', 'unittest.mock.patch', 'patch'}
+    import_functions = {'__import__', 'builtins.__import__'}
     for statement in statements:
         for node in ast.walk(statement):
             if isinstance(node, ast.Import):
                 for alias in node.names:
+                    if protect_environment:
+                        module_roots.add(alias.asname or alias.name.split('.')[0])
+                        if alias.name == 'unittest.mock':
+                            patch_names.add((alias.asname or alias.name) + '.patch')
+                        if alias.name == 'importlib':
+                            import_functions.add((alias.asname or alias.name) + '.import_module')
+                        if alias.name == 'builtins':
+                            import_functions.add((alias.asname or alias.name) + '.__import__')
                     if alias.name == module or alias.name.endswith('.' + module):
                         roots.add(alias.asname or alias.name.split('.')[0])
+                        target_roots.add(alias.asname or alias.name.split('.')[0])
             elif isinstance(node, ast.ImportFrom) and node.module and (node.module == module or node.module.endswith('.' + module)):
                 for alias in node.names:
                     roots.add(alias.asname or alias.name)
+            elif protect_environment and isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    module_roots.add(alias.asname or alias.name)
+                    if node.module == 'unittest.mock' and alias.name == 'patch':
+                        patch_names.add(alias.asname or alias.name)
+                    if (node.module, alias.name) in (('importlib', 'import_module'), ('builtins', '__import__')):
+                        import_functions.add(alias.asname or alias.name)
+    roots.update(module_roots)
     instance_attribute = parts[-1]
     target_attributes = {parts[0], parts[-1], '__dict__'}
+    if protect_environment:
+        target_attributes.update({'modules', 'environ'})
 
     def aliases(expression):
         """True when the expression evaluates to a protected object itself (not merely uses it)."""
@@ -150,6 +173,8 @@ def _rebinds_target(statements, module, target):
             return expression.attr in target_attributes and (_root(expression) in roots or _root(expression) == 'instance')
         if isinstance(expression, ast.Call):
             name = _dotted(expression.func)
+            if protect_environment and name in import_functions:
+                return True
             if name in ('getattr', 'builtins.getattr', 'vars', 'builtins.vars') and expression.args:
                 return aliases(expression.args[0]) or _root(expression.args[0]) in roots | {'instance'}
             return False
@@ -203,15 +228,29 @@ def _rebinds_target(statements, module, target):
                         # Any protected name inside the stored expression counts, e.g. vars(target_module)['f'] = ...
                         if _root(element) in roots or any(isinstance(inner, ast.Name) and inner.id in roots for inner in ast.walk(element)):
                             return True
+                        if protect_environment and aliases(element.value):
+                            return True
                         if isinstance(element, ast.Attribute) and _root(element) == 'instance' and element.attr == instance_attribute:
                             return True
             if isinstance(node, ast.Call):
                 name = _dotted(node.func)
                 first = node.args[0] if node.args else None
-                if name in ('setattr', 'delattr', 'builtins.setattr', 'builtins.delattr') and first is not None \
-                        and (_root(first) in roots or _root(first) == 'instance'):
+                if name.split('.')[-1] in ('setattr', 'delattr') and first is not None \
+                        and (protect_environment or (name in ('setattr', 'delattr', 'builtins.setattr', 'builtins.delattr')
+                             and (_root(first) in roots or _root(first) == 'instance'))):
                     return True
-                if _is_patch(node) and first is not None:
+                if protect_environment and isinstance(node.func, ast.Attribute) and node.func.attr in \
+                        ('update', 'clear', 'pop', 'popitem', 'setdefault', '__setitem__', '__delitem__') \
+                        and aliases(node.func.value):
+                    return True
+                is_patch = _is_patch(node) or (protect_environment and any(name == patch or name.startswith(patch + '.') for patch in patch_names))
+                if is_patch and first is not None:
+                    if protect_environment:
+                        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                            if not first.value.startswith((module + '.', 'target_module.')):
+                                return True
+                        elif _root(first) in module_roots - target_roots:
+                            return True
                     if isinstance(first, ast.Constant) and isinstance(first.value, str):
                         if first.value.split('.')[-1] in (parts[0], parts[-1]) and module in first.value.split('.'):
                             return True
@@ -222,6 +261,20 @@ def _rebinds_target(statements, module, target):
                         if _dotted(first).split('.')[-1] in (parts[0], parts[-1]):
                             return True
     return False
+
+
+def validate_setup(request):
+    """Use the existing rebinding guard before v2 setup can reach a capture worker.
+
+    Environment roots are opt-in; compare() and its original fix contract retain
+    their behavior. Point-of-use mock.patch remains allowed in the target module.
+    """
+    try:
+        statements = ast.parse(textwrap.dedent(request['setup'])).body
+    except (SyntaxError, ValueError):
+        return {'accepted': False, 'violations': ['unparseable']}
+    forbidden = _rebinds_target(statements, request['module'], request['target'], protect_environment=True)
+    return {'accepted': not forbidden, 'violations': ['target-rebound'] if forbidden else []}
 
 
 def compare(request):
@@ -241,7 +294,8 @@ def compare(request):
     if first_old is None or first_new is None \
             or [ast.dump(item) for item in before.body[first_old:]] != [ast.dump(item) for item in after.body[first_new:]]:
         violations.append('post-call-changed')
-    if target and _rebinds_target(after.body[:first_new] if first_new is not None else after.body, module, target):
+    if target and _rebinds_target(after.body[:first_new] if first_new is not None else after.body, module, target,
+                                 protect_environment=request.get('protectEnvironment') is True):
         violations.append('target-rebound')
     if [item[0] for item in old['calls']] != [item[0] for item in new['calls']] or not old['calls']:
         violations.append('target-call-changed')
@@ -257,7 +311,8 @@ def compare(request):
 def main(stdin=None, stdout=None):
     stdin, stdout = stdin or sys.stdin, stdout or sys.stdout
     try:
-        report = compare(json.loads(stdin.read()))
+        request = json.loads(stdin.read())
+        report = validate_setup(request) if request.get('operation') == 'setup' else compare(request)
     except (ValueError, KeyError, TypeError):
         report = {'parsed': False, 'sameName': False, 'accepted': False, 'violations': ['invalid-request']}
     stdout.write(json.dumps(report))

@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { createAnalysisDirectory } from '../analysisOutput';
 import { pythonToolPath } from '../pythonTools';
 import { runSpawn } from '../../utils/processRunner';
-import { AnalysisStageError } from '../../utils/executionFailureCategory';
+import { AnalysisStageError, classifyExecutionFailure, ExecutionFailureCategory } from '../../utils/executionFailureCategory';
 import { CASE_TABLE_VERSION, CaseRow, nextCaseRowIndex } from './caseTable';
 import { RejectedCaseLine } from './caseRowParser';
 import { applyCaseRowValidation, buildCaseRowValidationRequest } from './caseRowValidation';
@@ -123,22 +123,63 @@ export interface CaseTablePipelineResult {
     specMismatch?: SpecMismatchSummary;
 }
 
+interface CaseTableExecutionState {
+    roleEvents: { stage: string; status: string; detail: Record<string, unknown> }[];
+    rows: CaseRow[];
+    modelRequests: number;
+    specOracleUsed: boolean;
+}
+
+/** A v2 failure must leave the same terminal/provenance artifacts the batch verifies. */
 export async function runCaseTablePipeline(options: CaseTablePipelineOptions): Promise<CaseTablePipelineResult> {
+    const directory = createAnalysisDirectory(options.outputPath || path.dirname(options.filePath), options.sessionDate,
+        options.filePath, options.funcName, options.projectName, options.projectRoot, options.batchDirectory);
+    const state: CaseTableExecutionState = { roleEvents: [], rows: [], modelRequests: 0, specOracleUsed: false };
+    try {
+        options.onTargetDirectory?.(directory);
+        return await runCaseTableStages(options, directory, state);
+    } catch (error) {
+        const category = error instanceof AnalysisStageError ? error.category
+            : classifyExecutionFailure(error instanceof Error ? error.message : String(error));
+        const failureStage = error instanceof AnalysisStageError ? error.stage : 'case-table';
+        const diagnostic = error instanceof AnalysisStageError ? error.diagnostic : undefined;
+        const reason = (diagnostic as { reasonCode?: unknown } | undefined)?.reasonCode;
+        const reasonCode = typeof reason === 'string' ? reason : 'v2-pipeline-error';
+        const stage: RowStageResult = { terminal: 'failed', reasonCode, rows: state.rows,
+            passingMethods: 0, setups: new Map() };
+        const specMismatch = { specMismatchCount: state.rows.filter(row => row.oracleStatus === 'spec-mismatch').length,
+            needsReviewCount: state.rows.filter(row => row.oracleStatus === 'needs-review').length, testFile: null };
+        writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: state.rows });
+        writeStageResult(directory, options.funcName, state.rows, stage, state.modelRequests, state.specOracleUsed, specMismatch);
+        fs.appendFileSync(path.join(directory, 'final_report.md'),
+            `\n- Failure stage: ${failureStage}\n- Failure category: ${category}\n`
+                + `- Failure: ${(error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, " ")}\n`, 'utf8');
+        writeBatchRecords(directory, options.filePath, options.funcName, state.roleEvents, {
+            terminal: 'failed', reasonCode, specMismatchCount: specMismatch.specMismatchCount,
+            failure: { category, stage: failureStage, message: error instanceof Error ? error.message : String(error), diagnostic },
+            caseTableResult: { mutationScore: null, lineCoveragePercent: null, coverageReasonCode: null,
+                testPassedRows: 0, totalRows: state.rows.length, needsReviewCount: specMismatch.needsReviewCount }
+        });
+        postResultCard(options, directory, state.rows, stage, specMismatch.specMismatchCount);
+        throw error;
+    }
+}
+
+async function runCaseTableStages(options: CaseTablePipelineOptions, directory: string,
+    state: CaseTableExecutionState): Promise<CaseTablePipelineResult> {
     const runTool = options.runPythonTool ?? ((script, args, input) => defaultRunPythonTool(options.pythonExecutable, script, args, input));
     const source = fs.readFileSync(options.filePath, 'utf8');
     const requirements = readRequirementsFile(options.requirementsFile, options.projectRoot);
     const facts = await extractFacts(runTool, options.filePath, options.funcName);
-    const directory = createAnalysisDirectory(options.outputPath || path.dirname(options.filePath), options.sessionDate,
-        options.filePath, options.funcName, options.projectName, options.projectRoot, options.batchDirectory);
-    options.onTargetDirectory?.(directory);
     options.log(`[v2] case table for ${options.funcName}: ${facts.branches.length} branch conditions, `
         + `${facts.dependencies.length} mockable dependencies, ${requirements.length} requirements.`);
 
     let modelRequests = 0;
     // Every request is journaled like v1: requested, transport timing (tokens, completionReason), completed/error.
-    const roleEvents: { stage: string; status: string; detail: Record<string, unknown> }[] = [];
+    const roleEvents = state.roleEvents;
     const ask = async (system: string, user: string, request: RoleAskOptions) => {
         modelRequests += 1;
+        state.modelRequests = modelRequests;
         const started = Date.now();
         roleEvents.push({ stage: 'model-request', status: 'requested', detail: { role: request.role, pipeline: 'v2-case-table' } });
         try {
@@ -197,10 +238,12 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
     })();
 
     let finalRows = outcome.rows;
+    state.rows = finalRows;
     let stage: RowStageResult | undefined;
     const validBeforeRows = outcome.rows.filter(row => row.status === 'proposed').length;
     const spec = collectSpecSources(facts, requirements);
     const specOracleUsed = options.specOracle === 'auto' && hasSpecSource(spec);
+    state.specOracleUsed = specOracleUsed;
     let specMismatch: SpecMismatchSummary | undefined;
     if (options.runRows !== false && validBeforeRows > 0) {
         const runtime = { python: options.pythonExecutable, sourceFile: path.resolve(options.filePath), target: options.funcName,
@@ -218,6 +261,7 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
             ...(decideExpected ? { decideExpected } : {})
         });
         finalRows = stage.rows;
+        state.rows = finalRows;
         specMismatch = writeSpecMismatchArtifacts(directory, options.funcName, finalRows, rowTestContext(runtime, facts), stage.setups);
         options.log(`[v2] spec oracle ${specOracleUsed ? 'on' : 'off'}: ${specMismatch.specMismatchCount} spec mismatches, `
             + `${specMismatch.needsReviewCount} rows need manual review.`);
@@ -269,6 +313,7 @@ interface BatchRecord {
     terminal: 'usable' | 'failed';
     reasonCode: string;
     specMismatchCount: number;
+    failure?: { category: ExecutionFailureCategory; stage: string; message: string; diagnostic?: unknown };
     /** Nested so the batch tier classifier keeps treating v2 knowledge as a terminal-status-only record. */
     caseTableResult: { mutationScore: number | null; lineCoveragePercent: number | null; coverageReasonCode: string | null;
         testPassedRows: number; totalRows: number; needsReviewCount: number };
@@ -282,7 +327,9 @@ function writeBatchRecords(directory: string, file: string, target: string,
     const base = { runId, sourceHash, target, validationMode: 'full', pipelineVersion: 'v2-case-table' };
     fs.writeFileSync(path.join(directory, 'run_manifest.json'), JSON.stringify(base, null, 2) + '\n', 'utf8');
     fs.writeFileSync(path.join(directory, 'function_knowledge.json'), JSON.stringify({ ...base, schemaVersion: 2,
-        terminalStatus: record.terminal, ...(record.terminal === 'failed' ? { failureCategory: 'validation', failureStage: 'case-table', reasonCode: record.reasonCode } : {}),
+        terminalStatus: record.terminal, ...(record.terminal === 'failed' ? {
+            failureCategory: record.failure?.category ?? 'validation', failureStage: record.failure?.stage ?? 'case-table',
+            reasonCode: record.reasonCode, ...(record.failure ? { failure: record.failure.message, diagnostic: record.failure.diagnostic } : {}) } : {}),
         specMismatchCount: record.specMismatchCount, caseTableResult: record.caseTableResult }, null, 2) + '\n', 'utf8');
     const time = new Date().toISOString();
     const events = [...roleEvents, { stage: 'v2-case-table', status: record.terminal, detail: { reasonCode: record.reasonCode } }]
