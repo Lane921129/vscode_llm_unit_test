@@ -12,7 +12,7 @@ import { createAnalysisDirectory } from '../analysisOutput';
 import { pythonToolPath } from '../pythonTools';
 import { runSpawn } from '../../utils/processRunner';
 import { AnalysisStageError, classifyExecutionFailure, ExecutionFailureCategory } from '../../utils/executionFailureCategory';
-import { CASE_TABLE_VERSION, CaseRow, nextCaseRowIndex } from './caseTable';
+import { CASE_TABLE_VERSION, CaseRow, caseRowId, needsSetup, nextCaseRowIndex } from './caseTable';
 import { RejectedCaseLine } from './caseRowParser';
 import { applyCaseRowValidation, buildCaseRowValidationRequest } from './caseRowValidation';
 import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
@@ -23,6 +23,7 @@ import { RowStageResult, RowStageOptions, rowTestContext, runRowStage } from './
 import { collectSpecSources, hasSpecSource } from './specSources';
 import { createSpecDecider } from './oracleDecision';
 import { SpecMismatchSummary, writeSpecMismatchArtifacts } from './specMismatchReport';
+import { TestFocus } from '../testFocus';
 import { createHash, randomUUID } from 'node:crypto';
 
 export type PipelineVersion = 'v1' | 'v2-case-table';
@@ -94,6 +95,8 @@ export interface CaseTablePipelineOptions {
     decideExpected?: RowStageOptions['decideExpected'];
     /** Sidebar result card updates (updateCoverage / updateOutcome with a caseTable summary). */
     postMessage?: (message: Record<string, unknown>) => void;
+    /** PR #13b: test focus (full | boundary | coverage | mutation). */
+    testFocus?: TestFocus;
 }
 
 export interface CaseTableCardSummary {
@@ -101,6 +104,10 @@ export interface CaseTableCardSummary {
     usableRows: number;
     totalRows: number;
     specMismatch: number;
+    specMismatchDetails?: {
+        mismatches: Array<{ id: string; input: string; expected: string; actual: string; basis: string }>;
+        needsReview: Array<{ id: string; input: string; predicted: string; actual: string; basis: string }>;
+    };
 }
 
 export interface RecordedRejection extends RejectedCaseLine {
@@ -149,8 +156,9 @@ export async function runCaseTablePipeline(options: CaseTablePipelineOptions): P
             passingMethods: 0, setups: new Map() };
         const specMismatch = { specMismatchCount: state.rows.filter(row => row.oracleStatus === 'spec-mismatch').length,
             needsReviewCount: state.rows.filter(row => row.oracleStatus === 'needs-review').length, testFile: null };
-        writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: state.rows });
-        writeStageResult(directory, options.funcName, state.rows, stage, state.modelRequests, state.specOracleUsed, specMismatch);
+        const failureTestFocus = options.testFocus ?? 'full';
+        writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: state.rows, testFocus: failureTestFocus });
+        writeStageResult(directory, options.funcName, state.rows, stage, state.modelRequests, state.specOracleUsed, specMismatch, failureTestFocus);
         fs.appendFileSync(path.join(directory, 'final_report.md'),
             `\n- Failure stage: ${failureStage}\n- Failure category: ${category}\n`
                 + `- Failure: ${(error instanceof Error ? error.message : String(error)).replace(/[\r\n]+/g, " ")}\n`, 'utf8');
@@ -196,11 +204,17 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
             throw error;
         }
     };
-    const scenarioPrompt = getCaseScenarioPrompt(facts, requirements);
+    const testFocus: TestFocus = options.testFocus ?? 'full';
+    const scenarioPrompt = getCaseScenarioPrompt(facts, requirements, { testFocus });
     const response = await ask(scenarioPrompt.system, scenarioPrompt.user, { role: 'analyst-scenario' });
     const requirementIds = requirements.map(entry => entry.id);
     const parsed = parseCaseRows(response, { origin: 'analyst', requirementIds });
-    const rows = [...parsed.rows];
+    let rows = [...parsed.rows];
+    if (testFocus === 'boundary') {
+        const boundaryOrError = rows.filter(r => r.category === 'boundary' || r.category === 'error');
+        const others = rows.filter(r => r.category !== 'boundary' && r.category !== 'error');
+        rows = [...boundaryOrError, ...others].map((row, i) => ({ ...row, id: caseRowId(i + 1) }));
+    }
     const rejected: RecordedRejection[] = [];
     const responseLines = response.split(/\r?\n/);
     for (const rejection of parsed.rejected) {
@@ -258,22 +272,78 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
             runtime, facts, rows: outcome.rows, ask, log: options.log,
             mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
             qualityAnalyst: qualityAnalystEnabled,
+            testFocus,
             ...(decideExpected ? { decideExpected } : {})
         });
         finalRows = stage.rows;
         state.rows = finalRows;
+
+        if (testFocus === 'coverage' && stage && stage.terminal === 'usable' && stage.coverage?.available
+            && stage.coverage.missingBranches && stage.coverage.missingBranches.length > 0
+            && finalRows.length < CASE_SCENARIO_ROW_LIMIT) {
+            const missingBranchLines = new Set(stage.coverage.missingBranches.map(b => parseInt(b.split('->')[0], 10)).filter(n => !isNaN(n)));
+            const uncovered = facts.branches.filter(b => missingBranchLines.has(b.line));
+            if (uncovered.length > 0) {
+                const uncoveredStr = uncovered.map(b => `line ${b.line} (${b.condition})`).join(', ');
+                const remainingLimit = CASE_SCENARIO_ROW_LIMIT - finalRows.length;
+                options.log(`[v2] coverage-first: proposing supplementary scenarios for uncovered branches: ${uncoveredStr}`);
+                const suppPrompt = getCaseScenarioPrompt(facts, requirements, {
+                    testFocus: 'coverage',
+                    uncoveredBranches: uncoveredStr,
+                    rowLimit: remainingLimit
+                });
+                const suppResponse = await ask(suppPrompt.system, suppPrompt.user, { role: 'analyst-scenario' });
+                const suppParsed = parseCaseRows(suppResponse, {
+                    origin: 'analyst',
+                    requirementIds,
+                    firstIndex: nextCaseRowIndex(finalRows),
+                    limit: remainingLimit
+                });
+                if (suppParsed.rows.length > 0) {
+                    const suppValidationRequest = buildCaseRowValidationRequest(suppParsed.rows, {
+                        source, target: options.funcName,
+                        dependencies: facts.dependencies.map(dependency => dependency.name)
+                    });
+                    const suppValidated = await runTool(pythonToolPath('caseRowValidator'), [], JSON.stringify(suppValidationRequest));
+                    let suppReport: unknown;
+                    try { suppReport = JSON.parse(suppValidated.stdout); } catch { suppReport = null; }
+                    if (suppReport) {
+                        const suppOutcome = applyCaseRowValidation(suppParsed.rows, suppReport);
+                        const validSuppRows = suppOutcome.rows.filter(r => r.status === 'proposed');
+                        if (validSuppRows.length > 0) {
+                            const combinedRows = [...finalRows, ...suppOutcome.rows];
+                            stage = await runRowStage({
+                                runtime, facts, rows: combinedRows, ask, log: options.log,
+                                mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
+                                qualityAnalyst: qualityAnalystEnabled,
+                                testFocus,
+                                fileSuffix: '_followup',
+                                initialPassing: stage.passing,
+                                initialSetups: stage.setups,
+                                ...(decideExpected ? { decideExpected } : {})
+                            });
+                            finalRows = stage.rows;
+                            state.rows = finalRows;
+                        } else {
+                            finalRows = [...finalRows, ...suppOutcome.rows];
+                            state.rows = finalRows;
+                        }
+                    }
+                }
+            }
+        }
         specMismatch = writeSpecMismatchArtifacts(directory, options.funcName, finalRows, rowTestContext(runtime, facts), stage.setups);
         options.log(`[v2] spec oracle ${specOracleUsed ? 'on' : 'off'}: ${specMismatch.specMismatchCount} spec mismatches, `
             + `${specMismatch.needsReviewCount} rows need manual review.`);
     }
-    writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: finalRows });
+    writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: finalRows, testFocus });
     fs.writeFileSync(path.join(directory, CASE_TABLE_REJECTIONS_FILE), JSON.stringify({
         version: 'case-table-rejections-v1', target: options.funcName, rejected, overLimit: parsed.overLimit,
         decorated: outcome.decorated, modelRequests, specOracle: options.specOracle
     }, null, 2) + '\n', 'utf8');
     if (stage) {
         postResultCard(options, directory, finalRows, stage, specMismatch!.specMismatchCount);
-        writeStageResult(directory, options.funcName, finalRows, stage, modelRequests, specOracleUsed, specMismatch!);
+        writeStageResult(directory, options.funcName, finalRows, stage, modelRequests, specOracleUsed, specMismatch!, testFocus);
         writeBatchRecords(directory, options.filePath, options.funcName, roleEvents, { terminal: stage.terminal, reasonCode: stage.reasonCode,
             specMismatchCount: specMismatch!.specMismatchCount, caseTableResult: {
                 mutationScore: stage.mutation?.score ?? null, lineCoveragePercent: stage.coverage?.available ? stage.coverage.linePercent : null,
@@ -302,8 +372,23 @@ function postResultCard(options: CaseTablePipelineOptions, directory: string, ro
     const score = stage.mutation?.score;
     options.postMessage({ command: 'updateCoverage', ...identity, score: typeof score === 'number' ? `${Math.round(score * 10) / 10}%` : 'N/A',
         coverage: stage.coverage?.available ? `${stage.coverage.linePercent}%` : null });
+    const mismatches = rows.filter(row => row.oracleStatus === 'spec-mismatch').map(r => ({
+        id: r.id,
+        input: needsSetup(r.call) ? `<needs-setup: ${r.call.needsSetup}>` : `${r.call.args} ${r.call.kwargs}`,
+        expected: r.expected ? `${r.expected.kind} ${r.expected.value}` : '-',
+        actual: r.actual ? `${r.actual.kind} ${r.actual.value}` : '-',
+        basis: `${r.predictions?.[0]?.basis ?? '-'}${r.predictions?.length && r.predictions.every(p => p.basisVerified) ? '' : ' (unverified)'}`
+    }));
+    const needsReview = rows.filter(row => row.oracleStatus === 'needs-review').map(r => ({
+        id: r.id,
+        input: needsSetup(r.call) ? `<needs-setup: ${r.call.needsSetup}>` : `${r.call.args} ${r.call.kwargs}`,
+        predicted: r.predictions?.[0] ? `${r.predictions[0].kind} ${r.predictions[0].value}` : '-',
+        actual: r.actual ? `${r.actual.kind} ${r.actual.value}` : '-',
+        basis: r.predictions?.[0]?.basis ?? '-'
+    }));
     const caseTable: CaseTableCardSummary = { tier: stage.terminal, usableRows: rows.filter(row => row.status === 'test-passed').length,
-        totalRows: rows.length, specMismatch };
+        totalRows: rows.length, specMismatch,
+        ...(mismatches.length || needsReview.length ? { specMismatchDetails: { mismatches, needsReview } } : {}) };
     options.postMessage({ command: 'updateOutcome', ...identity, reportPath: path.join(directory, 'final_report.md'),
         outcome: { label: stage.terminal === 'usable' ? 'v2 usable' : 'v2 failed', kind: stage.terminal === 'usable' ? 'executed' : 'failed' }, caseTable });
 }
@@ -338,11 +423,12 @@ function writeBatchRecords(directory: string, file: string, target: string,
 }
 
 function writeStageResult(directory: string, target: string, rows: CaseRow[], stage: RowStageResult, modelRequests: number,
-    specOracleUsed: boolean, specMismatch: SpecMismatchSummary): void {
+    specOracleUsed: boolean, specMismatch: SpecMismatchSummary, testFocus: TestFocus = 'full'): void {
     const count = (status: string) => rows.filter(row => row.status === status).length;
     const run = stage.mutation?.run;
     const summary = {
         version: 'case-table-result-v1', target, terminal: stage.terminal, reasonCode: stage.reasonCode,
+        testFocus,
         rows: { total: rows.length, invalid: count('invalid'), captureFailed: count('capture-failed'),
             testPassed: count('test-passed'), testFailed: count('test-failed') },
         testFile: stage.testFile ? path.relative(directory, stage.testFile).replace(/\\/g, '/') : null,

@@ -1913,6 +1913,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             pythonExecutable: normalizePythonExecutable(params.pythonExecutable),
             requirementsFile: config.get<string>('requirementsFile', ''), specOracle: readSpecOracleSetting(config.get('specOracle', 'auto')),
             qualityAnalyst: readQualityAnalystSetting(config.get('qualityAnalyst', 'auto')),
+            testFocus: resolveTestFocus(params.promptStrategy),
             mutation: { engine: params.mutationEngine, workers: params.mutationWorkers, stageSeconds: normalizeExecutionSettings(params).mutpyTimeout },
             postMessage: message => { void sidebarProvider.webview?.postMessage(message); },
             requestModel: (system, user, options) => requestLlmApi(options?.temperature === undefined ? params

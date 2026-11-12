@@ -16,6 +16,7 @@ import { hasRoleTemplateEcho, hasTemplatePlaceholder } from '../validation/templ
 import { relevantSourceImports } from '../prompts/dependencyMockContract';
 import { createPromptContextReferences } from '../prompts/compactWriterContext';
 import { CaseRowParseResult, ParseCaseRowsOptions, parseCaseRows as parseCaseRowLines } from '../pipeline/caseTable/caseRowParser';
+import { TestFocus } from '../pipeline/testFocus';
 
 // === Type Definitions ===
 
@@ -771,8 +772,20 @@ function caseScenarioContext(facts: CaseScenarioPromptFacts, requirements: reado
     ];
 }
 
+export interface CaseScenarioPromptOptions {
+    testFocus?: TestFocus;
+    uncoveredBranches?: string;
+    rowLimit?: number;
+}
+
 /** Analyst-scenario prompt: sees the source so every branch can be covered; never asked for expected values. */
-export function getCaseScenarioPrompt(facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[]): RolePrompt {
+export function getCaseScenarioPrompt(facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[],
+    options?: CaseScenarioPromptOptions): RolePrompt {
+    const limit = options?.rowLimit ?? CASE_SCENARIO_ROW_LIMIT;
+    const boundaryLine = options?.testFocus === 'boundary'
+        ? ['At least 4 of the lines must be category boundary or error.'] : [];
+    const coverageLine = options?.uncoveredBranches
+        ? [`Only propose scenarios that reach these uncovered branch conditions: ${options.uncoveredBranches}`] : [];
     const user = [
         ...caseScenarioContext(facts, requirements),
         '',
@@ -781,12 +794,14 @@ export function getCaseScenarioPrompt(facts: CaseScenarioPromptFacts, requiremen
         facts.source,
         '```',
         '',
-        `Write at most ${CASE_SCENARIO_ROW_LIMIT} lines, one scenario per line.`,
+        `Write at most ${limit} lines, one scenario per line.`,
         ...CASE_ROW_FORMAT_LINES,
         'Use each category at least once when it applies to this function.',
+        ...boundaryLine,
+        ...coverageLine,
         'Example line:',
         CASE_SCENARIO_EXAMPLE,
-        `Output only the JSON lines (at most ${CASE_SCENARIO_ROW_LIMIT}), with no other text.`
+        `Output only the JSON lines (at most ${limit}), with no other text.`
     ].join('\n');
     return { system: CASE_SCENARIO_SYSTEM_PROMPT, user };
 }

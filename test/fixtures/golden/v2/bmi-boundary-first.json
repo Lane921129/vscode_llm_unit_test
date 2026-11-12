@@ -1,0 +1,94 @@
+{
+  "scenario": "bmi-boundary-first",
+  "terminal": "usable",
+  "reasonCode": "usable",
+  "modelRequests": 1,
+  "rows": [
+    {
+      "id": "C1",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "return",
+        "value": "(18.5, '健康體位')"
+      },
+      "expected": {
+        "kind": "return",
+        "value": "(18.5, '健康體位')",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c1"
+    },
+    {
+      "id": "C2",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "raise",
+        "value": "ZeroDivisionError"
+      },
+      "expected": {
+        "kind": "raise",
+        "value": "ZeroDivisionError",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c2"
+    },
+    {
+      "id": "C3",
+      "status": "invalid",
+      "reason": "signature-mismatch",
+      "actual": null,
+      "expected": null,
+      "oracleStatus": null,
+      "testMethod": null
+    },
+    {
+      "id": "C4",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "return",
+        "value": "(22.49, '健康體位')"
+      },
+      "expected": {
+        "kind": "return",
+        "value": "(22.49, '健康體位')",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c4"
+    },
+    {
+      "id": "C5",
+      "status": "test-passed",
+      "reason": null,
+      "actual": {
+        "kind": "return",
+        "value": "(31.14, '肥胖')"
+      },
+      "expected": {
+        "kind": "return",
+        "value": "(31.14, '肥胖')",
+        "source": "observed",
+        "confirmedBySpec": false
+      },
+      "oracleStatus": "observed-unconfirmed",
+      "testMethod": "test_c5"
+    }
+  ],
+  "testFile": "import unittest\nfrom unittest import mock\nimport bmi as target_module\n\n\nclass TestCaseTable(unittest.TestCase):\n    def test_c1(self):\n        \"\"\"C1 boundary: 健康下界\"\"\"\n        result = target_module.calculate_bmi(*(53.465, 170), **{})\n        self.assertEqual(result, (18.5, '健康體位'))\n\n    def test_c2(self):\n        \"\"\"C2 error: 身高為 0\"\"\"\n        with self.assertRaises(ZeroDivisionError):\n            target_module.calculate_bmi(*(60, 0), **{})\n\n    def test_c4(self):\n        \"\"\"C4 normal: 一般體重\"\"\"\n        result = target_module.calculate_bmi(*(65, 170), **{})\n        self.assertEqual(result, (22.49, '健康體位'))\n\n    def test_c5(self):\n        \"\"\"C5 normal: 肥胖\"\"\"\n        result = target_module.calculate_bmi(*(90, 170), **{})\n        self.assertEqual(result, (31.14, '肥胖'))\n\n\nif __name__ == '__main__':\n    unittest.main()\n",
+  "mutation": {
+    "engine": "builtin",
+    "selected": 96,
+    "executed": 96,
+    "killed": 63,
+    "survived": 33,
+    "score": 65.625
+  }
+}

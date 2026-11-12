@@ -6,6 +6,8 @@
  * never fails its neighbours. See docs/三週改版架構_2026_11_04.md section 3.
  */
 
+import { TestFocus } from '../testFocus';
+
 export const CASE_TABLE_VERSION = 'case-table-v1';
 
 /** Scenario text doubles as test method name/comment source, so it stays short. */
@@ -84,6 +86,7 @@ export interface CaseTableFile {
     version: typeof CASE_TABLE_VERSION;
     target: string;
     rows: CaseRow[];
+    testFocus?: TestFocus;
 }
 
 export function isCaseCategory(value: unknown): value is CaseCategory {

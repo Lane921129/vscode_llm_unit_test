@@ -13,6 +13,7 @@ import { test } from 'node:test';
 import { runCaseTablePipeline } from '../pipeline/caseTable/runCaseTablePipeline';
 import { readCaseTable } from '../pipeline/caseTable/caseTableStore';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
+import { TestFocus } from '../pipeline/testFocus';
 
 const root = path.resolve(__dirname, '../..');
 const goldenDirectory = path.join(root, 'test', 'fixtures', 'golden', 'v2');
@@ -28,10 +29,22 @@ const scenarios: Array<{
     source: string;
     target: string;
     qualityAnalyst?: 'auto' | 'off';
+    testFocus?: TestFocus;
     replies: string[];
 }> = [
     {
         name: 'bmi', source: path.join(root, 'test', 'test_mut', 'bmi.py'), target: 'calculate_bmi',
+        replies: [[
+            line({ scenario: '一般體重', category: 'normal', args: '(65, 170)' }),
+            line({ scenario: '健康下界', category: 'boundary', args: '(53.465, 170)' }),
+            line({ scenario: '身高為 0', category: 'error', args: '(60, 0)' }),
+            line({ scenario: '肥胖', category: 'normal', args: '(90, 170)' }),
+            line({ scenario: '參數過多（故意壞列）', category: 'error', args: '(1, 2, 3)' })
+        ].join('\n')]
+    },
+    {
+        name: 'bmi-boundary-first', source: path.join(root, 'test', 'test_mut', 'bmi.py'), target: 'calculate_bmi',
+        testFocus: 'boundary',
         replies: [[
             line({ scenario: '一般體重', category: 'normal', args: '(65, 170)' }),
             line({ scenario: '健康下界', category: 'boundary', args: '(53.465, 170)' }),
@@ -79,6 +92,7 @@ for (const scenario of scenarios) {
             const result = await runCaseTablePipeline({
                 filePath: file, funcName: scenario.target, projectRoot: project, outputPath: path.join(directory, 'out'),
                 sessionDate: 'golden', pythonExecutable: python, specOracle: 'off', qualityAnalyst: scenario.qualityAnalyst ?? 'off',
+                testFocus: scenario.testFocus,
                 requestModel: async () => { const reply = replies.shift(); if (reply === undefined) { throw new Error('unexpected request'); } return reply; },
                 log: () => undefined, mutation: { engine: 'builtin', workers: 1, stageSeconds: 120 }
             });

@@ -290,7 +290,8 @@ test('damaged or wrong-version case tables throw a clear error instead of an emp
             [JSON.stringify({ ...table, rows: [{ ...table.rows[1], call: { args: '(1,)' } }] }), 'rows[0].call.kwargs'],
             [JSON.stringify({ ...table, rows: [{ ...table.rows[1], surprise: 1 }] }), 'rows[0].surprise'],
             [JSON.stringify({ ...table, rows: [{ ...table.rows[1], mocks: [{ dependency: 'db.x', behavior: 'patch', value: '1' }] }] }),
-                'rows[0].mocks[0].behavior']
+                'rows[0].mocks[0].behavior'],
+            [JSON.stringify({ ...table, testFocus: 'invalid-focus' }), 'testFocus']
         ];
         for (const [content, field] of cases) {
             write(content);
@@ -322,11 +323,12 @@ test('a row with every optional field (and a needs-setup call) round-trips throu
         testMethod: 'test_c4_missing_vehicle',
         normalizations: ['args-wrapped-single']
     };
-    const table: CaseTableFile = { version: 'case-table-v1', target: 'Garage.find', rows: [full] };
+    const table: CaseTableFile = { version: 'case-table-v1', target: 'Garage.find', rows: [full], testFocus: 'boundary' };
     const directory = tempDir();
     try {
         writeCaseTable(directory, table);
         assert.deepStrictEqual(readCaseTable(directory), table);
+        assert.strictEqual(readCaseTable(directory).testFocus, 'boundary');
         const optional = ['requirementId', 'predictions', 'actual', 'expected', 'oracleStatus', 'reason', 'testMethod', 'normalizations'];
         assert.deepStrictEqual(optional.filter(key => !(key in readCaseTable(directory).rows[0])), [], 'every optional field survives');
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }

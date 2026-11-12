@@ -127,6 +127,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 12a | 評估紀錄與一般 LLM 對照組 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 12b | 埋 bug 評估 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 13 | 側欄精簡與進階設定收合 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
+| 13b | 側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2 | 完成待驗收：fast 817/817、Python 52/52、新測試 10/10、golden 4/4 全過 | `pr/13b-sidebar-layout`（起點 89be1ce） | 2026-11-12 Antigravity |
 | 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
 | 15 | v2 setup 結構守門與 runner 失敗收尾 | 完成待驗收：Windows fast／Python／相關／golden 通過 | `pr/15-v2-setup-guard`（起點 5fc43b6） | 2026-11-12 Codex |
 
@@ -134,7 +135,58 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 
 ---
 
-## 2. PR #15 v2 setup 與 runner 收尾（最新）
+## 2. PR #13b 側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2（最新）
+
+- Agent：Antigravity，Windows 原生；無 AOCI MCP，未呼叫 AOCI，收尾待辦見第 4 節。原有未追蹤 `Claude outputs/`、舊重構計畫均保留；本分支從 `lane_edition`（`89be1ce`）開立，分支名稱 `pr/13b-sidebar-layout`。不合併到 `lane_edition`、不 push。計畫文件（`docs/三週改版架構*.md`）未修改；v1 行為、預設值、提示詞與 v1 golden 均零變更。
+- [x] **A. 側欄重排**：側欄重組為六大區塊，①～④ 預設展開（`<details open>`），⑤ 進階設定預設收折（`<details id="advanced-settings-details">`，Webview 保存使用者開合狀態）：
+  - ① 執行環境（`section-env`）：環境類型、Ollama 網址、模型選擇與重新整理、Context 大小、thinking 模式（`thinking-mode` 下拉選單：`provider-default`、`enabled`、`disabled`）、測試連線與角色資格摘要。
+  - ② 測試資料與輸出（`section-test-data`）：專案資料夾、檔案／函式選擇（勾選／取消勾選全檔、動態「已選 N／M」即時計數 `func-select-count`）、目標清單載入／存檔、輸出資料夾。
+  - ③ 測試方式（`section-test-method`）：流程版本 v1／v2、v2 專屬設定（規格預測 `spec-oracle`、存活突變補強 `quality-analyst`）、驗證模式、「套用 demo 設定」按鈕（`btn-apply-demo-settings`）。
+  - ④ 基礎設定（`section-basic-settings`）：測試重點（`prompt-strategy`：完整、邊界優先、覆蓋率優先、突變強化）、失敗上限、品質無進展上限、批次失敗上限、突變 workers、各逾時設定（突變、單元測試、目標逾時）。
+  - ⑤ 進階設定（`advanced-settings-details`，預設收折）：突變引擎、需求檔、「檢查此專案相依」、「模組載入／初始化設定」、「其他範圍」。
+  - ⑥ 開始／停止（`section-actions`，開始測試／停止）、結果儀表板（`coverage-dashboard-details`）與系統紀錄（`system-logs-details`）。
+  - 所有既有元素 id 均完整保留。
+- [x] **B. v1／v2 說明**：
+  - 流程版本選單旁加入「?」說明按鈕（`btn-pipeline-help`），點擊展開／收合說明面板（`pipeline-help-panel`）。
+  - 選單下方加入一行目前選項動態摘要（`pipeline-version-summary`），切換 v1／v2 即時更新。
+  - 中英雙語 i18n 完整實作（含 v1 說明、v2 說明、建議、面板標題）。
+- [x] **C. 測試重點接進 v2（使用者 11/12 核准，B 類）**：
+  - 完整（`full`）：維持原行為。
+  - 邊界優先（`boundary`）：`getCaseScenarioPrompt` 在情境類別說明後追加一句 `"At least 4 of the lines must be category boundary or error."`；解析後將 `boundary` 與 `error` 列排在前面；總列數上限維持 8 列；`docs/v2_提示詞_待審.md` 狀態更新為「已核准（2026-11-09 使用者；2026-11-12 邊界優先一句）」。
+  - 覆蓋率優先（`coverage`）：合併測試與量測覆蓋率後，若有未覆蓋的分支條件，以 `getCaseScenarioPrompt` 追加一句 `"Only propose scenarios that reach these uncovered branch conditions: <conditions>"` 再向 Analyst 要一輪；同樣走驗證、捕獲、規格預測；新列合併進測試；總列數上限 8 列；最多追加一輪。
+  - 突變強化（`mutation`）：存活突變補強最大嘗試次數由 3 次放寬為 6 次；當 `qualityAnalyst === 'off'` 時在側欄測試重點旁顯示提醒（`focus-mutation-hint`）。
+  - `case_table.json` 與 `v2_result.json` 記錄 `testFocus`；`caseTableStore.ts` 嚴格欄位檢查允許並驗證 `testFocus`。
+  - `rowExecution.ts` 改回維持 `flag: 'wx'` 保護，同名測試檔第二次寫入拋出 `EEXIST`；覆蓋率補問輪次產生的測試檔與合併檔使用 `_followup` 後綴（`test_case_table_followup.py`、`row_c*_0_test_followup.py`），不覆蓋既有檔；`src/test/caseTableTestFocus.test.ts` 補測試驗證同名檔第二次寫入拋錯。
+  - `src/test/caseTable.test.ts` 的「所有選填欄位往返」與格式錯誤測試加入 `testFocus` 欄位（11/08 決策）。
+  - 新增 v2 golden 情境 `bmi-boundary-first`（已錄製通過），既有三個 v2 golden 快照零差異。
+- [x] **D. Demo 支援**：
+  - (a) v2 結果卡片在 `specMismatchCount > 0` 時顯示「規格不符 N 個」（`spec-mismatch-badge`），點擊可展開／收合規格不符表格面板（`spec-mismatch-panel`），呈現輸入、規格預期、實際回傳、依據，並附待人工確認項目清單。
+  - (b) ③ 區塊加入「套用 demo 設定」按鈕（`btn-apply-demo-settings`）：確認對話框後，一鍵將側欄設定更新為 `gpt-oss:20b`、Context 8192、`mutatest`、`full`、停止條件 5 / 3 / 0；只更新設定不自動啟動測試。
+- [x] **驗證結果（Windows 原生）**：
+
+  | 項目 | 結果 | 說明 |
+  | --- | --- | --- |
+  | `npm run check-types` | exit 0 | 0 errors |
+  | `npm run lint` | exit 0 | 0 errors |
+  | `npm run test:webview` | exit 0 | Webview 語法與載入驗證通過 |
+  | `npm run test:fast` | exit 0 | Node 817/817、Python fast 52/52 全數通過 |
+  | 新 Node 測試（10 個案例） | 10/10 通過 | `src/test/sidebarSectionLayout.test.ts`（5/5）、`src/test/caseTableTestFocus.test.ts`（5/5） |
+  | `npm run test:golden` | exit 0 | v1 11/11 零差異；v2 4/4 通過（bmi、bmi-boundary-first、bmi-quality-analyst、database），既有快照零差異 |
+
+### 本機驗證指令（Windows，在 `pr/13b-sidebar-layout`）：
+
+```powershell
+npm run check-types
+npm run lint
+npm run test:webview
+npm run test:fast
+npm run test:golden
+npm run test:related -- --node sidebarSectionLayout --node caseTableTestFocus --node caseTableGolden
+```
+
+---
+
+## 2. PR #15 v2 setup 與 runner 收尾（歷史）
 
 - Agent：Codex（GPT-6），Windows 原生；有 CodeGraph MCP、無 AOCI MCP，未呼叫 AOCI，收尾待辦見第 4 節。原有未追蹤 `Claude outputs/`、舊重構計畫均保留；本分支從主線 `5fc43b6` 開立。
 - [x] setup 守門：重用 `case_row_assertions.py` 的 `_rebinds_target`，只在 v2 setup／fixer 模式加入環境與匯入模組 roots、sys.modules 寫入、setattr／delattr 與外部 patch 檢查；既有 compare 預設契約保持原狀。一般列與 Quality Analyst 列在 capture 前驗證，Python capture 入口亦使用同一檢查。保留被測模組使用點的 mock.patch。
@@ -807,6 +859,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-12（Antigravity／PR #13b 側欄重排與測試重點接進 v2）：無 AOCI 工具，請具工具能力的 agent 處理。新增／修改的受管理檔案：`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/orchestrator.ts`、`src/pipeline/caseTable/caseTable.ts`、`src/pipeline/caseTable/caseTableStore.ts`、`src/pipeline/caseTable/rowExecution.ts`、`src/pipeline/caseTable/runCaseTablePipeline.ts`、`src/pipeline/caseTable/runRowStage.ts`、`src/roles/semanticAnalyzer.ts`、`src/test/caseTableGolden.test.ts`、`src/test/sidebarSectionLayout.test.ts`、`src/test/caseTableTestFocus.test.ts`、`test/fixtures/golden/v2/bmi-boundary-first.json`、`docs/v2_提示詞_待審.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
+
 - 2026-11-12（Codex／PR #15）：本次無 AOCI MCP。請具能力的 agent 維護 `git diff 5fc43b6..pr/15-v2-setup-guard --name-only` 所列受管理檔；未改 `.aoci/`、`.codex/`。
 
 - 2026-11-11（Claude Code／PR #13 重建還原修正）：沒有 AOCI MCP。修改 `src/ui/webviewContent.ts`、`src/test/sidebarDashboardReplay.test.ts`、`CHANGELOG.zh-TW.md`、本交接文件。
@@ -906,6 +960,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-12 23:20 | Antigravity | fix(pr13b) | rowExecution 改回 flag: 'wx' 保護、覆蓋率補問輪次產生的測試檔與合併檔使用 _followup 後綴避免覆蓋既有檔、補 runTestFile 重複寫入拋 EEXIST 測試；caseTable.test.ts 補 testFocus 往返與格式驗證；check-types 0、lint 0、related 34/34 全過 | 最新 commit |
+| 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 5ae34ac |
 | 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合／兩項邊界回歸；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | `7b51079`（程式）；本筆 docs 收尾 |
 | 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
 | 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |

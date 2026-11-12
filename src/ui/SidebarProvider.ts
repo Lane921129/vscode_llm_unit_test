@@ -178,7 +178,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const html = getWebviewContent(t, config.get('language', 'auto'), config.get('promptStrategy', 'auto'),
             config.get('ollamaBaseUrl', 'http://127.0.0.1:11434'), config.get('validationMode', 'full'),
             config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false),
-            pipelineSettings(config));
+            pipelineSettings(config),
+            config.get('localThinkingMode', 'provider-default'));
         if (this.webview.html !== html) { this.webview.html = html; }
     }
 
@@ -256,7 +257,8 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
         this.webview.html = getWebviewContent(t, lang, strategy, ollamaUrl, config.get('validationMode', 'full'),
             config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false),
-            pipelineSettings(config));
+            pipelineSettings(config),
+            config.get('localThinkingMode', 'provider-default'));
 
         this.webview.onDidReceiveMessage(async (message) => {
             const config = vscode.workspace.getConfiguration('llmUnitTest');
@@ -339,7 +341,14 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         const ollamaUrl = config.get<string>('ollamaBaseUrl', 'http://127.0.0.1:11434');
                         this.webview.html = getWebviewContent(t, lang, message.strategy, ollamaUrl, config.get('validationMode', 'full'),
                             config.get('mutationEngine', 'builtin'), config.get('mutationWorkers', 2), config.get('requireRoleQualification', false),
-            pipelineSettings(config));
+                            pipelineSettings(config),
+                            config.get('localThinkingMode', 'provider-default'));
+                    }
+                    break;
+                }
+                case 'setThinkingMode': {
+                    if (!this.activeAnalysis && ['provider-default', 'disabled'].includes(message.mode)) {
+                        await this.rememberRunPreference(config, 'localThinkingMode', message.mode);
                     }
                     break;
                 }

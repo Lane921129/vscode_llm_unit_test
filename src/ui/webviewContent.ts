@@ -4,7 +4,8 @@ import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettin
 import { planAnalysisTargetBudget } from '../pipeline/targetBudget';
 
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false,
-    pipeline: { version: string; specOracle: string; qualityAnalyst?: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', qualityAnalyst: 'auto', requirementsFile: '' }) {
+    pipeline: { version: string; specOracle: string; qualityAnalyst?: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', qualityAnalyst: 'auto', requirementsFile: '' },
+    thinkingMode: string = 'provider-default') {
     const attribute = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const isV2 = pipeline.version === 'v2-case-table';
     const selectedFocus = resolveTestFocus(currentStrategy);
@@ -216,182 +217,193 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         </select>
     </div>
     
-    <div class="sidebar-section" id="model-selection-section" style="margin-bottom:12px;">
-        <label style="margin-top:0;">${t('ui.env')}</label>
-        <select id="env-type">
-            <option value="cloud">${t('ui.envCloud')}</option>
-            <option value="local">${t('ui.envLocal')}</option>
-            <option value="custom">${t('ui.envCustom')}</option>
-        </select>
-        
-        <div id="cloud-ui">
-            <label>${t('ui.savedCloud')}</label>
-            <div class="flex-row">
-                <select id="api-key-select"><option value="">${t('ui.selectSetting')}</option></select>
-            </div>
-
-            <label style="margin-top:5px;">${t('ui.keyName')}</label>
-            <input type="text" id="new-key-name" placeholder="${t('ui.keyNameHint')}">
-            <label>API Model</label>
-            <input type="text" id="new-key-model" placeholder="${t('ui.modelHint')}">
-            <label>${t('ui.apiKey')}</label>
-            <div class="flex-row">
-                <input type="password" id="new-key-value" placeholder="Google AI Studio API Key">
-                <button id="btn-save-key" style="margin-top:0; width:60px; flex-shrink:0;">Save</button>
-                <button id="btn-del-key" style="margin-top:0; width:40px; flex-shrink:0; background:#a82a2a;">Del</button>
-                <button id="btn-test-cloud" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
-            </div>
-        </div>
-
-        <div id="local-ui" style="display:none;">
-            <label style="margin-top:5px;">${t('ui.modelName')}</label>
-            <div class="flex-row">
-                <select id="model-select" style="flex:1;"><option value="">-- Loading --</option></select>
-                <button id="btn-test-local" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
-            </div>
-            <button id="btn-refresh-models" style="width:100%;">🔄 Refresh Models</button>
-        </div>
-
-        <div id="custom-ui" style="display:none;">
-            <label>${t('ui.customApi')}</label>
-            <select id="custom-api-select"><option value="">-- Select --</option></select>
-            
-            <label style="margin-top:5px;">${t('ui.label')}</label>
-            <input type="text" id="custom-name" placeholder="Label">
-            
-            <label>API Base URL</label>
-            <input type="text" id="custom-url" placeholder="https://api.openai.com/v1/chat/completions">
-            
-            <label>${t('ui.modelName')}</label>
-            <input type="text" id="custom-model" placeholder="gpt-4o">
-            
-            <label>${t('ui.apiKey')}</label>
-            <input type="password" id="custom-key" placeholder="Bearer Token">
-            
-            <div class="flex-row">
-                <button id="btn-save-custom" style="flex:1;">💾 Save</button>
-                <button id="btn-test-custom" style="flex:0.8; background:#007acc;">🔗 ${t('ui.testConnection')}</button>
-                <button id="btn-del-custom" style="flex:0.8; background:#a82a2a;">🗑️ Del</button>
-            </div>
-        </div>
-
-        <div id="role-qualification-summary" role="status" style="display:none; margin-top:6px; font-size:11px; padding:4px 8px; border-radius:4px; background:var(--vscode-editor-inactiveSelectionBackground); border:1px solid var(--vscode-editorGroup-border);"></div>
-    </div>
-
-    <div class="sidebar-section" id="pipeline-section" style="margin-bottom:12px; border-top:1px solid var(--vscode-editorGroup-border); padding-top:8px;">
-        <label for="pipeline-version">${t('ui.pipelineVersion')}</label>
-        <select id="pipeline-version">
-            <option value="v1" ${isV2 ? '' : 'selected'}>${t('ui.pipelineV1')}</option>
-            <option value="v2-case-table" ${isV2 ? 'selected' : ''}>${t('ui.pipelineV2')}</option>
-        </select>
-        <div id="v2-settings" style="display:${isV2 ? 'block' : 'none'};">
-            <label for="spec-oracle">${t('ui.specOracle')}</label>
-            <select id="spec-oracle">
-                <option value="auto" ${pipeline.specOracle === 'off' ? '' : 'selected'}>${t('ui.specOracleAuto')}</option>
-                <option value="off" ${pipeline.specOracle === 'off' ? 'selected' : ''}>${t('ui.specOracleOff')}</option>
-            </select>
-            <label for="quality-analyst" style="margin-top:8px;">${t('ui.qualityAnalyst')}</label>
-            <select id="quality-analyst">
-                <option value="auto" ${pipeline.qualityAnalyst === 'off' ? '' : 'selected'}>${t('ui.qualityAnalystAuto')}</option>
-                <option value="off" ${pipeline.qualityAnalyst === 'off' ? 'selected' : ''}>${t('ui.qualityAnalystOff')}</option>
-            </select>
-        </div>
-        <label for="validation-mode">${t('ui.validationScope')}</label>
-        <select id="validation-mode">
-            <option value="full" ${validationMode === 'full' ? 'selected' : ''}>${t('ui.fullValidation')}</option>
-            <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>${t('ui.executionValidation')}</option>
-        </select>
-        <p id="validation-scope" role="status" aria-live="polite" style="margin:2px 0 6px 0;"></p>
-    </div>
-
-    <div class="sidebar-section" id="target-selection-section" style="margin-bottom:12px; border-top:1px solid var(--vscode-editorGroup-border); padding-top:8px;">
-        <div id="single-target-controls">
-            <label>${t('ui.file')}</label>
-            <select id="file-select"><option value="">${t('ui.allFiles')}</option></select>
-
-            <label style="margin-top:8px;">${t('ui.function')}</label>
-            <select id="func-select" disabled><option value="">all</option></select>
-
-            <div id="func-checkbox-controls" style="display:flex; gap:6px; margin-top:6px; align-items:center;">
-                <button type="button" id="btn-func-select-all" style="flex:1; margin:0; padding:4px 6px; font-size:11px;" disabled>${t('ui.checkAllFunctionsInFile')}</button>
-                <button type="button" id="btn-func-deselect-all" style="flex:1; margin:0; padding:4px 6px; font-size:11px;" disabled>${t('ui.uncheckAll')}</button>
-                <span id="func-selected-counter" style="font-size:11px; opacity:0.85; white-space:nowrap;"></span>
-                <button type="button" id="btn-add-targets" style="flex:1.2; margin:0; padding:4px 6px; font-size:11px;" disabled>${t('ui.addTargets')}</button>
-            </div>
-            <div id="func-checkbox-list" style="max-height:140px; overflow-y:auto; margin-top:6px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; padding:4px 6px; display:none;"></div>
-        </div>
-
-        <div id="batch-scope-targets-panel" style="display:none; margin-top:6px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; padding:6px;">
-            <p id="batch-scope-targets-hint" style="margin:0 0 6px 0;">${t('ui.batchScopeTargetsHint')}</p>
-            <div style="display:flex; gap:6px; margin-bottom:6px;">
-                <button type="button" id="btn-batch-func-select-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.selectAll')}</button>
-                <button type="button" id="btn-batch-func-deselect-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.deselectAll')}</button>
-                <button type="button" id="btn-exit-batch-scope" style="flex:1.4; margin:0; padding:4px 8px; font-size:11px;">${t('ui.exitBatchScopeMode')}</button>
-            </div>
-            <div id="batch-scope-targets-list" style="max-height:160px; overflow-y:auto;"></div>
-        </div>
-
-        <div id="target-list-section" style="margin-top:10px; border-top:1px solid var(--vscode-editorGroup-border); padding-top:8px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
-                <p id="target-list-count" style="margin:0; font-weight:600; color:var(--vscode-foreground);">${t('ui.targetListCount', 0)}</p>
-                <button type="button" id="btn-clear-targets" style="width:auto; margin:0; padding:3px 8px; font-size:11px;" disabled>${t('ui.clearTargets')}</button>
-            </div>
-            <div id="target-list-container" style="max-height:160px; overflow-y:auto; margin-top:6px; display:flex; flex-direction:column; gap:4px;"></div>
-            <p id="target-list-status" role="status" aria-live="polite" style="margin-top:4px;"></p>
-        </div>
-        
-        <div class="flex-row" style="margin-top:15px; justify-content:space-between; gap:10px;">
-            <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
-            <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">${t('ui.abortBtn')}</button>
-        </div>
-    </div>
-
-    <details id="advanced-settings-details" style="margin-bottom:12px;">
-        <summary>${t('ui.advancedSettings')}</summary>
+    <details id="section-env" open style="margin-bottom:10px;">
+        <summary>${t('ui.sectionEnv')}</summary>
         <div class="content">
-            <label>${t('ui.ollamaUrl')}</label>
-            <div class="flex-row">
-                <input type="text" id="ollama-url" value="${ollamaBaseUrl}" placeholder="http://127.0.0.1:11434">
-                <button id="btn-save-ollama-url" style="width:50px; flex-shrink:0;">${t('ui.saveConfig')}</button>
-            </div>
+            <label style="margin-top:0;">${t('ui.env')}</label>
+            <select id="env-type">
+                <option value="cloud">${t('ui.envCloud')}</option>
+                <option value="local">${t('ui.envLocal')}</option>
+                <option value="custom">${t('ui.envCustom')}</option>
+            </select>
             
-            <label for="runtime-context-tokens">${t('ui.runtimeContextLabel')}</label>
-            <div class="flex-row">
-                <input id="runtime-context-tokens" type="number" value="0" min="0" step="1" disabled>
-                <button id="btn-save-runtime-context" style="margin-top:0; flex-shrink:0;" disabled>${t('ui.runtimeContextSave')}</button>
-            </div>
-            <p>${t('ui.runtimeContextHint')}</p>
-            <p id="runtime-context-status" role="status" aria-live="polite" style="white-space:pre-line;"></p>
+            <div id="cloud-ui">
+                <label>${t('ui.savedCloud')}</label>
+                <div class="flex-row">
+                    <select id="api-key-select"><option value="">${t('ui.selectSetting')}</option></select>
+                </div>
 
+                <label style="margin-top:5px;">${t('ui.keyName')}</label>
+                <input type="text" id="new-key-name" placeholder="${t('ui.keyNameHint')}">
+                <label>API Model</label>
+                <input type="text" id="new-key-model" placeholder="${t('ui.modelHint')}">
+                <label>${t('ui.apiKey')}</label>
+                <div class="flex-row">
+                    <input type="password" id="new-key-value" placeholder="Google AI Studio API Key">
+                    <button id="btn-save-key" style="margin-top:0; width:60px; flex-shrink:0;">Save</button>
+                    <button id="btn-del-key" style="margin-top:0; width:40px; flex-shrink:0; background:#a82a2a;">Del</button>
+                    <button id="btn-test-cloud" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
+                </div>
+            </div>
+
+            <div id="local-ui" style="display:none;">
+                <label>${t('ui.ollamaUrl')}</label>
+                <div class="flex-row">
+                    <input type="text" id="ollama-url" value="${attribute(ollamaBaseUrl)}" placeholder="http://127.0.0.1:11434">
+                    <button id="btn-save-ollama-url" style="width:50px; flex-shrink:0;">${t('ui.saveConfig')}</button>
+                </div>
+
+                <label style="margin-top:5px;">${t('ui.modelName')}</label>
+                <div class="flex-row">
+                    <select id="model-select" style="flex:1;"><option value="">-- Loading --</option></select>
+                    <button id="btn-test-local" style="margin-top:0; width:40px; flex-shrink:0; background:#007acc;">${t('ui.testConnection')}</button>
+                </div>
+                <button id="btn-refresh-models" style="width:100%;">🔄 Refresh Models</button>
+
+                <label for="runtime-context-tokens">${t('ui.runtimeContextLabel')}</label>
+                <div class="flex-row">
+                    <input id="runtime-context-tokens" type="number" value="0" min="0" step="1" disabled>
+                    <button id="btn-save-runtime-context" style="margin-top:0; flex-shrink:0;" disabled>${t('ui.runtimeContextSave')}</button>
+                </div>
+                <p>${t('ui.runtimeContextHint')}</p>
+                <p id="runtime-context-status" role="status" aria-live="polite" style="white-space:pre-line;"></p>
+
+                <label for="thinking-mode">${t('ui.thinkingMode')}</label>
+                <select id="thinking-mode">
+                    <option value="provider-default" ${thinkingMode === 'disabled' ? '' : 'selected'}>${t('ui.thinkingProviderDefault')}</option>
+                    <option value="disabled" ${thinkingMode === 'disabled' ? 'selected' : ''}>${t('ui.thinkingDisabled')}</option>
+                </select>
+            </div>
+
+            <div id="custom-ui" style="display:none;">
+                <label>${t('ui.customApi')}</label>
+                <select id="custom-api-select"><option value="">-- Select --</option></select>
+                
+                <label style="margin-top:5px;">${t('ui.label')}</label>
+                <input type="text" id="custom-name" placeholder="Label">
+                
+                <label>API Base URL</label>
+                <input type="text" id="custom-url" placeholder="https://api.openai.com/v1/chat/completions">
+                
+                <label>${t('ui.modelName')}</label>
+                <input type="text" id="custom-model" placeholder="gpt-4o">
+                
+                <label>${t('ui.apiKey')}</label>
+                <input type="password" id="custom-key" placeholder="Bearer Token">
+                
+                <div class="flex-row">
+                    <button id="btn-save-custom" style="flex:1;">💾 Save</button>
+                    <button id="btn-test-custom" style="flex:0.8; background:#007acc;">🔗 ${t('ui.testConnection')}</button>
+                    <button id="btn-del-custom" style="flex:0.8; background:#a82a2a;">🗑️ Del</button>
+                </div>
+            </div>
+
+            <div id="role-qualification-summary" role="status" style="display:none; margin-top:6px; font-size:11px; padding:4px 8px; border-radius:4px; background:var(--vscode-editor-inactiveSelectionBackground); border:1px solid var(--vscode-editorGroup-border);"></div>
+        </div>
+    </details>
+
+    <details id="section-test-data" open style="margin-bottom:10px;">
+        <summary>${t('ui.sectionTestData')}</summary>
+        <div class="content">
+            <label style="margin-top:0;">📂 ${t('ui.projectPath')}</label>
+            <div class="flex-row">
+                <input type="text" id="project-path" readonly placeholder="${t('ui.projectPath')}">
+                <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
+            </div>
+
+            <div id="single-target-controls" style="margin-top:6px;">
+                <label>${t('ui.file')}</label>
+                <select id="file-select"><option value="">${t('ui.allFiles')}</option></select>
+
+                <label style="margin-top:8px;">${t('ui.function')}</label>
+                <select id="func-select" disabled><option value="">all</option></select>
+
+                <div id="func-checkbox-controls" style="display:flex; gap:6px; margin-top:6px; align-items:center;">
+                    <button type="button" id="btn-func-select-all" style="flex:1; margin:0; padding:4px 6px; font-size:11px;" disabled>${t('ui.checkAllFunctionsInFile')}</button>
+                    <button type="button" id="btn-func-deselect-all" style="flex:1; margin:0; padding:4px 6px; font-size:11px;" disabled>${t('ui.uncheckAll')}</button>
+                    <span id="func-selected-counter" style="font-size:11px; opacity:0.85; white-space:nowrap;"></span>
+                    <button type="button" id="btn-add-targets" style="flex:1.2; margin:0; padding:4px 6px; font-size:11px;" disabled>${t('ui.addTargets')}</button>
+                </div>
+                <div id="func-checkbox-list" style="max-height:140px; overflow-y:auto; margin-top:6px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; padding:4px 6px; display:none;"></div>
+            </div>
+
+            <div id="target-list-section" style="margin-top:10px; border-top:1px solid var(--vscode-editorGroup-border); padding-top:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+                    <p id="target-list-count" style="margin:0; font-weight:600; color:var(--vscode-foreground);">${t('ui.targetListCount', 0)}</p>
+                    <button type="button" id="btn-clear-targets" style="width:auto; margin:0; padding:3px 8px; font-size:11px;" disabled>${t('ui.clearTargets')}</button>
+                </div>
+                <div id="target-list-container" style="max-height:160px; overflow-y:auto; margin-top:6px; display:flex; flex-direction:column; gap:4px;"></div>
+                <p id="target-list-status" role="status" aria-live="polite" style="margin-top:4px;"></p>
+                <div class="flex-row" style="margin-top:6px; gap:6px;">
+                    <button type="button" id="btn-import-targets" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.importTargets')}</button>
+                    <button type="button" id="btn-export-targets" style="flex:1; margin:0; padding:4px 8px; font-size:11px;" disabled>${t('ui.exportTargets')}</button>
+                </div>
+            </div>
+
+            <div style="margin-top:10px; border-top:1px solid var(--vscode-editorGroup-border); padding-top:8px;">
+                <label style="margin-top:0;">📂 ${t('ui.outputDir')}</label>
+                <div class="flex-row">
+                    <input type="text" id="output-path" readonly placeholder="Default">
+                    <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
+                </div>
+            </div>
+        </div>
+    </details>
+
+    <details id="section-test-method" open style="margin-bottom:10px;">
+        <summary>${t('ui.sectionTestMethod')}</summary>
+        <div class="content">
+            <div class="flex-row" style="align-items:center; justify-content:space-between;">
+                <label for="pipeline-version" style="margin:0;">${t('ui.pipelineVersion')}</label>
+                <button type="button" id="btn-pipeline-help" title="${attribute(t('ui.pipelineHelpTitle'))}" style="margin:0; width:22px; height:22px; padding:0; line-height:20px; text-align:center; font-weight:bold; border-radius:50%; flex-shrink:0;">?</button>
+            </div>
+            <select id="pipeline-version">
+                <option value="v1" ${isV2 ? '' : 'selected'}>${t('ui.pipelineV1')}</option>
+                <option value="v2-case-table" ${isV2 ? 'selected' : ''}>${t('ui.pipelineV2')}</option>
+            </select>
+            <p id="pipeline-version-summary" style="margin:2px 0 6px 0; font-size:11px; opacity:0.85;"></p>
+            <div id="pipeline-help-panel" style="display:none; margin:4px 0 8px 0; padding:8px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; background:var(--vscode-editor-inactiveSelectionBackground); font-size:12px; line-height:1.4;">
+                <div style="margin-bottom:6px;"><strong>${t('ui.pipelineV1')}</strong><br>${t('ui.pipelineV1Summary')}</div>
+                <div style="margin-bottom:6px;"><strong>${t('ui.pipelineV2')}</strong><br>${t('ui.pipelineV2Summary')}</div>
+                <div><strong>💡 ${t('ui.pipelineSuggestion')}</strong></div>
+            </div>
+
+            <div id="v2-settings" style="display:${isV2 ? 'block' : 'none'};">
+                <label for="spec-oracle">${t('ui.specOracle')}</label>
+                <select id="spec-oracle">
+                    <option value="auto" ${pipeline.specOracle === 'off' ? '' : 'selected'}>${t('ui.specOracleAuto')}</option>
+                    <option value="off" ${pipeline.specOracle === 'off' ? 'selected' : ''}>${t('ui.specOracleOff')}</option>
+                </select>
+                <label for="quality-analyst" style="margin-top:8px;">${t('ui.qualityAnalyst')}</label>
+                <select id="quality-analyst">
+                    <option value="auto" ${pipeline.qualityAnalyst === 'off' ? '' : 'selected'}>${t('ui.qualityAnalystAuto')}</option>
+                    <option value="off" ${pipeline.qualityAnalyst === 'off' ? 'selected' : ''}>${t('ui.qualityAnalystOff')}</option>
+                </select>
+            </div>
+
+            <label for="validation-mode" style="margin-top:8px;">${t('ui.validationScope')}</label>
+            <select id="validation-mode">
+                <option value="full" ${validationMode === 'full' ? 'selected' : ''}>${t('ui.fullValidation')}</option>
+                <option value="execution" ${validationMode === 'execution' ? 'selected' : ''}>${t('ui.executionValidation')}</option>
+            </select>
+            <p id="validation-scope" role="status" aria-live="polite" style="margin:2px 0 6px 0;"></p>
+
+            <button type="button" id="btn-apply-demo-settings" style="margin-top:8px; width:100%; font-size:12px; background:var(--vscode-button-secondaryBackground, #3a3d41); color:var(--vscode-button-secondaryForeground, #ffffff);">⚙️ ${t('ui.applyDemoSettings')}</button>
+        </div>
+    </details>
+
+    <details id="section-basic-settings" open style="margin-bottom:10px;">
+        <summary>${t('ui.sectionBasicSettings')}</summary>
+        <div class="content">
             <label for="prompt-strategy">🧠 ${t('ui.testFocus')}</label>
-            <select id="prompt-strategy" style="margin-bottom: 8px;">
+            <select id="prompt-strategy" style="margin-bottom: 4px;">
                 <option value="full" ${selectedFocus === 'full' ? 'selected' : ''}>${t('ui.focusFull')}</option>
                 <option value="boundary" ${selectedFocus === 'boundary' ? 'selected' : ''}>${t('ui.focusBoundary')}</option>
                 <option value="coverage" ${selectedFocus === 'coverage' ? 'selected' : ''}>${t('ui.focusCoverage')}</option>
                 <option value="mutation" ${selectedFocus === 'mutation' ? 'selected' : ''}>${t('ui.focusMutation')}</option>
             </select>
+            <p id="focus-mutation-hint" style="display:none; color:var(--vscode-editorWarning-foreground, #cca700); font-size:11px; margin:2px 0 4px 0;">${t('ui.focusMutationQualityAnalystOff')}</p>
             <p>${t('ui.focusGuide')}</p>
-
-            <label for="mutation-engine">${t('ui.mutationEngine')}${t('ui.fullModeSuffix')}</label>
-            <select id="mutation-engine">
-                <option value="auto" ${selectedEngine === 'auto' ? 'selected' : ''}>${t('ui.mutationAuto')}</option>
-                <option value="builtin" ${selectedEngine === 'builtin' ? 'selected' : ''}>${t('ui.mutationBuiltin')}</option>
-                <option value="mutatest" ${selectedEngine === 'mutatest' ? 'selected' : ''}>${t('ui.mutationMutatest')}</option>
-                <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''}>${t('ui.mutationMutmut')}</option>
-            </select>
-            <p>${t('ui.mutationEngineHint')}</p>
-            <label for="mutation-workers">${t('ui.mutationWorkers')}${t('ui.fullModeSuffix')}</label>
-            <input type="number" id="mutation-workers" value="${selectedWorkers}" min="1" max="4" step="1">
-
-            <label>${t('ui.mutpyTimeout')}${t('ui.fullModeSuffix')}</label>
-            <input type="number" id="mutpy-timeout" value="60" min="1" style="width:100%;">
-
-            <label for="timeout-sec">${localize('單次 API 等待上限（秒）')}</label>
-            <input type="number" id="timeout-sec" value="60" min="1" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="1" style="width:100%;">
-            <label for="target-timeout-sec">${localize('每個函式總時間上限（秒）')}</label>
-            <input type="number" id="target-timeout-sec" value="600" min="0.001" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="0.001" style="width:100%;">
-            <p id="execution-timing-status" role="status" aria-live="polite"></p>
-            <p>${localize('總時間包含預檢、模型等待、重試、測試與突變；每個函式開始後固定期限，重試不會重新計時。開始測試時保存設定；最多 86400 秒（24 小時）。')}</p>
 
             <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
                 <label style="margin-top:0;">${t('ui.maxLoops')}${t('ui.fullModeSuffix')}</label>
@@ -405,6 +417,33 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <p id="target-request-budget" role="status"></p>
             </div>
 
+            <label for="mutation-workers" style="margin-top:8px;">${t('ui.mutationWorkers')}${t('ui.fullModeSuffix')}</label>
+            <input type="number" id="mutation-workers" value="${selectedWorkers}" min="1" max="4" step="1">
+
+            <label style="margin-top:8px;">${t('ui.mutpyTimeout')}${t('ui.fullModeSuffix')}</label>
+            <input type="number" id="mutpy-timeout" value="60" min="1" style="width:100%;">
+
+            <label for="timeout-sec" style="margin-top:8px;">${localize('單次 API 等待上限（秒）')}</label>
+            <input type="number" id="timeout-sec" value="60" min="1" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="1" style="width:100%;">
+            <label for="target-timeout-sec" style="margin-top:8px;">${localize('每個函式總時間上限（秒）')}</label>
+            <input type="number" id="target-timeout-sec" value="600" min="0.001" max="${MAX_EXECUTION_TIMEOUT_SECONDS}" step="0.001" style="width:100%;">
+            <p id="execution-timing-status" role="status" aria-live="polite"></p>
+            <p>${localize('總時間包含預檢、模型等待、重試、測試與突變；每個函式開始後固定期限，重試不會重新計時。開始測試時保存設定；最多 86400 秒（24 小時）。')}</p>
+        </div>
+    </details>
+
+    <details id="advanced-settings-details" style="margin-bottom:12px;">
+        <summary>${t('ui.advancedSettings')}</summary>
+        <div class="content">
+            <label for="mutation-engine">${t('ui.mutationEngine')}${t('ui.fullModeSuffix')}</label>
+            <select id="mutation-engine">
+                <option value="auto" ${selectedEngine === 'auto' ? 'selected' : ''}>${t('ui.mutationAuto')}</option>
+                <option value="builtin" ${selectedEngine === 'builtin' ? 'selected' : ''}>${t('ui.mutationBuiltin')}</option>
+                <option value="mutatest" ${selectedEngine === 'mutatest' ? 'selected' : ''}>${t('ui.mutationMutatest')}</option>
+                <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''}>${t('ui.mutationMutmut')}</option>
+            </select>
+            <p>${t('ui.mutationEngineHint')}</p>
+
             <div id="v2-advanced-requirements" style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
                 <label for="requirements-file">${t('ui.requirementsFile')}</label>
                 <div style="display:flex; gap:4px; margin-bottom:8px;">
@@ -415,21 +454,6 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             </div>
 
             <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
-                <label>${t('ui.targetListFileOperations')}</label>
-                <div class="flex-row" style="margin-top:6px; gap:6px;">
-                    <button type="button" id="btn-import-targets" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.importTargets')}</button>
-                    <button type="button" id="btn-export-targets" style="flex:1; margin:0; padding:4px 8px; font-size:11px;" disabled>${t('ui.exportTargets')}</button>
-                </div>
-            </div>
-
-            <div style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
-                <label>📂 ${t('ui.projectPath')}</label>
-                <div class="flex-row">
-                    <input type="text" id="project-path" readonly placeholder="${t('ui.projectPath')}">
-                    <button id="btn-browse-proj" style="width:40px; flex-shrink:0;">...</button>
-                </div>
-                <button id="btn-batch-scope">${t('ui.chooseBatchSources')}</button>
-                <p id="batch-scope-status" role="status">${t('ui.batchScopeGuide')}</p>
                 <div class="flex-row">
                     <button id="btn-prepare-env" style="flex:1;">${t('ui.prepareProjectEnvironment')}</button>
                     <button id="btn-prepare-env-scope">${t('ui.prepareEnvironment')}</button>
@@ -439,16 +463,29 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <label for="python-environment-status">${t('ui.pythonEnvironment')}</label>
                 <textarea id="python-environment-status" readonly rows="3" placeholder="${t('ui.prepareEnvironmentHint')}"></textarea>
                 
-                <label>📂 ${t('ui.outputDir')}</label>
-                <div class="flex-row">
-                    <input type="text" id="output-path" readonly placeholder="Default">
-                    <button id="btn-browse-out" style="width:40px; flex-shrink:0;">...</button>
+                <button id="btn-batch-scope" style="margin-top:8px;">${t('ui.chooseBatchSources')}</button>
+                <p id="batch-scope-status" role="status">${t('ui.batchScopeGuide')}</p>
+                <div id="batch-scope-targets-panel" style="display:none; margin-top:6px; border:1px solid var(--vscode-editorGroup-border); border-radius:4px; padding:6px;">
+                    <p id="batch-scope-targets-hint" style="margin:0 0 6px 0;">${t('ui.batchScopeTargetsHint')}</p>
+                    <div style="display:flex; gap:6px; margin-bottom:6px;">
+                        <button type="button" id="btn-batch-func-select-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.selectAll')}</button>
+                        <button type="button" id="btn-batch-func-deselect-all" style="flex:1; margin:0; padding:4px 8px; font-size:11px;">${t('ui.deselectAll')}</button>
+                        <button type="button" id="btn-exit-batch-scope" style="flex:1.4; margin:0; padding:4px 8px; font-size:11px;">${t('ui.exitBatchScopeMode')}</button>
+                    </div>
+                    <div id="batch-scope-targets-list" style="max-height:160px; overflow-y:auto;"></div>
                 </div>
             </div>
         </div>
     </details>
 
-    <details open>
+    <div class="sidebar-section" id="section-actions" style="margin-bottom:12px; margin-top:10px;">
+        <div class="flex-row" style="justify-content:space-between; gap:10px;">
+            <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
+            <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">${t('ui.abortBtn')}</button>
+        </div>
+    </div>
+
+    <details id="coverage-dashboard-details" open style="margin-bottom:12px;">
         <summary>${t('ui.coverageDashboard')}</summary>
         <div class="content">
             <!-- 顯示模式切換工具列 -->
@@ -490,7 +527,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         </div>
     </details>
 
-    <details>
+    <details id="system-logs-details">
         <summary>${t('ui.systemLogs')}</summary>
         <div class="content">
             <textarea id="log-area" readonly placeholder="Logs..."></textarea>
@@ -518,12 +555,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         const savedUiState = (typeof vscode.getState === 'function' ? vscode.getState() : null) || {};
         function saveUiState(patch = {}) {
             const advancedDetails = document.getElementById('advanced-settings-details');
+            const thinkingEl = document.getElementById('thinking-mode');
             Object.assign(savedUiState, {
                 envType: document.getElementById('env-type').value,
                 modelName: document.getElementById('model-select').value || savedUiState.modelName || '',
                 cloudKeyName: document.getElementById('api-key-select').value || savedUiState.cloudKeyName || '',
                 customKeyName: document.getElementById('custom-api-select').value || savedUiState.customKeyName || '',
-                advancedSettingsOpen: advancedDetails ? advancedDetails.open : false
+                advancedSettingsOpen: advancedDetails ? advancedDetails.open : false,
+                thinkingMode: thinkingEl ? thinkingEl.value : (savedUiState.thinkingMode || 'provider-default')
             }, patch);
             if (typeof vscode.setState === 'function') vscode.setState(savedUiState);
         }
@@ -599,7 +638,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         updateExecutionTimingStatus();
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode","caseTableRows","caseTableSpecMismatch","caseTableTitle","checkAllFunctionsInFile","uncheckAll","selectedFunctionsCount","advancedSettings","roleQualificationTitle","roleQualificationPassed","roleQualificationFailed"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode","caseTableRows","caseTableSpecMismatch","caseTableTitle","checkAllFunctionsInFile","uncheckAll","selectedFunctionsCount","advancedSettings","roleQualificationTitle","roleQualificationPassed","roleQualificationFailed","sectionEnv","sectionTestData","sectionTestMethod","sectionBasicSettings","pipelineV1Summary","pipelineV2Summary","pipelineSuggestion","pipelineHelpTitle","applyDemoSettings","demoConfirmMessage","specMismatchBadge","specMismatchTableTitle","needsReviewTableTitle","colInput","colSpecExpected","colActual","colBasis","focusMutationQualityAnalystOff"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         const fileRelativeNameByPath = new Map();
@@ -866,17 +905,36 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
-        function getCaseTableBadge(caseTable) {
+        function toggleSpecMismatch(itemId, event) {
+            if (event) {
+                if (typeof event.stopPropagation === 'function') event.stopPropagation();
+                if (typeof event.preventDefault === 'function') event.preventDefault();
+            }
+            const panel = document.getElementById('spec-mismatch-panel-' + itemId);
+            if (panel) {
+                panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+            }
+        }
+        window.toggleSpecMismatch = toggleSpecMismatch;
+
+        function getCaseTableBadge(caseTable, itemId) {
             if (!caseTable || typeof caseTable !== 'object') return '';
             const usable = Number(caseTable.usableRows), total = Number(caseTable.totalRows), mismatch = Number(caseTable.specMismatch);
             if (![usable, total, mismatch].every(Number.isFinite)) return '';
             const tier = caseTable.tier === 'usable' ? 'usable' : 'failed';
-            const text = 'v2 ' + tier + ' · ' + usable + '/' + total + ' ' + i18n.caseTableRows + ' · ' + i18n.caseTableSpecMismatch + ' ' + mismatch;
-            return '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + (tier === 'usable' ? '#1677a6' : '#c75050')
-                + '; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; white-space:nowrap;">' + escapeHtml(text) + '</span>';
+            let html = '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + (tier === 'usable' ? '#1677a6' : '#c75050')
+                + '; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; white-space:nowrap;">'
+                + escapeHtml('v2 ' + tier + ' · ' + usable + '/' + total + ' ' + i18n.caseTableRows) + '</span>';
+            if (mismatch > 0) {
+                const label = message('specMismatchBadge', mismatch);
+                html += ' <span class="spec-mismatch-badge" role="button" tabindex="0" data-item-id="' + escapeHtml(itemId) + '" onclick="toggleSpecMismatch(this.dataset.itemId, event)" onkeydown="if(event.key===&quot;Enter&quot;||event.key===&quot; &quot;){toggleSpecMismatch(this.dataset.itemId, event);}" title="' + escapeHtml(i18n.specMismatchTableTitle) + '" style="background:#e36209; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; cursor:pointer; font-weight:600; white-space:nowrap;">⚠️ ' + escapeHtml(label) + '</span>';
+            } else {
+                html += ' <span class="case-table-badge" style="background:transparent; opacity:0.85; font-size:10px; padding:2px 4px; white-space:nowrap;">· ' + escapeHtml(i18n.caseTableSpecMismatch + ' 0') + '</span>';
+            }
+            return html;
         }
 
-        function getScoreBadge(score, coverage, outcome, caseTable) {
+        function getScoreBadge(score, coverage, outcome, caseTable, itemId) {
             const colors = { passed: '#2ea043', executed: '#1677a6', failed: '#c75050', pending: '#9a6700', skipped: '#666' };
             const state = outcome || { label: i18n.pendingOutcome, kind: 'pending' };
             const outcomeBadge = '<span style="background:' + (colors[state.kind] || colors.pending) + '; color:#fff; padding:2px 7px; border-radius:4px;">' + escapeHtml(state.label) + '</span>';
@@ -892,7 +950,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             const covBadge = coverage
                 ? '<span style="background:#1565c0; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:500; white-space:nowrap;" title="' + escapeHtml(covTitle) + '">📊 ' + escapeHtml(coverage) + '</span>'
                 : '';
-            return '<div class="result-badges">' + outcomeBadge + scoreBadge + covBadge + getCaseTableBadge(caseTable) + '</div>';
+            return '<div class="result-badges">' + outcomeBadge + scoreBadge + covBadge + getCaseTableBadge(caseTable, itemId) + '</div>';
         }
 
         function toggleItemCheck(id, checked) {
@@ -950,7 +1008,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
             const badgesDiv = document.createElement('div');
             badgesDiv.className = 'result-metrics';
-            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome, item.caseTable);
+            badgesDiv.innerHTML = getScoreBadge(item.score, item.coverage, item.outcome, item.caseTable, item.id);
             header.appendChild(badgesDiv);
             card.appendChild(header);
 
@@ -959,6 +1017,61 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 statusDiv.className = 'result-status';
                 statusDiv.textContent = item.reason;
                 card.appendChild(statusDiv);
+            }
+
+            if (item.caseTable && item.caseTable.specMismatch > 0 && item.caseTable.specMismatchDetails) {
+                const details = item.caseTable.specMismatchDetails;
+                const panel = document.createElement('div');
+                panel.id = 'spec-mismatch-panel-' + item.id;
+                panel.className = 'spec-mismatch-panel';
+                panel.style.display = 'none';
+                panel.style.marginTop = '6px';
+                panel.style.padding = '6px';
+                panel.style.border = '1px solid var(--vscode-editorGroup-border)';
+                panel.style.borderRadius = '4px';
+                panel.style.background = 'var(--vscode-editor-inactiveSelectionBackground)';
+                panel.style.fontSize = '11px';
+                panel.onclick = event => { if (event && event.stopPropagation) event.stopPropagation(); };
+
+                let inner = '';
+                if (details.mismatches && details.mismatches.length > 0) {
+                    inner += '<div style="font-weight:bold; margin-bottom:4px; color:var(--vscode-editorWarning-foreground, #cca700);">' + escapeHtml(i18n.specMismatchTableTitle) + ' (' + details.mismatches.length + ')</div>';
+                    inner += '<table style="width:100%; border-collapse:collapse; font-size:11px; margin-bottom:6px;"><thead><tr>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colInput) + '</th>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colSpecExpected) + '</th>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colActual) + '</th>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colBasis) + '</th>'
+                        + '</tr></thead><tbody>';
+                    for (const m of details.mismatches) {
+                        inner += '<tr>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border); font-family:monospace;">' + escapeHtml(m.input) + '</td>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border); font-family:monospace;">' + escapeHtml(m.expected) + '</td>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border); font-family:monospace;">' + escapeHtml(m.actual) + '</td>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(m.basis) + '</td>'
+                            + '</tr>';
+                    }
+                    inner += '</tbody></table>';
+                }
+                if (details.needsReview && details.needsReview.length > 0) {
+                    inner += '<div style="font-weight:bold; margin-bottom:4px; opacity:0.9;">' + escapeHtml(i18n.needsReviewTableTitle) + ' (' + details.needsReview.length + ')</div>';
+                    inner += '<table style="width:100%; border-collapse:collapse; font-size:11px;"><thead><tr>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colInput) + '</th>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colSpecExpected) + '</th>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colActual) + '</th>'
+                        + '<th style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(i18n.colBasis) + '</th>'
+                        + '</tr></thead><tbody>';
+                    for (const nr of details.needsReview) {
+                        inner += '<tr>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border); font-family:monospace;">' + escapeHtml(nr.input) + '</td>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border); font-family:monospace;">' + escapeHtml(nr.predicted) + '</td>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border); font-family:monospace;">' + escapeHtml(nr.actual) + '</td>'
+                            + '<td style="padding:3px 5px; border:1px solid var(--vscode-editorGroup-border);">' + escapeHtml(nr.basis) + '</td>'
+                            + '</tr>';
+                    }
+                    inner += '</tbody></table>';
+                }
+                panel.innerHTML = inner;
+                card.appendChild(panel);
             }
 
             return card;
@@ -1340,8 +1453,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
 
         function updateLocalContextControls() {
             const frozen = analysisRunning || environmentBusy;
-            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'prompt-strategy', 'timeout-sec', 'target-timeout-sec']) {
-                document.getElementById(id).disabled = frozen;
+            for (const id of ['env-type', 'model-select', 'ollama-url', 'btn-save-ollama-url', 'btn-refresh-models', 'btn-test-local', 'thinking-mode', 'prompt-strategy', 'timeout-sec', 'target-timeout-sec', 'btn-apply-demo-settings']) {
+                const el = document.getElementById(id);
+                if (el) el.disabled = frozen;
             }
             const noSelection = !document.getElementById('model-select').value;
             for (const id of ['runtime-context-tokens', 'btn-save-runtime-context']) {
@@ -1386,11 +1500,121 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 ollamaUrl: document.getElementById('ollama-url').value, tokens, revision: runtimeContextRevision });
         };
 
+        const thinkingModeSelect = document.getElementById('thinking-mode');
+        if (thinkingModeSelect) {
+            if (savedUiState.thinkingMode && ['provider-default', 'disabled'].includes(savedUiState.thinkingMode)) {
+                thinkingModeSelect.value = savedUiState.thinkingMode;
+            }
+            thinkingModeSelect.onchange = (e) => {
+                const val = e && e.target ? e.target.value : thinkingModeSelect.value;
+                saveUiState({ thinkingMode: val });
+                vscode.postMessage({ command: 'setThinkingMode', mode: val });
+            };
+        }
+
+        function updatePipelineVersionSummary() {
+            const val = document.getElementById('pipeline-version').value;
+            const summaryEl = document.getElementById('pipeline-version-summary');
+            if (summaryEl) {
+                summaryEl.textContent = val === 'v2-case-table' ? i18n.pipelineV2Summary : i18n.pipelineV1Summary;
+            }
+        }
+
+        function updateFocusMutationHint() {
+            const hintEl = document.getElementById('focus-mutation-hint');
+            if (!hintEl) return;
+            const strategyEl = document.getElementById('prompt-strategy');
+            const pipelineEl = document.getElementById('pipeline-version');
+            const qaEl = document.getElementById('quality-analyst');
+            const isMutation = strategyEl && strategyEl.value === 'mutation';
+            const isV2 = pipelineEl && pipelineEl.value === 'v2-case-table';
+            const isQualityOff = qaEl && qaEl.value === 'off';
+            hintEl.style.display = (isMutation && isV2 && isQualityOff) ? 'block' : 'none';
+        }
+
+        const btnPipelineHelp = document.getElementById('btn-pipeline-help');
+        if (btnPipelineHelp) {
+            btnPipelineHelp.onclick = () => {
+                const panel = document.getElementById('pipeline-help-panel');
+                if (panel) {
+                    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+                }
+            };
+        }
+
+        const btnDemo = document.getElementById('btn-apply-demo-settings');
+        if (btnDemo) {
+            btnDemo.onclick = () => {
+                if (typeof window.confirm === 'function' && !window.confirm(i18n.demoConfirmMessage || 'Apply demo settings?')) return;
+                const envSelect = document.getElementById('env-type');
+                if (envSelect) {
+                    envSelect.value = 'local';
+                    applyEnvTypeUi('local');
+                }
+                const modelSelect = document.getElementById('model-select');
+                if (modelSelect) {
+                    let found = false;
+                    for (let i = 0; i < modelSelect.options.length; i++) {
+                        if (modelSelect.options[i].value === 'gpt-oss:20b') {
+                            modelSelect.selectedIndex = i;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        const opt = document.createElement('option');
+                        opt.value = 'gpt-oss:20b';
+                        opt.textContent = 'gpt-oss:20b';
+                        modelSelect.appendChild(opt);
+                        modelSelect.value = 'gpt-oss:20b';
+                    }
+                    saveUiState({ modelName: 'gpt-oss:20b' });
+                    requestLocalRuntimeContext();
+                }
+                const contextInput = document.getElementById('runtime-context-tokens');
+                if (contextInput) {
+                    contextInput.value = '8192';
+                    runtimeContextRevision++;
+                    contextInput.disabled = true;
+                    const saveBtn = document.getElementById('btn-save-runtime-context');
+                    if (saveBtn) saveBtn.disabled = true;
+                    vscode.postMessage({
+                        command: 'setModelRuntimeContextTokens',
+                        modelName: 'gpt-oss:20b',
+                        ollamaUrl: document.getElementById('ollama-url').value,
+                        tokens: 8192,
+                        revision: runtimeContextRevision
+                    });
+                }
+                const engineSelect = document.getElementById('mutation-engine');
+                if (engineSelect) {
+                    engineSelect.value = 'mutatest';
+                    vscode.postMessage({ command: 'setMutationEngine', engine: 'mutatest' });
+                }
+                const strategySelect = document.getElementById('prompt-strategy');
+                if (strategySelect) {
+                    strategySelect.value = 'full';
+                    vscode.postMessage({ command: 'setPromptStrategy', strategy: 'full' });
+                }
+                document.getElementById('failure-limit').value = '5';
+                document.getElementById('quality-no-improvement-limit').value = '3';
+                document.getElementById('batch-failure-limit').value = '0';
+                stopPolicyTouched = true;
+                updateTargetRequestBudget();
+                vscode.postMessage({
+                    command: 'setStopPolicy',
+                    settings: { failureLimit: 5, qualityNoImprovementLimit: 3, batchFailureLimit: 0 }
+                });
+                updateFocusMutationHint();
+            };
+        }
+
         document.getElementById('lang-select').onchange = (e) => {
             vscode.postMessage({ command: 'setLanguage', lang: e.target.value });
         };
         document.getElementById('prompt-strategy').onchange = (e) => {
             if (analysisRunning || environmentBusy) return;
+            updateFocusMutationHint();
             vscode.postMessage({ command: 'setPromptStrategy', strategy: e.target.value });
         };
         function updateValidationScope() {
@@ -1411,17 +1635,24 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
         document.getElementById('pipeline-version').onchange = (e) => {
             if (analysisRunning) return;
-            document.getElementById('v2-settings').style.display = e.target.value === 'v2-case-table' ? 'block' : 'none';
-            vscode.postMessage({ command: 'setPipelineSetting', key: 'pipelineVersion', value: e.target.value });
+            const val = e && e.target ? e.target.value : document.getElementById('pipeline-version').value;
+            document.getElementById('v2-settings').style.display = val === 'v2-case-table' ? 'block' : 'none';
+            updatePipelineVersionSummary();
+            updateFocusMutationHint();
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'pipelineVersion', value: val });
         };
+        updatePipelineVersionSummary();
         document.getElementById('spec-oracle').onchange = (e) => {
             if (analysisRunning) return;
             vscode.postMessage({ command: 'setPipelineSetting', key: 'specOracle', value: e.target.value });
         };
         document.getElementById('quality-analyst').onchange = (e) => {
             if (analysisRunning) return;
-            vscode.postMessage({ command: 'setPipelineSetting', key: 'qualityAnalyst', value: e.target.value });
+            const val = e && e.target ? e.target.value : document.getElementById('quality-analyst').value;
+            updateFocusMutationHint();
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'qualityAnalyst', value: val });
         };
+        updateFocusMutationHint();
         document.getElementById('requirements-file-pick').onclick = () => {
             if (analysisRunning) return;
             vscode.postMessage({ command: 'pickRequirementsFile' });
