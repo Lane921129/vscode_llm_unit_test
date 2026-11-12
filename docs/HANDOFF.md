@@ -166,7 +166,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 
 ### 下一步與驗收
 
-本輪程式提交：本筆 `fix(pr15)`（收尾回填 hash）。請使用者在實驗室以原設定重跑 v2 的 26 目標，確認禁止 setup 的列為 `capture-failed / setup-forbidden-mutation`、四個原 incomplete 目標現在有 failed 或其他可核對終態，以及後續目標正常完成。若仍失敗，保留新的 final_report／function_knowledge／role_events，依 reasonCode 查明各自原因。未改提示詞、預算、重試、預設值與通過標準，不需要新增 B 類決定。完成本 PR 後停止，不接續其他 PR。
+本輪程式提交：`7b51079`（其後僅 docs 收尾，分支 HEAD 見 git log）。請使用者在實驗室以原設定重跑 v2 的 26 目標，確認禁止 setup 的列為 `capture-failed / setup-forbidden-mutation`、四個原 incomplete 目標現在有 failed 或其他可核對終態，以及後續目標正常完成。若仍失敗，保留新的 final_report／function_knowledge／role_events，依 reasonCode 查明各自原因。未改提示詞、預算、重試、預設值與通過標準，不需要新增 B 類決定。完成本 PR 後停止，不接續其他 PR。
 
 本機重驗指令（Windows，在 `pr/15-v2-setup-guard`）：
 
@@ -906,7 +906,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合測試；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | 本筆 fix(pr15)，收尾回填 |
+| 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合／兩項邊界回歸；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | `7b51079`（程式）；本筆 docs 收尾 |
 | 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
 | 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |
 | 2026-11-10 16:45 | Antigravity | PR #12a～#13 疊加與一次驗收收尾 | 完成 4 個 PR 線性疊加（#12a 57acf0d → #12b b11cce0 → #10 d11ee25 → #13）；v2 側欄新增存活突變補強選單（auto/off，綁定 qualityAnalyst）；Windows 原生 fast、webview、related、v2 golden 全過 | 本筆 |
