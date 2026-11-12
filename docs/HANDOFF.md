@@ -28,6 +28,10 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-12 使用者指定 PR #15（C 類修復）**：從 `lane_edition=origin/lane_edition=5fc43b6` 建立 `pr/15-v2-setup-guard`，不合併、不 push。v2 Writer setup 重用既有結構檢查，禁止環境／模組修改；違反列為 capture-failed／setup-forbidden-mutation，不找 Bug Fixer。runner 逾時或異常結束須落 failed 與 reasonCode，後續目標仍須能核對報告。v1、提示詞、預算、預設值與 golden 均不改。
+
+PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，尚未合併至主線；本 PR 依使用者要求從 `5fc43b6` 獨立開始，不帶入該三 PR 的程式。
+
 **2026-11-09 22:45 使用者決定（過夜任務四階段）**：
 1. `usable` 的標準在 v1、v2、對照組完全相同：測試通過、確實呼叫真實目標、且量到突變分數。（已實作於 `57acf0d`）
 2. 對照組提示詞在原始碼前加一行「檔案：<檔名>.py」，其餘照架構 6.3 原文。（即原第 3 節「對照組提示詞沒有模組名稱」的選項 (B)；已實作於 `57acf0d`，11/11 自第 3 節移除）
@@ -111,24 +115,73 @@
 | 1 | 修復 050f969 回歸、golden 安全網、決策寫入 PROJECT_RULES | **完成：使用者驗收通過，已合併主線；第6步AOCI保留待辦** | `lane_edition`（來源 `codex/pr1-regression-baseline`） | 2026-11-07 Codex |
 | 2a | **側欄目標選擇改善**（字母排序、多選累加、批次範圍連動、目標清單匯出入）。規格：`docs/側欄目標選擇改善規格_2026_11_07.md` | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02a-target-selection`） | 2026-11-08 Antigravity |
 | 2 | 模型篩選工具與評估集 | **完成：使用者驗收通過，已合併主線並 push** | `lane_edition`（來源 `pr/02-model-screening`） | 2026-11-08 Antigravity |
-| 3 | 成功分層與批次失敗彙總 | **完成：使用者驗收通過；已在本機 `--no-ff` 合併到 `lane_edition`（`474e4e5`），尚未 push（VM 連不到 GitHub，待使用者在 Windows push）** | `lane_edition`（來源 `pr/03-tiered-success-failure-summary`） | 2026-11-08 Claude Code |
+| 3 | 成功分層與批次失敗彙總 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 4 | 測試範圍預設排除備份與副本 | 延後（使用者 11/08 決定） | | |
 | 5 | case-table-v1 結構與驗證 | **完成：使用者驗收（11/09 22:15），已合併主線（`29b4c9d`）** | `lane_edition` | 2026-11-09 監督 |
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | **完成：使用者驗收（11/09 22:15），已合併主線（`674dab1`）** | `lane_edition` | 2026-11-09 監督 |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **完成：使用者驗收（11/09 22:15），已合併主線（`a52900f`）** | `lane_edition` | 2026-11-09 監督 |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **完成：使用者驗收（11/09 22:15），已合併主線（`8126f94`）** | `lane_edition` | 2026-11-09 監督 |
-| 9 | Reviewer 改審案例表 | 未開始 | | |
-| 10 | **Quality Analyst 存活突變轉案例列**（提示詞、雙版本捕獲、存活迴圈） | **完成待驗收：11/11 規格預測測試修正，Windows 3/3 通過；未合併、未 push** | `pr/10-survivor-rows`（自 `pr/12b-seeded-bugs` b11cce0） | 2026-11-11 Codex |
-| 11 | 需求涵蓋表與設計疑點 | 未開始 | | |
-| 12a | 評估紀錄（v2 role_events）、彙總支援 v2、一般 LLM 對照組 | **完成待驗收：Windows 原生驗證通過；未合併、未 push** | `pr/12a-eval-recording`（自 `lane_edition` 8126f94） | 2026-11-09 Claude Code |
-| 12b | **埋 bug 評估**（16 個語意 bug、eval_seeded_bugs.py prepare/analyze、報告產出） | **完成待驗收：Windows 原生驗證全過（8/8 全過）；未合併、未 push** | `pr/12b-seeded-bugs`（自 `pr/12a-eval-recording` 57acf0d） | 2026-11-09 Antigravity |
-| 13 | **側欄精簡與進階設定收合** | **測試回歸修正完成：Windows check-types、lint、指定 related 10/10 通過；待完整重驗，未合併、未 push** | `pr/13-sidebar`（自 `pr/10-survivor-rows`） | 2026-11-11 Codex |
+| 9 | Reviewer 改審案例表 | 已實作待驗收；程式未帶入 PR #15 | `pr/09-case-table-review`（e90c1e5） | 2026-11-12 Codex |
+| 10 | Quality Analyst 存活突變轉案例列 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
+| 11 | 需求涵蓋表與設計疑點 | 已實作待驗收；程式未帶入 PR #15 | `pr/11-requirements-coverage`（87c18ea） | 2026-11-12 Codex |
+| 12a | 評估紀錄與一般 LLM 對照組 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
+| 12b | 埋 bug 評估 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
+| 13 | 側欄精簡與進階設定收合 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
+| 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
+| 15 | v2 setup 結構守門與 runner 失敗收尾 | 完成待驗收：Windows fast／Python／相關／golden 通過 | `pr/15-v2-setup-guard`（起點 5fc43b6） | 2026-11-12 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #12a～#13 一次驗收（最新）
+## 2. PR #15 v2 setup 與 runner 收尾（最新）
+
+- Agent：Codex（GPT-6），Windows 原生；有 CodeGraph MCP、無 AOCI MCP，未呼叫 AOCI，收尾待辦見第 4 節。原有未追蹤 `Claude outputs/`、舊重構計畫均保留；本分支從主線 `5fc43b6` 開立。
+- [x] setup 守門：重用 `case_row_assertions.py` 的 `_rebinds_target`，只在 v2 setup／fixer 模式加入環境與匯入模組 roots、sys.modules 寫入、setattr／delattr 與外部 patch 檢查；既有 compare 預設契約保持原狀。一般列與 Quality Analyst 列在 capture 前驗證，Python capture 入口亦使用同一檢查。保留被測模組使用點的 mock.patch。
+- [x] 失敗收尾：v2 在 AST／需求讀取前保留目標目錄，任何階段例外皆寫 case_table、v2_result、final_report、run_manifest、function_knowledge 與 role_events，再傳出錯誤；runner 異常／逾時分別記 runner-crashed／runner-timeout，批次以既有 refresh 核對，沒有改 BatchJournal 或 v1。
+- [x] 固定回覆測試：禁止的 sys.frozen／sys.executable setup 被拒，後續列與下一目標完成；實際終止 generated-test runner、實際 capture 逾時、capture 前模型錯誤均有 failed 報告與下一目標完成。Windows 首輪修正後的新整合 4/4、相關 Python 27/27 通過；最終新增到 6 個 Node 案例，結果見下表（`log/pr15-guard-final-windows.log`）。初輪 kill fixture 把就緒訊號寫入 stdout 干擾 JSON，改用 stderr 後真正走到 runner kill；未放寬斷言。
+- [x] 最後兩個 runner 邊界：雙版本內層遺失 JSON（即使外層回覆 distinguishable）、非零退出卻留下 passed 報告，均為 runner-crashed；正常 completed unittest failure 仍可照舊修正。
+- [x] **Windows 原生驗證**（本輪無 VM 結果）：
+
+  | 項目 | 結果 | 日誌 |
+  | --- | --- | --- |
+  | check-types | exit 0（最後兩個邊界加入後） | `log/pr15-check-types-final-windows.log` |
+  | lint | exit 0（最後兩個邊界加入後） | `log/pr15-lint-final-windows.log` |
+  | test:fast | Node 817/817、Python fast 52/52；含型別、lint、Webview 語法通過 | `log/pr15-fast-windows.log` |
+  | test:python | 965 tests OK，skipped=4；歷史憑證掃描 exit 0 | `log/pr15-python-windows.log` |
+  | 新 Node 回歸＋v2 golden | 9/9：6 個 setup／runner／報告案例、3 個既有 v2 golden | `log/pr15-runner-golden-final-windows.log` |
+  | 相關 Python | 27/27；含共用 guard 與直接 capture 入口 | `log/pr15-guard-final-windows.log` |
+  | 原相關 Node | 14 個原 caseRowStage／caseTablePipeline／survivorRow 案例通過；初輪另 4 個新案中 kill fixture 失敗，修正 fixture 後上述 6 新案全過 | `log/pr15-related-initial-windows.log` |
+  | test:golden | v1 11/11、v2 3/3；後續只加 v2 runner 邊界，v2 已再驗 3/3；v1 沿用原通過結果 | `log/pr15-golden-windows.log`、上方最後相關日誌 |
+  | source 稽核 | v1、共用 runner／BatchJournal、所有提示詞、設定、`.codex/`／`.aoci/`、所有既有 golden 均零變更 | `log/pr15-source-audit-windows.json` |
+
+  **Golden 差異逐項：無。** 不重錄、不更新、不新增任何快照。完整 integration 本輪未重跑；第 5 節既有 14 個葉節點失敗保留，沒有宣稱 integration 全綠。完整 Python 花費約 15 分鐘，未中斷或縮減模組。
+
+
+### 實驗室原始證據與能確認的原因
+
+唯讀檢查 `D:/read/專題/test/result/v2/eval_screening_2026_11_12_14_40`：26 目標中 4 個 incomplete-report；get_app_dir 只有 target.json 與 v2_runs，該 row_c3 測試／invocation 的狀態皆 passed，其他三個失敗目標只有 target.json。四個目標之間，get_destination_minutes 等目標仍有完成報告。
+
+`captureRow`、`runTestFile` 皆透過 runSpawn 啟動獨立 Python 子程序；Node 主程序不執行 Python setup，程序結束後也不會把 sys 狀態複製回主機。可確定的缺口是 v2 原本只在正常結尾保存終態／角色事件，途中例外沒有失敗報告，BatchJournal.refresh 才會設 running／incomplete-report。原四筆沒有保存拋出的例外，無法從現存資料還原各自觸發點；重跑後可由新報告的 reasonCode／failure／failureStage 查明。沒有將四筆都宣稱為同一個跨程序污染。
+
+### 下一步與驗收
+
+本輪程式提交：本筆 `fix(pr15)`（收尾回填 hash）。請使用者在實驗室以原設定重跑 v2 的 26 目標，確認禁止 setup 的列為 `capture-failed / setup-forbidden-mutation`、四個原 incomplete 目標現在有 failed 或其他可核對終態，以及後續目標正常完成。若仍失敗，保留新的 final_report／function_knowledge／role_events，依 reasonCode 查明各自原因。未改提示詞、預算、重試、預設值與通過標準，不需要新增 B 類決定。完成本 PR 後停止，不接續其他 PR。
+
+本機重驗指令（Windows，在 `pr/15-v2-setup-guard`）：
+
+```powershell
+npm run test:fast
+npm run test:python
+npm run test:related -- --node caseSetupGuardIntegration --node caseRowStageIntegration --node caseTablePipelineIntegration --node survivorRow --python test_case_row_assertions --python test_case_capture_runner
+npm run test:golden
+```
+
+如另做完整 `npm run test:integration`，須背景輸出到 log/，只讀摘要並與第 5 節既有 14 案逐案比對。
+
+---
+
+## 2. PR #12a～#13 一次驗收（歷史）
 
 ### 2026-11-11 23:00 進階設定重建還原修正（Claude Code，`pr/13-sidebar`）
 
@@ -754,6 +807,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-12（Codex／PR #15）：本次無 AOCI MCP。請具能力的 agent 維護 `git diff 5fc43b6..pr/15-v2-setup-guard --name-only` 所列受管理檔；未改 `.aoci/`、`.codex/`。
+
 - 2026-11-11（Claude Code／PR #13 重建還原修正）：沒有 AOCI MCP。修改 `src/ui/webviewContent.ts`、`src/test/sidebarDashboardReplay.test.ts`、`CHANGELOG.zh-TW.md`、本交接文件。
 - 2026-11-11（Codex／測試修正）：本次沒有 AOCI MCP，未呼叫工具；受管理修改僅 `src/test/caseSpecOracleIntegration.test.ts`、`src/test/sidebarDashboardReplay.test.ts` 與本交接文件，留待具工具能力的 agent 維護。
 
@@ -851,6 +906,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合測試；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | 本筆 fix(pr15)，收尾回填 |
 | 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
 | 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |
 | 2026-11-10 16:45 | Antigravity | PR #12a～#13 疊加與一次驗收收尾 | 完成 4 個 PR 線性疊加（#12a 57acf0d → #12b b11cce0 → #10 d11ee25 → #13）；v2 側欄新增存活突變補強選單（auto/off，綁定 qualityAnalyst）；Windows 原生 fast、webview、related、v2 golden 全過 | 本筆 |

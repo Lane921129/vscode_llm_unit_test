@@ -75,6 +75,17 @@ class CaptureRunnerTests(unittest.TestCase):
                              text=True, encoding='utf-8', cwd=self.directory, timeout=60)
         return json.loads(run.stdout)
 
+    def test_forbidden_setup_is_rejected_before_execution_and_the_next_row_is_independent(self):
+        executable, frozen = sys.executable, getattr(sys, 'frozen', None)
+        for setup in ['import sys\nsys.frozen = True\nsys.executable = None\nargs = (1, 2)\nkwargs = {}',
+                      'target_module.ratio = lambda a, b: 7\nargs = (1, 2)\nkwargs = {}']:
+            report = self.capture('ratio', {'setup': setup})
+            self.assertEqual(report['status'], 'capture-failed')
+            self.assertEqual(report['reason'], 'setup-forbidden-mutation')
+        following = self.capture('ratio', {'args': '(1, 2)'})
+        self.assertEqual(following['actual'], {'kind': 'return', 'value': '0.5'})
+        self.assertEqual((sys.executable, getattr(sys, 'frozen', None)), (executable, frozen))
+
     def test_return_value_is_recorded_as_a_literal(self):
         report = self.capture('ratio', {'args': '(1, 3)', 'kwargs': '{}'})
         self.assertEqual((report['status'], report['actual']), ('captured', {'kind': 'return', 'value': '0.33'}))

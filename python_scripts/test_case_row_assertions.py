@@ -6,7 +6,7 @@ import sys as _sys
 # Make sibling scripts importable when this module runs alone (test:related), like the other test modules.
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
-from case_row_assertions import compare
+from case_row_assertions import compare, validate_setup
 
 BEFORE = '''    def test_c1(self):
         item = make(1)
@@ -142,6 +142,57 @@ class TargetIntegrityTests(unittest.TestCase):
                                           'limit = target_module.LIMIT', 'items = [target_module.Item(n) for n in range(2)]']))
         self.assertEqual(report, {'parsed': True, 'sameName': True, 'accepted': True, 'violations': []})
         self.assertTrue(check_plain(PLAIN.replace('typical values', 'typical adult values'))['accepted'], 'docstring is setup')
+
+
+
+class SetupGuardTests(unittest.TestCase):
+    def verdict(self, setup):
+        return validate_setup({'setup': setup, 'module': 'health', 'target': 'bmi'})
+
+    def test_environment_and_imported_module_mutations_reuse_the_rebinding_guard(self):
+        for mutation in [
+            'import sys; sys.frozen = True', 'import sys; sys.executable = None',
+            'import os; os.name = "other"', 'import builtins; del builtins.open',
+            'target_module.LIMIT = 1', 'del target_module.LIMIT',
+            'import sys; setattr(sys, "frozen", True)', 'import sys; delattr(sys, "executable")',
+            'import sys as runtime; runtime.frozen = True',
+            "__import__('sys').frozen = True",
+            "runtime = __import__('sys'); runtime.frozen = True",
+            "from importlib import import_module as load; runtime = load('sys'); runtime.frozen = True",
+            'import types as other; other.ModuleType = None',
+            'from os import path as where; where.join = None',
+            'import sys; sys.modules["x"] = target_module', 'import sys; del sys.modules["x"]',
+            'import sys; sys.modules.update({})', 'import sys; registry = sys.modules; registry.clear()',
+            'import os; os.environ.update({"HOME": "fake"})',
+            'import sys; vars(sys).update({"frozen": True})',
+            'mock.patch("sys.executable", None)', 'mock.patch("sqlite3.connect")',
+            'import sys; mock.patch.object(sys, "frozen", True)',
+            'from unittest.mock import patch as p; p("os.name", "fake")',
+            'import unittest.mock as m; m.patch("builtins.open")',
+        ]:
+            with self.subTest(mutation=mutation):
+                self.assertEqual(self.verdict(mutation + '\nargs = ()\nkwargs = {}'),
+                                 {'accepted': False, 'violations': ['target-rebound']})
+
+    def test_reading_environment_building_inputs_and_point_of_use_patching_still_work(self):
+        for setup in [
+            'import sys\nargs = (sys.executable,)\nkwargs = {}',
+            'item = target_module.Box(2)\nitem.size = 3\nargs = (item,)\nkwargs = {}',
+            'with mock.patch.object(target_module, "_connect") as connection:\n    connection.return_value = None\n    args = (1,)\nkwargs = {}',
+            'with mock.patch("health._connect"):\n    args = (1,)\nkwargs = {}',
+        ]:
+            with self.subTest(setup=setup):
+                self.assertEqual(self.verdict(setup), {'accepted': True, 'violations': []})
+
+    def test_environment_option_also_covers_v2_fixer_setup_without_changing_the_old_contract(self):
+        after = before_call(['import sys', 'sys.frozen = True'])
+        request = {'before': PLAIN, 'after': after, 'method': 'test_c1',
+                   'callees': ['target_module.bmi'], 'module': 'health', 'target': 'bmi'}
+        self.assertTrue(compare(request)['accepted'])
+        self.assertIn('target-rebound', compare({**request, 'protectEnvironment': True})['violations'])
+
+    def test_unparseable_setup_is_rejected_without_execution(self):
+        self.assertEqual(self.verdict('args = ('), {'accepted': False, 'violations': ['unparseable']})
 
 
 if __name__ == '__main__':

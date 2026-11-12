@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-12 PR #15（v2 setup 與 runner 失敗收尾）
+- v2 setup 重用 target-rebound 檢查禁止環境／模組修改；違反列為 capture-failed／setup-forbidden-mutation，不要求 Bug Fixer。
+- runner 逾時、異常退出或雙版本內層遺失結果會保存 failed 與 reasonCode，後續目標可繼續核對報告。
+- v2 各階段例外保留終態、診斷與角色事件；v1、提示詞、預設值與既有 golden 不變。
+
 ## 2026-11-10 PR #13（側欄精簡與進階設定收合）
 - 精簡側欄版面配置：模型選擇、流程版本、驗證模式、受測專案與函式選擇、執行與中止按鈕常駐顯示；context 大小、thinking 模式、突變設定、需求檔與目標清單匯出入收進「進階設定」（預設收合，保存使用者開合選擇）。
 - 移除側欄「開始前要求通過角色資格測試」勾選框，設定項 `llmUnitTest.requireRoleQualification` 保留預設 false；「測試連線」一併執行既有角色資格測試並在下方顯示各角色結果摘要。

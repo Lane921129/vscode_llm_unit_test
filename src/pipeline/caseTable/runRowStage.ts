@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { CaseRow, needsSetup, nextCaseRowIndex, transitionCaseRow } from './caseTable';
 import { CaseTableFacts } from './caseTableFacts';
 import { buildCaseTableTestFile, buildRowTestMethod, RowExpectation, RowTestContext, rowTestMethodName } from './rowToTest';
-import { captureRow, captureSurvivorRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile } from './rowExecution';
+import { captureRow, captureSurvivorRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile, validateRowSetup } from './rowExecution';
 import { getRowSetupPrompt, parseRowSetupResponse } from '../../roles/unittestWriter';
 import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../../roles/bugFixer';
 import { getSurvivorRowPrompt, parseSurvivorRow } from '../../roles/qualityAnalyst';
@@ -79,6 +79,10 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
             setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' })) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
+            if (!await validateRowSetup(runtime, setup)) {
+                rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-forbidden-mutation');
+                continue;
+            }
             setups.set(row.id, setup);
         }
         const capture = await captureRow(runtime, needsSetup(row.call)
@@ -193,6 +197,11 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' })) ?? undefined;
                 if (!setup) {
                     rows[rowIndex] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable');
+                    noImprovementCount += 1;
+                    continue;
+                }
+                if (!await validateRowSetup(runtime, setup)) {
+                    rows[rowIndex] = transitionCaseRow(row, 'capture-failed', 'setup-forbidden-mutation');
                     noImprovementCount += 1;
                     continue;
                 }
