@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-14 PR #15b（runner 診斷與 demo thinking）
+- runner 事件與 v2_result 保存操作、列 id、退出碼、signal、逾時、runner.json 存在狀態及經共用 v1 脫敏的輸出尾端（各最多 1500 字）。
+- 每個 v2 model-request 記錄 thinking、context 與輸出限制；未傳送的值記 null，不改請求行為。
+- demo 設定加入 thinking=disabled，中英文確認框與選項文字同步；取消時不修改設定。
+
 ## 2026-11-12 PR #13b（側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2）
 - 側欄重排為六大區塊（執行環境、測試資料與輸出、測試方式、基礎設定、進階設定、開始/停止與紀錄），①～④ 預設展開，⑤ 預設摺疊並記住選擇。
 - 流程版本提供「?」說明面板與動態選項摘要（中英文 i18n）；測試方式區新增「套用 demo 設定」按鈕（一鍵配置 local、gpt-oss:20b、8192 context、mutatest、full、5/3/0 停止政策）。

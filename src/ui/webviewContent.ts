@@ -1586,6 +1586,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         revision: runtimeContextRevision
                     });
                 }
+                if (thinkingModeSelect) {
+                    thinkingModeSelect.value = 'disabled';
+                    saveUiState({ thinkingMode: 'disabled' });
+                    vscode.postMessage({ command: 'setThinkingMode', mode: 'disabled' });
+                }
                 const engineSelect = document.getElementById('mutation-engine');
                 if (engineSelect) {
                     engineSelect.value = 'mutatest';

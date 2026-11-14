@@ -6,6 +6,10 @@ import { currentImportFixtures, importFixtureEnvironment } from '../pipeline/imp
 import { closeResourceLease, createResourceLease, resourceLeaseEnvironment, ResourceLifecycle } from '../pipeline/isolatedResources';
 import { preparePythonToolProcess } from '../pipeline/pythonTools';
 
+export interface ProcessExitDetails {
+    code: number | null; signal: NodeJS.Signals | null; timedOut: boolean; stdout: string; stderr: string;
+}
+
 /** A runner-owned timeout, distinguishable without parsing localized error text. */
 export class ProcessTimeoutError extends Error {
     constructor(readonly timeoutMs: number) {
@@ -39,7 +43,7 @@ export function killProcessTree(proc: ChildProcess): Promise<void> {
 export async function runSpawn(
     command: string,
     args: string[],
-    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; input?: string }
+    options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number; input?: string; onExit?: (detail: ProcessExitDetails) => void }
 ): Promise<{ stdout: string; stderr: string; code: number | null; resourceLifecycle?: ResourceLifecycle }> {
     const context = currentExecution();
     const budget = currentTargetBudget();
@@ -91,17 +95,24 @@ export async function runSpawn(
             proc.stdin.on('error', error => {
                 if ((error as NodeJS.ErrnoException).code !== 'EPIPE') { terminate(error); }
             });
+            const observeExit = (code: number | null, signal: NodeJS.Signals | null) => {
+                // Diagnostic observers cannot change the process verdict or cleanup.
+                try { options.onExit?.({ code, signal, stdout, stderr,
+                    timedOut: terminationReason instanceof ProcessTimeoutError
+                        || terminationReason instanceof Error && (terminationReason as { category?: string }).category === 'timeout' }); } catch { /* Diagnostics only. */ }
+            };
             proc.on('error', error => {
                 // An error during termination must not let a repair overlap the
                 // still-closing process. The close handler owns that rejection.
                 if (terminationReason) { return; }
-                settled = true; cleanup(); reject(error);
+                settled = true; cleanup(); observeExit(proc.exitCode, proc.signalCode); reject(error);
             });
-            proc.on('close', async code => {
+            proc.on('close', async (code, signal) => {
                 if (settled) { return; }
                 settled = true;
                 cleanup();
                 await terminationCleanup;
+                observeExit(code, signal);
                 if (context?.cancelled) { reject(new Error(localize("使用者強制中止"))); }
                 else if (terminationReason) { reject(terminationReason); }
                 else { resolve({ stdout, stderr, code }); }

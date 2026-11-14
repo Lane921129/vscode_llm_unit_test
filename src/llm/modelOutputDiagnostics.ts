@@ -31,8 +31,8 @@ export interface ModelOutputPreview {
 }
 
 const sensitiveAssignment = /\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|authorization)\s*['"]?\s*[:=]/i;
-function safeLine(text: string): string {
-    if (containsCredential(text) || sensitiveAssignment.test(text)) { return WITHHELD_SENSITIVE_CONTENT; }
+export function safeLine(text: string, knownSecrets: readonly string[] = []): string {
+    if (containsCredential(text, knownSecrets) || sensitiveAssignment.test(text)) { return WITHHELD_SENSITIVE_CONTENT; }
     return text.replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+|(?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>]+|\/(?:[A-Za-z0-9._~-]+\/)+[^\s"'<>]*/gi,
         '[withheld-location]').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '');
 }

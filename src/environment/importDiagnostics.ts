@@ -35,6 +35,13 @@ function toolDiagnostic(diagnostic: unknown): PreflightToolDiagnostic | undefine
         ...(value.detailCode === 'missing-or-invalid-source-versions' ? { detailCode: value.detailCode } : {}) };
 }
 
+/** Shared v1 diagnostic privacy predicate; extraction leaves the original summary behavior unchanged. */
+export function hasSensitiveDiagnosticContent(message: string): boolean {
+    return /[a-z][a-z\d+.-]*:\/\//i.test(message)
+        || /\b(?:authorization|password|passwd|api[_-]?key|access[_-]?token|client[_-]?secret|token|secret)\b["']?\s*[:=]/i.test(message)
+        || /\bBearer\s+\S+|\bAIza[\w-]{20,}|\bsk-[\w-]{16,}|\bgh[pousr]_[\w]{20,}/i.test(message);
+}
+
 /** Keep a bounded Python exception, never arbitrary subprocess output or traceback. */
 export function summarizeImportException(diagnostic: unknown): ImportExceptionSummary | undefined {
     const tool = toolDiagnostic(diagnostic);
@@ -48,9 +55,7 @@ export function summarizeImportException(diagnostic: unknown): ImportExceptionSu
     if (!identifier(value.exception_type)) { return undefined; }
     let message = typeof value.message === 'string' ? value.message : '';
     // Connection URLs and credential-bearing messages must not enter reports.
-    if (/[a-z][a-z\d+.-]*:\/\//i.test(message)
-        || /\b(?:authorization|password|passwd|api[_-]?key|access[_-]?token|client[_-]?secret|token|secret)\b["']?\s*[:=]/i.test(message)
-        || /\bBearer\s+\S+|\bAIza[\w-]{20,}|\bsk-[\w-]{16,}|\bgh[pousr]_[\w]{20,}/i.test(message)) {
+    if (hasSensitiveDiagnosticContent(message)) {
         message = localize("例外訊息含可能的憑證或連線網址，已省略；請依例外類型與來源位置檢查。");
     } else {
         message = message.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ');
