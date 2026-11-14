@@ -132,7 +132,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 13b | 側欄重排、demo 與 v2 測試重點 | 已驗收合併主線（b1963eb） | `lane_edition` | 2026-11-14 核對 Git |
 | 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
-| 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 完成待驗收：Windows 型別／lint／fast／相關／webview／golden 通過 | `pr/15b-runner-diagnostics`（起點 b1963eb） | 2026-11-14 Codex |
+| 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 完成待驗收：Windows 型別／lint／fast／相關／webview／golden 通過 | `pr/15b-runner-diagnostics`（程式 033b330；起點 b1963eb） | 2026-11-14 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
@@ -165,6 +165,8 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 ### 舊批次核對與欄位意義
 
 唯讀核對 `D:/read/專題/test/result/v2_testing/eval_screening_2026_11_13_01_44`：5 個 runner-crashed 的 function_knowledge 原本均只有 reasonCode／operation／exitCode（capture，exitCode=1）；5 個 output-token-limit 的 diagnostic 只有輸出形狀／節錄等欄位。原 stderr 沒有被保存，無法補回舊檔，需實驗室用新版本重跑以取得診斷。未修改原結果資料。
+
+程式與測試 commit：`033b330`；本筆文件提交只補齊交接 hash。
 
 下一步：使用者在 `pr/15b-runner-diagnostics` 驗收；實驗室以新版本重跑失敗目標，查看 `role_events.jsonl` 與 `v2_result.json.diagnostic`。完整批次驗收可跑 `npm run test:integration`，與第 5 節既有 14 個失敗逐案比對。本輪交接後停止，無新增 B 類決定，不合併、不 push。
 
@@ -997,7 +999,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
-| 2026-11-14 | Codex | PR #15b | runner 元資料與安全尾段、每次 v2 請求參數、demo disabled 與中英文字；Windows 型別／lint／fast 817＋52／相關 32＋19／webview 通過，golden v1 11＋v2 4 零差異 | 程式 commit 待回填 |
+| 2026-11-14 | Codex | PR #15b | runner 元資料與安全尾段、每次 v2 請求參數、demo disabled 與中英文字；Windows 型別／lint／fast 817＋52／相關 32＋19／webview 通過，golden v1 11＋v2 4 零差異 | `033b330`（程式與測試）；本筆 docs 收尾 |
 | 2026-11-12 23:20 | Antigravity | fix(pr13b) | rowExecution 改回 flag: 'wx' 保護、覆蓋率補問輪次產生的測試檔與合併檔使用 _followup 後綴避免覆蓋既有檔、補 runTestFile 重複寫入拋 EEXIST 測試；caseTable.test.ts 補 testFocus 往返與格式驗證；check-types 0、lint 0、related 34/34 全過 | 最新 commit |
 | 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 5ae34ac |
 | 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合／兩項邊界回歸；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | `7b51079`（程式）；本筆 docs 收尾 |
