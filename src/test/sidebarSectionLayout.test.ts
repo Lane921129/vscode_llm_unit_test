@@ -260,6 +260,9 @@ test('PR #13b: apply demo settings batches settings without executing analysis',
     assert.equal(env.elements.get('env-type')!.value, 'local');
     assert.equal(env.elements.get('model-select')!.value, 'gpt-oss:20b');
     assert.equal(env.elements.get('runtime-context-tokens')!.value, '8192');
+    assert.equal(env.elements.get('thinking-mode')!.value, 'disabled');
+    assert.equal(env.currentState.thinkingMode, 'disabled');
+    assert.equal(env.messages.find(m => m.command === 'setThinkingMode')?.mode, 'disabled');
     assert.equal(env.elements.get('mutation-engine')!.value, 'mutatest');
     assert.equal(env.elements.get('prompt-strategy')!.value, 'full');
     assert.equal(env.elements.get('failure-limit')!.value, '5');
@@ -337,4 +340,21 @@ test('PR #13b: v2 spec mismatch badge and table render on outcome with spec mism
 
     win.toggleSpecMismatch('test_calc.py:divide');
     assert.equal(panel.style.display, 'none');
+});
+
+
+test('demo confirmation includes thinking in both languages and cancellation preserves settings', () => {
+    for (const language of ['zh-tw', 'en'] as const) {
+        const env = createMockEnvironment({ language, initialState: { thinkingMode: 'provider-default' } });
+        const before = env.messages.length;
+        let prompt = '';
+        env.context.window.confirm = (message: string) => { prompt = message; return false; };
+        env.elements.get('btn-apply-demo-settings')!.onclick?.();
+        assert.equal(env.messages.length, before);
+        assert.equal(env.elements.get('thinking-mode')!.value, 'provider-default');
+        assert.equal(env.currentState.thinkingMode, 'provider-default');
+        assert.match(prompt, language === 'zh-tw' ? /思考模式（thinking）：關閉/ : /Thinking mode: Off/);
+        assert.match(env.html, language === 'zh-tw' ? /思考模式（thinking）/ : /Thinking mode/);
+        assert.match(env.html, language === 'zh-tw' ? /關閉（省輸出額度，建議小模型使用）/ : /Off \(saves output tokens; recommended for small models\)/);
+    }
 });

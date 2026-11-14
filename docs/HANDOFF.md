@@ -28,6 +28,8 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-14 使用者指定 PR #15b**：從 `lane_edition=origin/lane_edition=b1963eb` 開 `pr/15b-runner-diagnostics`，不合併、不 push。C 類：runner 診斷保存 operation、rowId、exitCode、signal、timedOut、經既有 v1 去密規則處理的 stdout／stderr 尾端最多 1500 字與 runner.json 存在狀態。A 類：v2 每個 model-request 記錄實際 thinking／context／output 設定；demo 明確套用 thinking=disabled 並更新中英文確認框、標籤與選項。全域預設值、提示詞、預算、重試、通過標準不變；本輪完成後停止。
+
 **2026-11-12 使用者指定 PR #15（C 類修復）**：從 `lane_edition=origin/lane_edition=5fc43b6` 建立 `pr/15-v2-setup-guard`，不合併、不 push。v2 Writer setup 重用既有結構檢查，禁止環境／模組修改；違反列為 capture-failed／setup-forbidden-mutation，不找 Bug Fixer。runner 逾時或異常結束須落 failed 與 reasonCode，後續目標仍須能核對報告。v1、提示詞、預算、預設值與 golden 均不改。
 
 PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，尚未合併至主線；本 PR 依使用者要求從 `5fc43b6` 獨立開始，不帶入該三 PR 的程式。
@@ -127,15 +129,50 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 12a | 評估紀錄與一般 LLM 對照組 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 12b | 埋 bug 評估 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 13 | 側欄精簡與進階設定收合 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
-| 13b | 側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2 | 完成待驗收：fast 817/817、Python 52/52、新測試 10/10、golden 4/4 全過 | `pr/13b-sidebar-layout`（起點 89be1ce） | 2026-11-12 Antigravity |
+| 13b | 側欄重排、demo 與 v2 測試重點 | 已驗收合併主線（b1963eb） | `lane_edition` | 2026-11-14 核對 Git |
 | 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
-| 15 | v2 setup 結構守門與 runner 失敗收尾 | 完成待驗收：Windows fast／Python／相關／golden 通過 | `pr/15-v2-setup-guard`（起點 5fc43b6） | 2026-11-12 Codex |
+| 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
+| 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 完成待驗收：Windows 型別／lint／fast／相關／webview／golden 通過 | `pr/15b-runner-diagnostics`（程式 033b330；起點 b1963eb） | 2026-11-14 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #13b 側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2（最新）
+## 2. PR #15b runner 診斷與 demo thinking（最新）
+
+- Agent：Codex；Windows 原生，有 CodeGraph MCP、無 AOCI MCP。未呼叫 AOCI，待辦列第 4 節。從主線 b1963eb 開分支；保留原有未追蹤 `Claude outputs/` 與舊重構計畫，不合併、不 push。
+- [x] runner 元資料：`runSpawn` 新增選用的 onExit 診斷觀察器，於程序結束／逾時清理完成後提供 code／signal／stdout／stderr；原回傳值、逾時、預算、取消與資源清理順序不變。v2 runner 診斷帶入 operation、rowId、exitCode、signal、timedOut、runnerJsonExists，stdout／stderr 先去密再各取最後最多 1500 字。
+- [x] 共用 v1 安全規則：重用 artifactSafety 的已知憑證去密、modelOutputDiagnostics 的位置／控制字元隱藏，以及 importDiagnostics 原有的敏感訊息判斷（抽出同一個 predicate，沒有另列一套規則）。測試涵蓋短 token／secret、密鑰跨截斷邊界與網址／路徑；不保存原始完整輸出。
+- [x] 持久化：capture、runTestFile、mutation 的失敗診斷進終態 `role_events.jsonl` 的 detail（平面欄位）與 `v2_result.json.diagnostic`。既有 function_knowledge 診斷亦保留。單列執行帶明確 CaseRow id；整體合併／mutation 的 rowId 為 null；平台未回報 signal 時明確記 null，沒有 runner.json 的操作記 false。包裝內層 capture 失敗時保留可觀察的外層退出碼，不推測內層退出碼。
+- [x] 請求設定：每個 requested／timing／completed／error 的 model-request detail 加 localThinkingMode、requestContextTokens／num_ctx、requestOutputTokens／num_predict。v2 入口只傳入既有實際參數的快照；原請求未明確傳送 context／output 限制時記 null，不把側欄值或 provider 預設當成已送出的值，不改請求 body 或額度。
+- [x] demo：確認後寫入 thinking=disabled、同步 Webview 保存狀態並發 setThinkingMode 訊息；中英確認框列出關閉 thinking；中文標籤為「思考模式（thinking）」，選項為「模型預設」「關閉（省輸出額度，建議小模型使用）」，英文對應。取消確認時設定不變；仍不啟動測試，全域預設仍為 provider-default。
+- [x] 驗證完成：以下全部是 **Windows 原生**，不是 VM 非正式；沒有更新任何 golden。
+
+| 驗證指令／範圍 | 環境與結果 | 紀錄（log/） |
+| --- | --- | --- |
+| `npm run check-types` | Windows，exit 0（最後隱私邊界修改後） | `pr15b-types-final-windows.log` |
+| `npm run lint` | Windows，exit 0（最後隱私邊界修改後） | `pr15b-lint-final-windows.log` |
+| `npm run test:related -- --node runnerDiagnosticsIntegration --node importDiagnostics --node sidebarSectionLayout --node modelOutputDiagnostics` | Windows，32/32 通過；含 8 項 runner／請求診斷與 6 項側欄測試 | `pr15b-related-final-windows.log` |
+| `npm run test:related -- --node runnerDiagnosticsIntegration --node sidebarSectionLayout --node modelOutputDiagnostics --node caseSetupGuardIntegration` | Windows，初輪 29/29 通過；含 PR #15 setup／kill／後續目標回歸 | `pr15b-related-initial-windows.log` |
+| `npm run test:related -- --node processRunner --node analysisCancellationIntegration --node resourceSetupFailure --node ollamaRequestFixture --node localization` | Windows，19/19 通過 | `pr15b-shared-related-windows.log` |
+| `npm run test:fast` | Windows，Node 817/817、Python fast 52/52；型別／lint／Webview 一併通過 | `pr15b-fast-windows.log` |
+| `npm run test:webview` | Windows，exit 0 | `pr15b-webview-windows.log` |
+| `npm run test:golden`（UPDATE 旗標均為 0） | Windows，v1 11/11、v2 4/4；既有全部快照零差異 | `pr15b-golden-windows.log` |
+| `python -B python_scripts/secret_scan.py` | Windows，exit 0；追蹤檔未發現高信度憑證樣式 | `pr15b-secret-scan-windows.log` |
+
+最後兩項邊界補測為短 token／secret 去密、包裝 capture 的外層退出碼；不改成功流程。共用 v1 predicate 抽取前後逐字比對相同，既有 kill／清理與 runSpawn 回傳契約保留；稽核輸出 `log/pr15b-source-audit-windows.json`。本次沒有 Python 程式修改，未重跑完整 `test:python`；完整 `test:integration` 亦未跑，不宣稱既有第 5 節 14 項失敗已修復。
+
+### 舊批次核對與欄位意義
+
+唯讀核對 `D:/read/專題/test/result/v2_testing/eval_screening_2026_11_13_01_44`：5 個 runner-crashed 的 function_knowledge 原本均只有 reasonCode／operation／exitCode（capture，exitCode=1）；5 個 output-token-limit 的 diagnostic 只有輸出形狀／節錄等欄位。原 stderr 沒有被保存，無法補回舊檔，需實驗室用新版本重跑以取得診斷。未修改原結果資料。
+
+程式與測試 commit：`033b330`；本筆文件提交只補齊交接 hash。
+
+下一步：使用者在 `pr/15b-runner-diagnostics` 驗收；實驗室以新版本重跑失敗目標，查看 `role_events.jsonl` 與 `v2_result.json.diagnostic`。完整批次驗收可跑 `npm run test:integration`，與第 5 節既有 14 個失敗逐案比對。本輪交接後停止，無新增 B 類決定，不合併、不 push。
+
+---
+
+## 2. PR #13b 側欄重排、v1/v2 說明、demo 支援、測試重點接進 v2（歷史）
 
 - Agent：Antigravity，Windows 原生；無 AOCI MCP，未呼叫 AOCI，收尾待辦見第 4 節。原有未追蹤 `Claude outputs/`、舊重構計畫均保留；本分支從 `lane_edition`（`89be1ce`）開立，分支名稱 `pr/13b-sidebar-layout`。不合併到 `lane_edition`、不 push。計畫文件（`docs/三週改版架構*.md`）未修改；v1 行為、預設值、提示詞與 v1 golden 均零變更。
 - [x] **A. 側欄重排**：側欄重組為六大區塊，①～④ 預設展開（`<details open>`），⑤ 進階設定預設收折（`<details id="advanced-settings-details">`，Webview 保存使用者開合狀態）：
@@ -859,6 +896,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-14（Codex／PR #15b）：無 AOCI MCP，請具工具能力的 agent 維護 `git diff b1963eb..pr/15b-runner-diagnostics --name-only` 所列受管理檔。本輪不改 `.codex/`、`.aoci/`。
+
 - 2026-11-12（Antigravity／PR #13b 側欄重排與測試重點接進 v2）：無 AOCI 工具，請具工具能力的 agent 處理。新增／修改的受管理檔案：`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/orchestrator.ts`、`src/pipeline/caseTable/caseTable.ts`、`src/pipeline/caseTable/caseTableStore.ts`、`src/pipeline/caseTable/rowExecution.ts`、`src/pipeline/caseTable/runCaseTablePipeline.ts`、`src/pipeline/caseTable/runRowStage.ts`、`src/roles/semanticAnalyzer.ts`、`src/test/caseTableGolden.test.ts`、`src/test/sidebarSectionLayout.test.ts`、`src/test/caseTableTestFocus.test.ts`、`test/fixtures/golden/v2/bmi-boundary-first.json`、`docs/v2_提示詞_待審.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
 
 - 2026-11-12（Codex／PR #15）：本次無 AOCI MCP。請具能力的 agent 維護 `git diff 5fc43b6..pr/15-v2-setup-guard --name-only` 所列受管理檔；未改 `.aoci/`、`.codex/`。
@@ -960,6 +999,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-14 | Codex | PR #15b | runner 元資料與安全尾段、每次 v2 請求參數、demo disabled 與中英文字；Windows 型別／lint／fast 817＋52／相關 32＋19／webview 通過，golden v1 11＋v2 4 零差異 | `033b330`（程式與測試）；本筆 docs 收尾 |
 | 2026-11-12 23:20 | Antigravity | fix(pr13b) | rowExecution 改回 flag: 'wx' 保護、覆蓋率補問輪次產生的測試檔與合併檔使用 _followup 後綴避免覆蓋既有檔、補 runTestFile 重複寫入拋 EEXIST 測試；caseTable.test.ts 補 testFocus 往返與格式驗證；check-types 0、lint 0、related 34/34 全過 | 最新 commit |
 | 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 5ae34ac |
 | 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合／兩項邊界回歸；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | `7b51079`（程式）；本筆 docs 收尾 |

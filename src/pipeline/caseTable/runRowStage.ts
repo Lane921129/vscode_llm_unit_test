@@ -89,7 +89,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
             setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' })) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
-            if (!await validateRowSetup(runtime, setup)) {
+            if (!await validateRowSetup(runtime, setup, row.id)) {
                 rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-forbidden-mutation');
                 continue;
             }
@@ -109,7 +109,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
         let method = buildRowTestMethod(row, context, decided.expectation, setup);
         row = { ...transitionCaseRow(row, 'test-generated'), testMethod: rowTestMethodName(row) };
         let attempt = 0;
-        let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test${suffix}`, buildCaseTableTestFile(context, [method]));
+        let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test${suffix}`, buildCaseTableTestFile(context, [method]), false, row.id);
         while (!(run.passed && run.targetObserved) && attempt < ROW_FIX_MAX_ATTEMPTS) {
             attempt += 1;
             const prompt = getRowFixPrompt({ signature: facts.signature, scenario: row.scenario, methodName: row.testMethod!,
@@ -122,7 +122,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 continue;
             }
             method = fixed!;
-            run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test${suffix}`, buildCaseTableTestFile(context, [method]));
+            run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test${suffix}`, buildCaseTableTestFile(context, [method]), false, row.id);
         }
         if (run.passed && run.targetObserved) {
             passing.set(row.id, method);
@@ -211,7 +211,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                     noImprovementCount += 1;
                     continue;
                 }
-                if (!await validateRowSetup(runtime, setup)) {
+                if (!await validateRowSetup(runtime, setup, row.id)) {
                     rows[rowIndex] = transitionCaseRow(row, 'capture-failed', 'setup-forbidden-mutation');
                     noImprovementCount += 1;
                     continue;
@@ -244,7 +244,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
             let method = buildRowTestMethod(row, context, decided.expectation, setup);
             row = { ...transitionCaseRow(row, 'test-generated'), testMethod: rowTestMethodName(row) };
             let attempt = 0;
-            let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test${suffix}`, buildCaseTableTestFile(context, [method]));
+            let run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_0_test${suffix}`, buildCaseTableTestFile(context, [method]), false, row.id);
             while (!(run.passed && run.targetObserved) && attempt < ROW_FIX_MAX_ATTEMPTS) {
                 attempt += 1;
                 const fixPrompt = getRowFixPrompt({ signature: facts.signature, scenario: row.scenario, methodName: row.testMethod!,
@@ -257,7 +257,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                     continue;
                 }
                 method = fixed!;
-                run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test${suffix}`, buildCaseTableTestFile(context, [method]));
+                run = await runTestFile(runtime, `row_${row.id.toLowerCase()}_${attempt}_test${suffix}`, buildCaseTableTestFile(context, [method]), false, row.id);
             }
 
             if (!(run.passed && run.targetObserved)) {
@@ -272,7 +272,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
 
             // Candidate merged test run to check mutation score improvement
             const candidateMerged = buildCaseTableTestFile(context, rows.filter(r => passing.has(r.id)).map(r => passing.get(r.id)!));
-            const candidateRun = await runTestFile(runtime, `test_candidate_${row.id.toLowerCase()}${suffix}`, candidateMerged);
+            const candidateRun = await runTestFile(runtime, `test_candidate_${row.id.toLowerCase()}${suffix}`, candidateMerged, false, row.id);
             if (!(candidateRun.passed && candidateRun.targetObserved)) {
                 options.log(`[v2] Candidate merged test for survivor row ${row.id} failed; reverting.`);
                 passing.delete(row.id);
