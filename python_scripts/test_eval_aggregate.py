@@ -186,6 +186,31 @@ class EvalSetAndAggregateTests(unittest.TestCase):
 
 
 class ThreeGroupTests(unittest.TestCase):
+    def test_old_and_short_v2_filenames_produce_identical_aggregate_metrics(self):
+        import shutil
+        fixture = ROOT / 'test/fixtures/eval_three_groups/v2_case_table'
+        with tempfile.TemporaryDirectory() as directory:
+            copied = Path(directory) / 'batch'
+            shutil.copytree(fixture, copied)
+            results = list(copied.rglob('v2_result.json'))
+            self.assertTrue(results)
+            for result in results:
+                data = json.loads(result.read_text(encoding='utf-8'))
+                old = result.parent / 'v2_runs/test_case_table_followup.py'
+                old.parent.mkdir(exist_ok=True)
+                old.write_text('# accepted test', encoding='utf-8')
+                data['testFile'] = 'v2_runs/test_case_table_followup.py'
+                result.write_text(json.dumps(data), encoding='utf-8')
+            before = evaluate_batch_manifest(copied / 'batch_manifest.json', spec_map={})
+            for result in results:
+                data = json.loads(result.read_text(encoding='utf-8'))
+                short = result.parent / 'r/tf.py'
+                short.parent.mkdir()
+                (result.parent / data['testFile']).rename(short)
+                data['testFile'] = 'r/tf.py'
+                result.write_text(json.dumps(data), encoding='utf-8')
+            self.assertEqual(evaluate_batch_manifest(copied / 'batch_manifest.json', spec_map={}), before)
+
     """v1, v2 (with and without recorded role events) and the plain-llm control group side by side."""
 
     def setUp(self):

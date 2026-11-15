@@ -93,7 +93,7 @@ test('forbidden Writer setup is rejected without a fixer; following rows and tar
         const table = JSON.parse(fs.readFileSync(path.join(directories[0], 'case_table.json'), 'utf8'));
         assert.deepEqual(table.rows.map((entry: { status: string; reason?: string }) => [entry.status, entry.reason ?? null]),
             [['capture-failed', 'setup-forbidden-mutation'], ['test-passed', null]]);
-        assert.ok(!fs.existsSync(path.join(directories[0], 'v2_runs/row_c1_0_test.py')));
+        assert.ok(!fs.existsSync(path.join(directories[0], 'r/c1_0.py')));
         const events = fs.readFileSync(path.join(directories[0], 'role_events.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
         assert.deepEqual(events.filter(event => event.status === 'requested').map(event => event.detail.role),
             ['analyst-scenario', 'writer-row-setup']);
@@ -106,7 +106,7 @@ test('a killed real generated-test runner produces failed/runner-crashed and the
     let killed = false;
     t.mock.method(childProcess, 'spawn', (command: string, args: string[], options: Parameters<typeof spawn>[2]) => {
         const child = spawn(command, args, options);
-        if (args.includes('doomed') && args.some(arg => arg.includes('row_c1_0_test'))) {
+        if (args.includes('doomed') && args.some(arg => arg === 'c1_0')) {
             child.stderr?.on('data', data => {
                 if (!killed && data.toString().includes('RUNNER_KILL_READY')) { killed = child.kill('SIGKILL'); }
             });

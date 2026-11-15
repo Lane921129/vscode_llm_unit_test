@@ -25,7 +25,7 @@ for (const operation of ['capture', 'runTestFile', 'mutation']) {
             t.mock.method(processRunner, 'runSpawn', (command: string, args: string[], options: Parameters<typeof original>[2]) => {
                 const matches = operation === 'capture' ? args.some(arg => arg.endsWith('case_capture_runner.py'))
                     : operation === 'mutation' ? args.some(arg => arg.endsWith('basic_mutation_runner.py')) && !args.includes('--capture-mutant')
-                        : args.some(arg => arg.endsWith('generated_test_runner.py')) && args.includes('row_c1_0_test');
+                        : args.some(arg => arg.endsWith('generated_test_runner.py')) && args.includes('c1_0');
                 if (!failed && matches) {
                     failed = true;
                     const stderr = 'prefix '.repeat(400) + '\npassword="private-value"\nFile "C:\\private\\runner.py"\nhttps://internal.example/private\nRUNNER_FAILURE_DETAIL\n';

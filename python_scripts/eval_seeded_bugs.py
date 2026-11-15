@@ -418,10 +418,25 @@ def re_run_test_on_clean(python: str,
 
 def find_formal_test_file(target_dir: Path) -> Path | None:
     """Find the formal test file generated for a target."""
-    # 1. v2 formal test
-    v2_test = target_dir / 'test_case_table.py'
-    if v2_test.is_file():
-        return v2_test
+    # 1. v2: prefer the recorded accepted file (including coverage follow-up).
+    result_file = target_dir / 'v2_result.json'
+    if result_file.is_file():
+        try:
+            result = json.loads(result_file.read_text(encoding='utf-8-sig'))
+            relative = result.get('testFile') if isinstance(result, dict) else None
+            if isinstance(relative, str):
+                candidate = (target_dir / relative.replace('\\', '/')).resolve()
+                candidate.relative_to(target_dir.resolve())
+                if candidate.is_file() and candidate.suffix == '.py':
+                    return candidate
+        except (OSError, ValueError, TypeError):
+            pass
+    # New and historical batches without v2_result still remain readable.
+    for relative in ('r/tf.py', 'r/t.py', 'tf.py', 't.py',
+                     'v2_runs/test_case_table_followup.py', 'v2_runs/test_case_table.py', 'test_case_table.py'):
+        v2_test = target_dir / relative
+        if v2_test.is_file():
+            return v2_test
 
     # 2. Control group formal test
     control_test = target_dir / 'baseline_test.py'

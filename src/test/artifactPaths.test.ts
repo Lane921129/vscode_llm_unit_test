@@ -18,7 +18,7 @@ test('short artifact pairs preserve existing evidence, including an orphaned cov
         assert.notEqual(next[0], first[0]);
         assert.match(path.basename(reserveArtifactFiles(root, ['trace'], 'jsonl')[0]), /^trace_\d{3}\.jsonl$/);
         assert.throws(() => reserveArtifactFiles(root, ['../escape'], 'json'), /Invalid/);
-        assert.throws(() => checkOutputPath(path.join(root, 'x'.repeat(240))), /輸出目錄/);
+        assert.throws(() => checkOutputPath(path.join(root, 'x'.repeat(240)), 0, 'win32'), /輸出目錄/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

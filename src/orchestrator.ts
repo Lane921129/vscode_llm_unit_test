@@ -57,6 +57,7 @@ import { createDefaultQualityPolicy } from './pipeline/qualityPolicy';
 import { normalizeExecutionSettings } from './pipeline/executionSettings';
 import { snapshotExecutionTargetBudget } from './pipeline/executionTimingSettings';
 import { createAnalysisDirectory, createBatchDirectory } from './pipeline/analysisOutput';
+import { preflightBatchOutputPath, preflightBatchReservation } from './pipeline/batchOutputPath';
 import { reserveArtifactFiles } from './pipeline/artifactPaths';
 import { BatchJournal } from './pipeline/batchJournal';
 import { partitionBatchPreflight, BatchPreflightTarget, BatchPreflightRow } from './pipeline/batchPreflightPartition';
@@ -710,8 +711,10 @@ export function activate(context: vscode.ExtensionContext) {
                 mutationWorkers: params.mutationWorkers ?? vscode.workspace.getConfiguration('llmUnitTest').get<number>('mutationWorkers', 2) };
             await runAnalysisSession(paramsWithPython, sidebarProvider, async (runParams, log, view, withEnvironmentSetup) => {
                 const projectName = path.basename(runParams.batchPath);
+                const batchPipelineVersion = readPipelineVersion(vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri?.file?.(runParams.batchPath)).get('pipelineVersion', 'v1'));
                 const batchDirectory = createBatchDirectory(runParams.outputPath || runParams.batchPath,
-                    runParams.sessionDate || formatSessionDate(), projectName);
+                    runParams.sessionDate || formatSessionDate(), projectName,
+                    directory => preflightBatchReservation(directory, batchPipelineVersion, log));
                 const batch = new BatchJournal(batchDirectory, runParams.batchPath, {
                     model: runParams.modelName, buildTimestamp: extensionBuildIdentity.buildTimestamp,
                     python: runParams.pythonExecutable, validationMode: runParams.validationMode, stopPolicy: runParams.stopPolicy
@@ -812,6 +815,7 @@ export function activate(context: vscode.ExtensionContext) {
                             }
                         }
                     }
+                    preflightBatchOutputPath({ batchDirectory, pipelineVersion: batchPipelineVersion, targets: taskSources }, log);
                     batch.start();
                     const readPlan = () => {
                         const config = vscode.workspace.getConfiguration('llmUnitTest', vscode.Uri.file(runParams.batchPath));

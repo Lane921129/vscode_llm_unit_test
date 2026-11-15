@@ -204,9 +204,9 @@ test('PR #13b: coverage test focus calls supplementary round when missing branch
                 'supplementary prompt must include uncovered branches instruction');
             assert.ok(table.rows.length >= 2, 'supplementary rows added');
             assert.ok(table.rows.length <= 8, 'total rows must not exceed 8');
-            const v2Runs = path.join(result.directory, 'v2_runs');
-            assert.ok(fs.existsSync(path.join(v2Runs, 'test_case_table.py')), 'initial merged test exists');
-            assert.ok(fs.existsSync(path.join(v2Runs, 'test_case_table_followup.py')), 'followup merged test exists');
+            const v2Runs = path.join(result.directory, 'r');
+            assert.ok(fs.existsSync(path.join(v2Runs, 't.py')), 'initial merged test exists');
+            assert.ok(fs.existsSync(path.join(v2Runs, 'tf.py')), 'followup merged test exists');
         }
 
         const v2Result = JSON.parse(fs.readFileSync(path.join(result.directory, 'v2_result.json'), 'utf8'));

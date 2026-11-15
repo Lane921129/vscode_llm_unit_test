@@ -6,6 +6,7 @@ extensions. Coverage starts/saves outside the guarded application execution.
 import argparse
 from contextlib import contextmanager, nullcontext
 import dis
+import importlib.util
 import json
 import os
 import sys
@@ -184,6 +185,7 @@ def main(argv=None):
     parser.add_argument('--target-evidence')
     parser.add_argument('--target-run-id')
     parser.add_argument('--target-test-file')
+    parser.add_argument('--load-test-file', action='store_true')
     parser.add_argument('--test-progress')
     parser.add_argument('--function-mutation-manifest')
     parser.add_argument('-v', '--verbose', action='store_true')
@@ -192,6 +194,8 @@ def main(argv=None):
     target_options = [args.target_file, args.target_name, args.target_evidence, args.target_run_id, args.target_test_file]
     if any(target_options) and not all(target_options):
         parser.error('Target invocation evidence requires all five --target-* options.')
+    if args.load_test_file and not all(target_options):
+        parser.error('--load-test-file requires target invocation identity.')
     if args.test_progress and not all(target_options):
         parser.error('--test-progress requires target invocation identity.')
     tracker = TargetInvocationTracker(args.target_file, args.target_name, args.target_test_file,
@@ -219,6 +223,14 @@ def main(argv=None):
     sys.dont_write_bytecode = True
     # Script execution otherwise places the extension's tool folder first.
     sys.path.insert(0, os.getcwd())
+    if args.load_test_file:
+        # v2 short filenames can equal the target's module name (e.g. t.py).
+        # Keep cwd/isolation unchanged, load this exact test under a distinct
+        # module identity, and resolve application imports before test artifacts.
+        args.test_module = '__case_table_' + run_id
+        test_directory = canonical_path(os.path.dirname(args.target_test_file))
+        sys.path[:] = [os.path.dirname(os.path.abspath(args.target_file)),
+                      *[entry for entry in sys.path if canonical_path(entry or os.getcwd()) != test_directory]]
     register_generated_test_files(args.test_module, args.target_test_file)
     coverage = None
     if args.coverage_source:
@@ -237,11 +249,22 @@ def main(argv=None):
             activation = FunctionMutationActivation(args.function_mutation_manifest)
         with activation if activation else nullcontext(), observation:
             _target_tracking = bool(tracker)
-            with guarded_test_runtime(os.path.dirname(tracker.test_file) if tracker else None) as violations:
+            with guarded_test_runtime(None if args.load_test_file else (os.path.dirname(tracker.test_file) if tracker else None)) as violations:
                 # A fresh loader prevents errors from an earlier main() call
                 # from becoming evidence about this candidate.
                 try:
-                    suite = unittest.TestLoader().loadTestsFromName(args.test_module)
+                    if args.load_test_file:
+                        spec = importlib.util.spec_from_file_location(args.test_module, args.target_test_file)
+                        module = importlib.util.module_from_spec(spec)
+                        sys.modules[args.test_module] = module
+                        try:
+                            spec.loader.exec_module(module)
+                        except BaseException:
+                            sys.modules.pop(args.test_module, None)
+                            raise
+                        suite = unittest.TestLoader().loadTestsFromModule(module)
+                    else:
+                        suite = unittest.TestLoader().loadTestsFromName(args.test_module)
                 except RuntimePolicyError:
                     raise
                 except Exception as error:

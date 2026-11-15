@@ -28,6 +28,8 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-15 使用者指定 PR #16**：從 `lane_edition=origin/lane_edition=1cdae96` 開 `pr/16-short-paths`，不合併、不 push。只縮短 v2 執行產物名稱並保留舊結果讀取；v1 輸出資料夾／檔名不變。批次加入路徑估算與 60 字暫存餘裕，Windows 超過 250 字在開始前停止，其他平台只記錄。對照組在任何模型請求前檢查直譯器、coverage、所選突變引擎與路徑；失敗不建立逐目標失敗 manifest。可只為檔名差異重錄 v2 golden，但必須逐項證明其餘內容一致；v1 golden 不得改。架構計畫文件由監督維護，本輪禁止修改；預設值、提示詞、判定均不改，完成後停止。
+
 **2026-11-14 使用者指定 PR #15b**：從 `lane_edition=origin/lane_edition=b1963eb` 開 `pr/15b-runner-diagnostics`，不合併、不 push。C 類：runner 診斷保存 operation、rowId、exitCode、signal、timedOut、經既有 v1 去密規則處理的 stdout／stderr 尾端最多 1500 字與 runner.json 存在狀態。A 類：v2 每個 model-request 記錄實際 thinking／context／output 設定；demo 明確套用 thinking=disabled 並更新中英文確認框、標籤與選項。全域預設值、提示詞、預算、重試、通過標準不變；本輪完成後停止。
 
 **2026-11-12 使用者指定 PR #15（C 類修復）**：從 `lane_edition=origin/lane_edition=5fc43b6` 建立 `pr/15-v2-setup-guard`，不合併、不 push。v2 Writer setup 重用既有結構檢查，禁止環境／模組修改；違反列為 capture-failed／setup-forbidden-mutation，不找 Bug Fixer。runner 逾時或異常結束須落 failed 與 reasonCode，後續目標仍須能核對報告。v1、提示詞、預算、預設值與 golden 均不改。
@@ -132,13 +134,74 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 13b | 側欄重排、demo 與 v2 測試重點 | 已驗收合併主線（b1963eb） | `lane_edition` | 2026-11-14 核對 Git |
 | 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
-| 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 完成待驗收：Windows 型別／lint／fast／相關／webview／golden 通過 | `pr/15b-runner-diagnostics`（程式 033b330；起點 b1963eb） | 2026-11-14 Codex |
+| 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
+| 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 完成待驗收：Windows 指定範圍通過；完整 Python 一項 Trace timing 失敗，單案與模組重跑通過 | `pr/16-short-paths`（程式 HEAD 1695796；起點 1cdae96） | 2026-11-15 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #15b runner 診斷與 demo thinking（最新）
+## 2. PR #16 短路徑與環境預檢（最新）
+
+- Agent：Codex，Windows 原生；CodeGraph MCP 可用，無 AOCI MCP，未假裝呼叫，維護待辦見第 4 節。分支從 1cdae96 建立，保留原有未追蹤 `Claude outputs/` 與舊重構計畫；未修改架構計畫、`.codex/`、`.aoci/`。
+- [x] v2 命名集中於 `artifactNames.ts`：`v2_runs→r`、`row_c3_0_test→c3_0`、補問後綴 `_followup→f`、候選 `test_candidate_c3→k_c3`、合併 `test_case_table→t`／補問 `tf`、coverage `test_case_table_coverage_<id>→g_<id>`；尾碼改 `.inv.json`／`.iso.jsonl`／`.res.json`。`runTestFile` 的 `flag: 'wx'` 保留。
+- [x] 同名模組：已用受測 t.py 重現 merged-test-failed。v2 專用 `--load-test-file` 在原 guard 中以獨立模組身分載入明確測試檔，應用程式 import 優先，避免 t.py／T.py／tf.py／c1_0.py 遮蔽目標；v1 不傳此旗標、仍走原分支。同名突變測量以 wx 另存 `m_<8字id>.py`（內容及 hash 相同），交付的 t.py／tf.py 不改名；守門條件與真實呼叫、覆蓋率、突變驗證不變。
+- [x] `eval_seeded_bugs.find_formal_test_file` 優先使用安全限制在本目標內的 `v2_result.testFile`，支援新 `r/t.py`／`r/tf.py` 與舊 `v2_runs/test_case_table*.py`、根目錄 `test_case_table.py`；不改舊批次。`eval_aggregate` 原本只讀 v2_result 與報告資料，不讀執行檔名，新增新舊結果統計完全相同的測試。規格不符報告／測試檔名及卡片的列資料契約不變，新增短正式檔名下的報告與卡片回歸。
+- [x] 批次路徑檢查：`batchOutputPath.ts` 用批次實際路徑、來源／目標標籤與 8 字 hash 的命名長度、已知最長產物相對路徑加 60 字餘裕估算；在 `batch.start()` 前以已發現目標清單檢查。若既有保留目錄長度保護會先拒絕，則先按命名上限提供相同三項診斷。Windows 超過 250 字拋 `output-path-too-long`；訊息經 appendLog 到側欄並以錯誤提示呈現；非 Windows 記錄而不以路徑長度阻擋。不自動改路徑，v1 命名不變。
+- [x] 對照組：以指定或目前的 `sys.executable` 做可執行與實際 import 預檢，再估算其自身輸出布局；預檢失敗回傳 exit 2 與中文原因、修正建議，不送模型請求、不建立目標／manifest。既有 JSON／JSONL 寫入均已明確使用 UTF-8，README 新增明確 `encoding='utf-8'` 的讀取指令。
+- [x] 指定範圍驗證通過，完整 Python 例外另列如下：以下全部為 **Windows 原生**；非 Windows 分支僅以單元測試參數模擬，沒有 VM 實測。初輪型別檢查發現 batch 參數無 pipelineVersion，已改讀與既有分流相同的設定，未新增設定／改預設值。
+
+| 驗證 | Windows 結果 | log/ 紀錄 |
+| --- | --- | --- |
+| `npm run check-types` | exit 0；最後 `test:fast` 亦重新檢查 | `pr16-types-windows.log`、`pr16-fast-final-windows.log` |
+| `npm run lint` | exit 0；最後 `test:fast` 亦重新檢查 | `pr16-lint-windows.log`、`pr16-fast-final-windows.log` |
+| `npm run test:related -- --node shortOutputPaths --node caseTableTestFocus --node caseSetupGuardIntegration --node runnerDiagnosticsIntegration --python test_eval_baseline_plain_llm --python test_eval_aggregate --python test_eval_seeded_bugs` | Node 24/24、Python 27/27；含新舊讀取、預檢前零請求／零 manifest、真實 row runner 證據檔、補問與 wx | `pr16-related-windows.log` |
+| `npm run test:related -- --node shortOutputPaths --node caseSpecOracleIntegration --node artifactPaths --node batchInitializationPlanning --node sidebarSectionLayout --node localization` | 28/28（含 212 目標初始化的四子案）；新增 Windows 實際批次命令攔截，極長根目錄在 mkdir 前顯示完整診斷；規格不符報告、卡片與雙語顯示通過 | `pr16-final-related-windows.log` |
+| `npm run test:related -- --node shortOutputPaths --node runnerDiagnosticsIntegration --node caseSetupGuardIntegration --python test_generated_test_runner --python test_target_state_evidence --python test_target_result_imports` | 同名修正後 Node 22/22、Python 52/52 通過；含 t.py、c1_0.py 及真正補問後 tf.py 的真實執行、coverage／突變與原 runner 預設分支 | `pr16-loader-final-related-windows.log` |
+| `npm run test:related -- --node shortOutputPaths` | 大小寫保護後 9/9，包含 Windows T.py／t.py 的真實覆蓋率與突變，全部原斷言保留 | `pr16-casefold-related-windows.log` |
+| `npm run test:fast` | 同名修正後 Node 817/817、Python 53/53；Webview 通過 | `pr16-fast-final-windows.log` |
+| `npm run test:python` | 973 項，failures=1、skipped=4，exit 1；Trace timing 的第二個案例 timeout。整套未重跑，不宣稱全綠 | `pr16-python-full-windows.log` |
+| Trace timing 單案／模組（原設定與斷言） | 單案 1/1、完整模組 8/8 通過；不是整套重跑 | `pr16-trace-timing-recheck-windows.log`、`pr16-trace-timing-module-windows.log` |
+| `npm run test:webview` | exit 0 | `pr16-webview-windows.log` |
+| `npm run compile` | 同名修正後 exit 0，擴充套件 bundle 建立完成 | `pr16-build-final-windows.log` |
+| `npm run test:golden`（兩個 UPDATE 旗標均 0）；大小寫保護後 `node --test --test-concurrency=1 out/test/caseTableGolden.test.js` | 同名修正後 v1 11/11、v2 4/4；最後僅 v2 追加大小寫保護，v2 再驗 4/4。全部零差異，未再動 v1 相關程式，沿用其 11/11 | `pr16-golden-final-windows.log`、`pr16-v2-golden-final-windows.log` |
+| `python -B python_scripts/secret_scan.py`（另加 `--history`）／來源稽核 | exit 0；完整 Python 失敗所以 runner 未進入 history scan，已另行補跑成功。12 個產品檔，v1 命名／runner 預設分支／提示詞／預設值／判定不變，架構計畫未修改 | `pr16-secret-scan-windows.log`、`pr16-secret-history-windows.log`、`pr16-source-audit-windows.json` |
+
+**Golden 差異逐項：無。** v1 與 v2 既有全部 10 份快照逐檔比對相同；未重錄、未新增、未更新。v2 四個情境 bmi、bmi-boundary-first、bmi-quality-analyst、database 均保持原測試程式內容、列與突變結果；現有快照保存的是測試程式內容，沒有保存產物的路徑，所以這次檔名更換不造成快照差異。Quality Analyst 開啟的情境仍保持開啟。
+
+完整 Python 的唯一失敗為 `python_scripts.test_trace_timing.TraceTimingTests.test_infinite_target_remains_timeout_and_a_later_case_still_runs`：預期前兩列為 timeout／returned，該輪實際為 timeout／timeout。完整 Python 曾與 Node/golden 同時執行，但未確認負載是否為原因。該測試、dynamic_tracer、trace_case_worker 與 1cdae96 零差異；原 case_timeout_seconds=0.5、total_timeout_seconds=8 未修改。單案及 8 案模組重跑通過，保留整套失敗而不改斷言／額度；此項注意另列第 5 節。
+
+同名修正是在上述整套之後加入，未再次重跑整套 Python；後續以 generated_test_runner／target_state_evidence／target_result_imports 的完整相關模組、v2 真實呼叫／覆蓋率／突變整合、fast 與 v1/v2 golden 驗證，v1 預設分支另逐字比對起點相同。
+
+### 實際產品檔案（12 個）
+
+- `python_scripts/eval_baseline_plain_llm.py`
+- `python_scripts/eval_seeded_bugs.py`
+- `python_scripts/generated_test_runner.py`
+- `src/i18n/messages.ts`
+- `src/orchestrator.ts`
+- `src/pipeline/analysisOutput.ts`
+- `src/pipeline/artifactPaths.ts`
+- `src/pipeline/batchOutputPath.ts`
+- `src/pipeline/caseTable/artifactNames.ts`
+- `src/pipeline/caseTable/rowExecution.ts`
+- `src/pipeline/caseTable/runCaseTablePipeline.ts`
+- `src/pipeline/caseTable/runRowStage.ts`
+
+另更新測試、`eval/README.md`、`CHANGELOG.zh-TW.md` 與本 HANDOFF。已核對而無須改動的讀者：`eval_aggregate.py` 原本不讀執行檔名；`specMismatchReport.ts` 仍寫同名規格報告；側欄規格不符卡片讀列資料。三者均有對應回歸，沒有為了換檔名改判定或報告內容。
+
+### 路徑範例與下一步
+
+程式提交：`569e4b9`（實作與測試）、`1695796`（大小寫同名保護）；本筆文件提交只補齊驗證／交接，分支最終 HEAD 見 git log。
+
+以使用者提供的實驗室根目錄及 26 目標清單、批次名 eval_screening_2026_11_14_xx_xx 計算，v2 縮名後估算 247 字（含 60 字餘裕），C:/r 為 179 字；兩者都在 250 字以內。此為具體命名長度估算，不宣稱已在實驗室執行；同分鐘重跑造成 __runN 後綴時會用實際新批次目錄重新估算。紀錄：`log/pr16-path-examples-windows.json`。過長路徑、250/251 邊界與無法建立的極長根目錄，均有 Windows 測試。
+
+本輪未跑完整 `test:integration`，不宣稱第 5 節既有 14 個失敗已修復。使用者在 `pr/16-short-paths` 驗收後，請於實驗室重跑 v2 與對照組，確認實際複製／突變暫存也可完成；對照組先以不存在的 --python 檢查中文預檢，再以備妥 coverage／mutatest 的直譯器執行。沒有新 B 類待決事項；本輪交接後停止，不合併、不 push。
+
+
+---
+
+## 2. PR #15b runner 診斷與 demo thinking（歷史）
 
 - Agent：Codex；Windows 原生，有 CodeGraph MCP、無 AOCI MCP。未呼叫 AOCI，待辦列第 4 節。從主線 b1963eb 開分支；保留原有未追蹤 `Claude outputs/` 與舊重構計畫，不合併、不 push。
 - [x] runner 元資料：`runSpawn` 新增選用的 onExit 診斷觀察器，於程序結束／逾時清理完成後提供 code／signal／stdout／stderr；原回傳值、逾時、預算、取消與資源清理順序不變。v2 runner 診斷帶入 operation、rowId、exitCode、signal、timedOut、runnerJsonExists，stdout／stderr 先去密再各取最後最多 1500 字。
@@ -896,6 +959,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-15（Codex／PR #16）：本輪無 AOCI MCP，請具工具能力的 agent 在穩定後維護 `git diff 1cdae96..pr/16-short-paths --name-only` 所列受管理檔；未改 `.aoci/`、`.codex/`。
+
 - 2026-11-14（Codex／PR #15b）：無 AOCI MCP，請具工具能力的 agent 維護 `git diff b1963eb..pr/15b-runner-diagnostics --name-only` 所列受管理檔。本輪不改 `.codex/`、`.aoci/`。
 
 - 2026-11-12（Antigravity／PR #13b 側欄重排與測試重點接進 v2）：無 AOCI 工具，請具工具能力的 agent 處理。新增／修改的受管理檔案：`src/ui/webviewContent.ts`、`src/ui/SidebarProvider.ts`、`src/i18n/en.ts`、`src/i18n/zh-tw.ts`、`src/orchestrator.ts`、`src/pipeline/caseTable/caseTable.ts`、`src/pipeline/caseTable/caseTableStore.ts`、`src/pipeline/caseTable/rowExecution.ts`、`src/pipeline/caseTable/runCaseTablePipeline.ts`、`src/pipeline/caseTable/runRowStage.ts`、`src/roles/semanticAnalyzer.ts`、`src/test/caseTableGolden.test.ts`、`src/test/sidebarSectionLayout.test.ts`、`src/test/caseTableTestFocus.test.ts`、`test/fixtures/golden/v2/bmi-boundary-first.json`、`docs/v2_提示詞_待審.md`、`CHANGELOG.zh-TW.md`、`docs/HANDOFF.md`。
@@ -928,6 +993,10 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 ---
 
 ## 5. 已知問題與注意事項
+
+### 2026-11-15 PR #16：完整 Python 的 Trace timing 波動
+
+Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯一失敗是 `test_trace_timing.TraceTimingTests.test_infinite_target_remains_timeout_and_a_later_case_still_runs`，第二列預期 returned、實際 timeout。單案重跑 1/1、整個 test_trace_timing 模組重跑 8/8 皆過；未重跑整套。Trace 實作／測試與起點 1cdae96 相同，未更改 0.5 秒／8 秒配置或斷言。原因未確定，不能宣稱整套全綠；不把這筆加入或改寫下方既有 14 個 Node integration 失敗基準。詳細 log 見第 2 節 PR #16。
 
 ### 2026-11-07 Windows 原子 rename 最終驗證
 
@@ -999,6 +1068,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |
+| 2026-11-15 | Codex | PR #16 | v2 短名／舊結果相容、批次路徑與對照組預檢；Windows 型別／lint／fast 817+53／相關 Node／Python 通過（同名 9/9、runner 52/52）／golden 11+4 零差異；完整 Python 973（1 fail、4 skip），Trace 單案 1/1／模組 8/8 重跑通過 | `569e4b9`、`1695796`（程式）；本筆文件收尾 |
 | 2026-11-14 | Codex | PR #15b | runner 元資料與安全尾段、每次 v2 請求參數、demo disabled 與中英文字；Windows 型別／lint／fast 817＋52／相關 32＋19／webview 通過，golden v1 11＋v2 4 零差異 | `033b330`（程式與測試）；本筆 docs 收尾 |
 | 2026-11-12 23:20 | Antigravity | fix(pr13b) | rowExecution 改回 flag: 'wx' 保護、覆蓋率補問輪次產生的測試檔與合併檔使用 _followup 後綴避免覆蓋既有檔、補 runTestFile 重複寫入拋 EEXIST 測試；caseTable.test.ts 補 testFocus 往返與格式驗證；check-types 0、lint 0、related 34/34 全過 | 最新 commit |
 | 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 5ae34ac |

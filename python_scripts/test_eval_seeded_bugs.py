@@ -23,6 +23,32 @@ from python_scripts.eval_seeded_bugs import (
 
 class TestEvalSeededBugs(unittest.TestCase):
 
+    def test_new_and_historical_formal_test_paths_and_recorded_accepted_candidate(self):
+        from python_scripts.eval_seeded_bugs import find_formal_test_file
+        names = ['r/t.py', 'r/tf.py', 'v2_runs/test_case_table.py',
+                 'v2_runs/test_case_table_followup.py', 'test_case_table.py', 'baseline_test.py']
+        for name in names:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                file = root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text('# formal test', encoding='utf-8')
+                self.assertEqual(find_formal_test_file(root), file)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'r').mkdir()
+            old, accepted = root / 'r/t.py', root / 'r/tf.py'
+            old.write_text('# first pass', encoding='utf-8')
+            accepted.write_text('# follow-up', encoding='utf-8')
+            (root / 'v2_result.json').write_text(json.dumps({'testFile': 'r/tf.py'}), encoding='utf-8')
+            self.assertEqual(find_formal_test_file(root), accepted.resolve())
+            (root / 'v2_result.json').write_text(json.dumps({'testFile': '../outside.py'}), encoding='utf-8')
+            self.assertEqual(find_formal_test_file(root), accepted)
+            self.assertEqual(old.read_text(encoding='utf-8'), '# first pass')
+            (root / 'v2_result.json').write_text('[]', encoding='utf-8')
+            self.assertEqual(find_formal_test_file(root), accepted)
+
+
     def test_apply_patch_single_hunk(self):
         orig = "def foo():\n    x = 1\n    return x\n"
         patch = """--- a/foo.py

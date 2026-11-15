@@ -20,6 +20,7 @@ import { CaseTableDependency } from './caseTableFacts';
 import { ExceptionReference } from './rowToTest';
 import { isRunnerDiagnostic, RunnerDiagnostic, runnerCrashed, runnerDiagnostic, runRowProcess } from './runnerFailure';
 import { AnalysisStageError } from '../../utils/executionFailureCategory';
+import { INVOCATION_SUFFIX, ISOLATION_SUFFIX, RUNNER_RESULT_SUFFIX, coverageTestModule } from './artifactNames';
 
 export interface CaptureRequestRow {
     id: string;
@@ -120,13 +121,13 @@ export interface MethodRun {
 export async function runTestFile(runtime: RowRuntime, module: string, code: string, useCoverage = false, rowId: string | null = null): Promise<MethodRun> {
     const testFile = path.join(runtime.artifacts, `${module}.py`);
     fs.writeFileSync(testFile, code, { encoding: 'utf8', flag: 'wx' });
-    const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);
-    const resultFile = path.join(runtime.artifacts, `${module}.runner.json`);
+    const evidence = path.join(runtime.artifacts, `${module}${INVOCATION_SUFFIX}`);
+    const resultFile = path.join(runtime.artifacts, `${module}${RUNNER_RESULT_SUFFIX}`);
     const args = [...generatedUnittestArguments(module, path.dirname(runtime.sourceFile), useCoverage, true),
         '--target-file', runtime.sourceFile, '--target-name', runtime.target, '--target-test-file', testFile,
         '--target-evidence', evidence, '--target-run-id', randomUUID(),
-        '--violation-report', path.join(runtime.artifacts, `${module}.isolation.jsonl`),
-        '--result-json', resultFile];
+        '--violation-report', path.join(runtime.artifacts, `${module}${ISOLATION_SUFFIX}`),
+        '--result-json', resultFile, '--load-test-file'];
     const run = await runRowProcess(runtime.python, args,
         { cwd: runtime.artifacts, env: environment(runtime), timeout: METHOD_TIMEOUT_MS }, 'runTestFile', { rowId, resultFile, knownSecrets: runtime.knownSecrets });
     const read = (file: string): Record<string, unknown> | undefined => {
@@ -170,10 +171,10 @@ export async function measureCoverage(runtime: RowRuntime, code: string): Promis
         missingLines: [], branchesCovered: null, missingBranches: [], reasonCode });
     try {
         const id = randomUUID().replace(/-/g, '').slice(0, 8);
-        const module = `test_case_table_coverage_${id}`;
+        const module = coverageTestModule(id);
         const run = await runTestFile(runtime, module, code, true);
         if (!run.passed || !run.targetObserved) { return unavailable('coverage-run-failed'); }
-        const evidence = path.join(runtime.artifacts, `${module}.invocation.json`);
+        const evidence = path.join(runtime.artifacts, `${module}${INVOCATION_SUFFIX}`);
         const invocation = JSON.parse(fs.readFileSync(evidence, 'utf8'));
         const expectedRun = { testRunId: String(invocation.testRunId), testHash: String(invocation.testHash) };
         const read = await runSpawn(runtime.python, ['-B', pythonToolPath('coverage'), runtime.sourceFile, runtime.target,
@@ -206,10 +207,17 @@ export async function measureMutation(runtime: RowRuntime, testFile: string, opt
 }): Promise<MutationMeasurement> {
     const env = environment(runtime);
     try {
+        // A trial must contain both the original source and a distinct test file.
+        // Preserve the delivered short name, wx and the exact accepted test hash.
+        let mutationTestFile = testFile;
+        if (path.basename(testFile).toLowerCase() === path.basename(runtime.sourceFile).toLowerCase()) {
+            mutationTestFile = path.join(runtime.artifacts, `m_${randomUUID().replace(/-/g, '').slice(0, 8)}.py`);
+            fs.writeFileSync(mutationTestFile, fs.readFileSync(testFile), { flag: 'wx' });
+        }
         const selection = await selectMutationEngine(options.engine, options.workers,
             args => runSpawn(runtime.python, args, { env, timeout: 10000 }));
         const execution = await runRowProcess(runtime.python,
-            mutationArguments(selection, runtime.sourceFile, testFile, runtime.target.split('.').pop() || '', options.className, options.stageSeconds),
+            mutationArguments(selection, runtime.sourceFile, mutationTestFile, runtime.target.split('.').pop() || '', options.className, options.stageSeconds),
             { cwd: runtime.artifacts, env, timeout: (options.stageSeconds + 5) * 1000 }, 'mutation', { knownSecrets: runtime.knownSecrets });
         if (execution.code !== 0) { return { score: null, failure: `mutation-exit-${execution.code}`,
             diagnostic: runnerDiagnostic('mutation', execution.code, { ...execution, knownSecrets: runtime.knownSecrets }, 'mutation-process-failed') }; }
