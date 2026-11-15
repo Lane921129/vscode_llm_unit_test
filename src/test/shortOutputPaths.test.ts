@@ -132,7 +132,7 @@ test('the Windows batch command reports length and remedy before target dispatch
     }
 });
 
-for (const sourceName of ['t', 'tf', 'c1_0']) {
+for (const sourceName of ['t', 'T', 'tf', 'c1_0']) {
     test(`short artifacts cannot shadow the real target module ${sourceName}.py`, async () => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-module-collision-'));
         try {
@@ -155,7 +155,7 @@ for (const sourceName of ['t', 'tf', 'c1_0']) {
             if (sourceName === 'tf') { assert.equal(requests, 2, 'the follow-up must execute the colliding tf.py'); }
             assert.equal(fs.readFileSync(file, 'utf8'), original);
             const files = fs.readdirSync(path.join(result.directory, 'r'));
-            assert.equal(files.some(name => /^m_[0-9a-f]{8}\.py$/.test(name)), sourceName === 't' || sourceName === 'tf');
+            assert.equal(files.some(name => /^m_[0-9a-f]{8}\.py$/.test(name)), sourceName !== 'c1_0');
         } finally { fs.rmSync(directory, { recursive: true, force: true }); }
     });
 }

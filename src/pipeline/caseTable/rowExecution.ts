@@ -210,7 +210,7 @@ export async function measureMutation(runtime: RowRuntime, testFile: string, opt
         // A trial must contain both the original source and a distinct test file.
         // Preserve the delivered short name, wx and the exact accepted test hash.
         let mutationTestFile = testFile;
-        if (path.basename(testFile) === path.basename(runtime.sourceFile)) {
+        if (path.basename(testFile).toLowerCase() === path.basename(runtime.sourceFile).toLowerCase()) {
             mutationTestFile = path.join(runtime.artifacts, `m_${randomUUID().replace(/-/g, '').slice(0, 8)}.py`);
             fs.writeFileSync(mutationTestFile, fs.readFileSync(testFile), { flag: 'wx' });
         }
