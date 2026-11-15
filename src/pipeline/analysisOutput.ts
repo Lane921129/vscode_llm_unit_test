@@ -56,11 +56,13 @@ export function createAnalysisDirectory(base: string, date: string, file: string
 }
 
 /** A batch owns one new root, including its inventory and completion record. */
-export function createBatchDirectory(base: string, date: string, projectName: string): string {
-    fs.mkdirSync(base, { recursive: true });
+export function createBatchDirectory(base: string, date: string, projectName: string,
+    onCandidate?: (directory: string) => void): string {
     for (let attempt = 1; ; attempt++) {
         const directory = path.join(base, `${label(projectName, 16)}_${label(date, 24)}${attempt === 1 ? '' : `__run${attempt}`}`);
+        onCandidate?.(directory);
         checkOutputPath(directory, 104);
+        fs.mkdirSync(base, { recursive: true });
         try { fs.mkdirSync(directory); return directory; }
         catch (error: any) { if (error.code !== 'EEXIST') { throw error; } }
     }

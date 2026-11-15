@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-15 PR #16（v2 短路徑與批次預檢）
+- v2 執行目錄與檔名縮短，保留 wx 保護並處理與受測模組同名的載入／突變衝突；正式測試讀取支援新舊結果。
+- 批次開始前估算路徑並保留 60 字餘裕；Windows 超過 250 字停止並提示短目錄，其他平台只記錄。
+- 對照組先確認 Python、coverage、突變引擎與路徑，預檢失敗不送請求或建立失敗 manifest；README 加 UTF-8 讀取範例。
+
 ## 2026-11-14 PR #15b（runner 診斷與 demo thinking）
 - runner 事件與 v2_result 保存操作、列 id、退出碼、signal、逾時、runner.json 存在狀態及經共用 v1 脫敏的輸出尾端（各最多 1500 字）。
 - 每個 v2 model-request 記錄 thinking、context 與輸出限制；未傳送的值記 null，不改請求行為。

@@ -113,6 +113,19 @@ python python_scripts/eval_baseline_plain_llm.py \
 - `--output` 必須是新資料夾或空資料夾。產出 `batch_manifest.json`（`method: "plain-llm"`，模型名稱後綴 `(plain-llm)`）以及每個目標的 `function_knowledge.json`、`role_events.jsonl`（角色 `plain-llm`）。
 - **所有失敗都算進分母**：呼叫失敗（`model-call-failed`）、沒有程式碼區塊（`no-test-code`）、語法錯誤（`syntax-error`）、沒有測試方法（`no-test-methods`）、測試逾時或失敗、未呼叫目標函式（`target-not-called`）都記為 `failed`；只有測試全部通過、確實呼叫真實目標、且量到突變分數才記為 `usable`（與 v1、v2 的 usable 標準完全相同）；突變量不到時為 `failed`（`reasonCode: "mutation-unmeasured"`，原因記錄於 `detail`）。
 
+### 開始前的環境與路徑檢查
+
+- 未指定 `--python` 時使用啟動此腳本的 `sys.executable`；指定時先確認檔案存在且能執行，再用同一直譯器實際 import `coverage` 及所選突變引擎（`mutatest` 或 builtin 工具模組）。缺少依賴請用該 Python 安裝，或以 `--python` 選已備妥環境的直譯器。
+- 預檢在任何模型請求與目標資料夾建立之前完成；失敗會以中文原因和修正建議結束（exit 2），不產生一批 `failed` 目標或 `batch_manifest.json`。
+- 路徑估算包含輸出批次目錄、最長目標相對目錄、已知最長產物名稱與 60 字暫存餘裕。Windows 超過 250 字就停止；其他平台只記錄。擴充套件的 v1／v2 批次也會在開始前檢查；不會自動改輸出位置，建議自行選短目錄，例如 `C:/r`。
+- 所有輸出 JSON／JSONL 均以 UTF-8 寫入。讀取結果時也明確指定編碼，例如：
+
+```powershell
+python -c "import json; from pathlib import Path; p=Path('C:/r/control/batch_manifest.json'); print(json.loads(p.read_text(encoding='utf-8'))['statusCounts'])"
+```
+
+v2 新結果的執行子目錄為 `r/`：單列 `c3_0.py`、補問列 `c3_0f.py`、合併檔 `t.py`／`tf.py`、候選 `k_c3.py`，證據尾碼為 `.inv.json`／`.iso.jsonl`／`.res.json`，coverage 暫存模組為 `g_<8字id>`。分析工具優先讀 `v2_result.json.testFile`，也接受舊 `v2_runs/test_case_table*.py` 與根目錄 `test_case_table.py`；既有批次不需改名。規格不符報告仍是 `spec_mismatch.json/md` 與 `test_spec_mismatch.py`，卡片仍讀原列資料。 短名與受測模組同名時，v2 仍以明確測試路徑在既有隔離環境載入；突變暫存另用 `m_<8字id>.py` 保存相同測試內容，交付的 `t.py`／`tf.py` 不變。
+
 ### 比較時的注意事項
 
 1. **輸出長度上限的差異（對對照組有利，結果偏保守）**：對照組單次請求沒有設定個別角色的輸出長度上限（`num_predict`），而 v1 與 v2 流程有嚴格的各角色輸出上限（例如種子測試 1536 tokens 等）。這使得對照組不會因為角色預算上限而發生長度截斷，對對照組有利，所得的比較結果偏向保守。

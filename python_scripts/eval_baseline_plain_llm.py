@@ -25,6 +25,9 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import ntpath
+import posixpath
+import shutil
 import re
 import subprocess
 import sys
@@ -255,12 +258,71 @@ def _safe(name):
     return re.sub(r'[^A-Za-z0-9_.-]+', '_', name)[:60]
 
 
+
+class BaselinePreflightError(RuntimeError):
+    """A batch cannot start; no per-target failure manifest should be created."""
+
+
+def estimate_output_path(output, targets, platform=None):
+    platform = platform or sys.platform
+    paths = ntpath if platform == 'win32' else posixpath
+    folders = [paths.join(_safe(os.path.splitext(file)[0]), _safe(target)) for file, target in targets]
+    longest = max(folders, key=len, default='')
+    leaf = max(('baseline_coverage_test.invocation.json', 'baseline_coverage_test.isolation.jsonl',
+                'baseline_coverage_test.runner.json', 'function_knowledge.json'), key=len)
+    full = paths.abspath(paths.join(output, longest, leaf))
+    # Windows measures UTF-16 code units, matching JavaScript string.length.
+    estimated = len(full.encode('utf-16-le')) // 2 + 60
+    return {'estimatedLength': estimated, 'limit': 250, 'temporaryAllowance': 60,
+            'blocked': platform == 'win32' and estimated > 250}
+
+
+def _probe_python(python, statement):
+    return subprocess.run([python, '-E', '-X', 'utf8', '-B', '-c', statement], cwd=SCRIPTS,
+                          capture_output=True, text=True, encoding='utf-8', timeout=20)
+
+
+def preflight_baseline(settings, output, targets):
+    requested = str(settings.get('python') or sys.executable).strip()
+    python = shutil.which(requested)
+    if not python or not os.path.isfile(python) or not os.access(python, os.X_OK):
+        raise BaselinePreflightError(f'找不到或無法執行 Python：{requested}。'
+            '請改用 --python 指定裝有 coverage 與所選突變引擎的 Python，或不要加 --python 以使用目前的直譯器。')
+    try:
+        if _probe_python(python, 'import sys; print(sys.executable)').returncode != 0:
+            raise OSError('interpreter-nonzero')
+    except (OSError, subprocess.SubprocessError):
+        raise BaselinePreflightError(f'Python 無法正常執行：{python}。請檢查 --python，或不要加 --python。') from None
+    modules = [('coverage', 'import coverage')]
+    if settings['mutationEngine'] == 'mutatest':
+        modules.append(('mutatest', 'import mutatest; from mutatest.transformers import MutateAST, get_mutations_for_target; import external_mutation_runner'))
+    else:
+        modules.append(('builtin', 'import basic_mutation_runner'))
+    for name, statement in modules:
+        try:
+            available = _probe_python(python, statement).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            available = False
+        if not available:
+            suggestion = (f'請使用同一直譯器安裝："{python}" -m pip install {name}。'
+                          if name != 'builtin' else '請確認 python_scripts 及 builtin 所需模組完整可讀。')
+            raise BaselinePreflightError(f'指定的 Python 無法 import {name}：{python}。{suggestion} 或以 --python 指定已備妥環境的 Python。')
+    estimate = estimate_output_path(output, targets)
+    message = (f'對照組輸出路徑估算：{estimate["estimatedLength"]} 字；上限 {estimate["limit"]} 字'
+               '（含 60 字暫存餘裕）。建議將輸出資料夾改短，例如 C:\\r。')
+    print(message, file=sys.stderr)
+    if estimate['blocked']:
+        raise BaselinePreflightError(message)
+    return os.path.abspath(python)
+
+
 def run_baseline(settings, targets_path, output, request_fn=ollama_request):
     if os.path.exists(output) and os.listdir(output):
         raise ValueError('output folder must be new or empty')
-    os.makedirs(output, exist_ok=True)
     base, targets = load_targets(targets_path)
-    settings = {**settings, 'importPaths': lambda file: list(dict.fromkeys([os.path.dirname(file), base]))}
+    python = preflight_baseline(settings, output, targets)
+    settings = {**settings, 'python': python, 'importPaths': lambda file: list(dict.fromkeys([os.path.dirname(file), base]))}
+    os.makedirs(output, exist_ok=True)
     started_at = datetime.now(timezone.utc).isoformat()
     manifest_targets, model_requests, output_tokens, length_stops = [], 0, 0, 0
     for file_name, target in targets:
@@ -330,7 +392,11 @@ def main(argv=None):
                 'mutationEngine': args.mutation_engine, 'mutationStageSeconds': args.mutation_seconds,
                 'mutationWorkers': args.mutation_workers, 'requestTimeoutSeconds': args.request_timeout,
                 'testTimeoutSeconds': args.test_timeout, 'python': args.python}
-    manifest = run_baseline(settings, args.targets, args.output)
+    try:
+        manifest = run_baseline(settings, args.targets, args.output)
+    except BaselinePreflightError as error:
+        print(f'對照組環境預檢失敗：{error}', file=sys.stderr)
+        return 2
     print(json.dumps({'output': args.output, 'statusCounts': manifest['statusCounts'],
                       'modelRequests': manifest['cost']['modelRequests']}, ensure_ascii=False))
     return 0

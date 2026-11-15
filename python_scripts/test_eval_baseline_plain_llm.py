@@ -141,5 +141,94 @@ class PlainBaselineTests(unittest.TestCase):
             self.assertTrue(summary['comparable'])
 
 
+
+class BaselinePreflightTests(unittest.TestCase):
+    def settings(self, python=None, engine='builtin'):
+        return {'model': 'fixture', 'python': python or sys.executable, 'mutationEngine': engine}
+
+    def fixture(self, directory):
+        targets = os.path.join(directory, 'targets.json')
+        with open(targets, 'w', encoding='utf-8') as handle:
+            json.dump({'targets': {'calc.py': ['add']}}, handle)
+        return targets, os.path.join(directory, 'output')
+
+    def assert_preflight_failure(self, python=None, failed_module=None, engine='builtin'):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from eval_baseline_plain_llm import BaselinePreflightError, main
+        import io
+        from contextlib import redirect_stderr
+        with tempfile.TemporaryDirectory() as directory:
+            targets, output = self.fixture(directory)
+            requested = python or sys.executable
+            model = FakeModel()
+            def probe(_python, statement):
+                return SimpleNamespace(returncode=1 if failed_module and f'import {failed_module}' in statement else 0)
+            with patch('eval_baseline_plain_llm._probe_python', side_effect=probe), patch('urllib.request.urlopen') as transport:
+                with self.assertRaises(BaselinePreflightError) as caught:
+                    run_baseline(self.settings(requested, engine), targets, output, request_fn=model)
+                self.assertIn('--python', str(caught.exception))
+                self.assertEqual(model.prompts, [])
+                self.assertFalse(os.path.exists(output), 'no target folder or manifest may be written')
+                errors = io.StringIO()
+                with redirect_stderr(errors):
+                    code = main(['--targets', targets, '--output', output, '--model', 'fixture',
+                                 '--python', requested, '--mutation-engine', engine])
+                self.assertNotEqual(code, 0)
+                self.assertIn('預檢失敗', errors.getvalue())
+                self.assertIn(failed_module or requested, errors.getvalue())
+                self.assertFalse(os.path.exists(output))
+                transport.assert_not_called()
+
+    def test_missing_interpreter_stops_before_any_model_request_or_manifest(self):
+        self.assert_preflight_failure(python=os.path.join(tempfile.gettempdir(), 'pr16-nonexistent-python.exe'))
+
+    def test_missing_coverage_stops_before_any_model_request_or_manifest(self):
+        self.assert_preflight_failure(failed_module='coverage')
+
+    def test_missing_mutatest_stops_before_any_model_request_or_manifest(self):
+        self.assert_preflight_failure(failed_module='mutatest', engine='mutatest')
+
+    def test_path_preflight_is_windows_only_and_uses_sixty_character_margin(self):
+        from eval_baseline_plain_llm import estimate_output_path
+        targets = [('validators_utils.py', '_func_args_as_dict')]
+        short = estimate_output_path('C:/r/control', targets, platform='win32')
+        long = estimate_output_path('C:/' + 'long-output/' * 16, targets, platform='win32')
+        self.assertFalse(short['blocked'])
+        self.assertEqual(short['temporaryAllowance'], 60)
+        self.assertTrue(long['blocked'])
+        self.assertGreater(long['estimatedLength'], 250)
+        self.assertFalse(estimate_output_path('/' + 'long-output/' * 16, targets, platform='linux')['blocked'])
+
+    def test_executable_without_python_cannot_start(self):
+        from unittest.mock import patch
+        from eval_baseline_plain_llm import BaselinePreflightError
+        with tempfile.TemporaryDirectory() as directory:
+            targets, output = self.fixture(directory)
+            with patch('eval_baseline_plain_llm._probe_python', side_effect=OSError('not executable')):
+                with self.assertRaisesRegex(BaselinePreflightError, '無法正常執行'):
+                    run_baseline(self.settings(), targets, output, request_fn=FakeModel())
+            self.assertFalse(os.path.exists(output))
+
+    def test_missing_python_setting_uses_current_executable_and_writes_utf8(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import eval_baseline_plain_llm as baseline
+        with tempfile.TemporaryDirectory() as directory:
+            targets = os.path.join(directory, 'targets.json')
+            with open(targets, 'w', encoding='utf-8') as handle:
+                json.dump({'targets': {}}, handle)
+            output = os.path.join(directory, 'out')
+            settings = self.settings()
+            del settings['python']
+            settings.update(numCtx=8192, localThinkingMode='provider-default')
+            with patch.object(baseline, '_probe_python', return_value=SimpleNamespace(returncode=0)) as probe:
+                manifest = run_baseline(settings, targets, output, request_fn=FakeModel())
+            self.assertTrue(os.path.samefile(probe.call_args_list[0].args[0], sys.executable))
+            with open(os.path.join(output, 'batch_manifest.json'), encoding='utf-8') as handle:
+                self.assertEqual(json.load(handle), manifest)
+            self.assertIn('檔案', manifest['settings']['prompt'])
+
+
 if __name__ == '__main__':
     unittest.main()

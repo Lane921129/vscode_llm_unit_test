@@ -24,10 +24,12 @@ async function run(source: string, specReplies: Record<string, string[]>, settin
     fs.writeFileSync(path.join(project, 'limits.py'), source, 'utf8');
     const specPrompts: string[] = [];
     let scenarioRequests = 0;
+    const messages: Record<string, any>[] = [];
     try {
         const result = await runCaseTablePipeline({
             filePath: path.join(project, 'limits.py'), funcName: 'clamp', projectRoot: project, outputPath: path.join(directory, 'out'),
             sessionDate: 'spec', pythonExecutable: python, specOracle: setting, qualityAnalyst: 'off', log: () => undefined,
+            postMessage: message => messages.push(message),
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },
             requestModel: async (system, user, options) => {
                 assert.equal(options?.temperature, system.startsWith('You predict') ? 0.7 : undefined,
@@ -45,14 +47,14 @@ async function run(source: string, specReplies: Record<string, string[]>, settin
             }
         });
         const files = (name: string) => fs.existsSync(path.join(result.directory, name)) ? fs.readFileSync(path.join(result.directory, name), 'utf8') : null;
-        return { result, specPrompts, scenarioRequests, files, table: readCaseTable(result.directory),
+        return { result, specPrompts, scenarioRequests, messages, files, table: readCaseTable(result.directory),
             formal: fs.readFileSync(result.stage!.testFile!, 'utf8') };
     } finally { setTimeout(() => fs.rmSync(directory, { recursive: true, force: true }), 0); }
 }
 
 test('a boundary bug is listed as spec-mismatch and kept out of the formal tests; prompts stay blind', async () => {
     const sentence = 'Values equal to high are returned unchanged.';
-    const { result, specPrompts, files, table, formal } = await run(buggy(true), {
+    const { result, specPrompts, messages, files, table, formal } = await run(buggy(true), {
         'value below high': Array(3).fill(spec('return 5', 'Return value, but never more than high.')),
         'value equal to high': Array(3).fill(spec('return 10', sentence))
     });
@@ -72,6 +74,14 @@ test('a boundary bug is listed as spec-mismatch and kept out of the formal tests
     assert.equal(result.specMismatch!.specMismatchCount, 1);
     assert.equal(JSON.parse(files('function_knowledge.json')!).specMismatchCount, 1);
     assert.equal(result.stage!.terminal, 'usable');
+    assert.equal(path.relative(result.directory, result.stage!.testFile!).replace(/\\/g, '/'), 'r/t.py');
+    assert.equal(JSON.parse(files('v2_result.json')!).testFile, 'r/t.py');
+    const card = messages.find(message => message.command === 'updateOutcome');
+    assert.equal(card!.caseTable.specMismatch, 1);
+    assert.equal(card!.caseTable.specMismatchDetails.mismatches[0].expected, 'return 10');
+    assert.equal(card!.caseTable.specMismatchDetails.mismatches[0].actual, 'return 9');
+    assert.equal(result.specMismatch!.testFile, path.join(result.directory, 'test_spec_mismatch.py'));
+
 });
 
 test('an unverifiable basis becomes needs-review with the observed value; disagreeing predictions are unstable', async () => {

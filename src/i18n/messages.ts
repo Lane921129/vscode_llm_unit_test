@@ -1,5 +1,6 @@
 /** English translations of framework-authored source messages; evidence arguments remain verbatim. */
 export const englishMessages: Record<string, string> = {
+    "批次輸出路徑估算：{0} 字；上限 {1} 字（含 60 字暫存餘裕）。建議將輸出資料夾改短，例如 C:\\r。": "Estimated batch output path: {0} characters; limit {1} (including 60 characters for temporary files). Use a shorter output directory, such as C:\\r.",
     "未通過：驗證工具受阻": "Not passed: validation tool blocked",
     "共 {0} 個目標；執行驗證通過 {1}、完整通過 {2}、環境／工具受阻 {3}、失敗 {4}、略過／未評分 {5}、未完成 {6}": "{0} targets; execution verified {1}, fully passed {2}, environment/tool blocked {3}, failed {4}, skipped/unscored {5}, incomplete {6}",
     "- 通過率 {0}；受阻率 {1}；未完成率 {2}（分母 {3} 個確認目標）。": "- Passed {0}; blocked {1}; incomplete {2} (denominator: {3} confirmed targets).",

@@ -3,8 +3,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 /** Keep room below legacy Windows shell limits; IDs belong inside evidence. */
-export function checkOutputPath(file: string, extra = 0): void {
-    if (path.resolve(file).length + extra > 240) {
+export function checkOutputPath(file: string, extra = 0, platform: NodeJS.Platform = process.platform): void {
+    if (platform === 'win32' && path.resolve(file).length + extra > 240) {
         throw new Error(localize("結果完整路徑過長；請將輸出目錄改為較短的位置，例如 C:\\r，再重新執行。"));
     }
 }

@@ -25,6 +25,7 @@ import { createSpecDecider } from './oracleDecision';
 import { SpecMismatchSummary, writeSpecMismatchArtifacts } from './specMismatchReport';
 import { TestFocus } from '../testFocus';
 import { isRunnerDiagnostic } from './runnerFailure';
+import { ROW_RUN_DIRECTORY } from './artifactNames';
 import { redactCredentialStrings } from '../artifactSafety';
 import { createHash, randomUUID } from 'node:crypto';
 
@@ -270,7 +271,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
     if (options.runRows !== false && validBeforeRows > 0) {
         const runtime = { python: options.pythonExecutable, sourceFile: path.resolve(options.filePath), target: options.funcName,
             importPaths: [...new Set([path.dirname(path.resolve(options.filePath)), path.resolve(options.projectRoot)])],
-            artifacts: path.join(directory, 'v2_runs'), knownSecrets: options.knownSecrets };
+            artifacts: path.join(directory, ROW_RUN_DIRECTORY), knownSecrets: options.knownSecrets };
         const decideExpected = options.decideExpected
             ?? (specOracleUsed ? createSpecDecider({ spec, functionName: options.funcName, ask, python: options.pythonExecutable }) : undefined);
         const qualityAnalystEnabled = typeof options.qualityAnalyst === 'boolean'
