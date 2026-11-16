@@ -78,6 +78,7 @@ test('review repairs only a malformed line once, retains valid flags and caps ac
         assert.deepEqual(rows[0].reviewFlags, ['keep-valid-flag']);
         writeCaseTable(directory, { version: 'case-table-v1', target: 'inc', rows });
         assert.deepEqual(readCaseTable(directory).rows, rows);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'review.json'), 'utf8')).completed, true);
         const flags = Array.from({ length: 4 }, () => '{"action":"flag","id":"C1","reason":"check"}').join('\n');
         assert.equal(parseCaseTableReview(flags, [seed], []).actions.length, 3);
         assert.equal(parseCaseTableReview(flags, [seed], []).rejected[0].reason, 'review-limit');
@@ -85,6 +86,7 @@ test('review repairs only a malformed line once, retains valid flags and caps ac
         const unchanged = await reviewCaseTable({ directory, rows: [seed], source: 'def inc(x): return x+1', requirements: [],
             validate: async rows => rows, ask: async () => { badRequests++; return 'bad json'; } });
         assert.equal(badRequests, 2);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'review.json'), 'utf8')).completed, false);
         assert.deepEqual(unchanged, [seed]);
         const prompt = getCaseTableReviewPrompt({ table: '| C1 | input |', source: 'def inc(x): return x+1', requirements: [] });
         assert.match(prompt.user, /at most 3 JSON lines/);

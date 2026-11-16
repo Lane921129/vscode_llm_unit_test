@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-16 PR #17 階段 3（v2 高品質層）
+- usable 通過 standard 行／分支／突變門檻、Reviewer 完成且無未處理標記時升為 quality-passed；off 不升級。
+- q.json 保存本次證據，批次獨立核驗 v2 品質；結果卡片、終態與批次計數同步，評估既有狀態統計加 v2 回歸。
+- v1 品質路徑不變；BMI Reviewer 情境因 56/96 突變維持 usable，既有快照不變，驗證數字見 HANDOFF。
+
 ## 2026-11-16 PR #17 階段 2（移植 #9）
 - Reviewer 審案例表並提出新增列／可疑標記；新增列走原執行與規格預測，可疑標記僅記錄於列與報告。
 - 新增 caseTableReview 設定與進階設定 v2 下拉選單；demo 比照 qualityAnalyst 保留選擇，套件設定不重新排版。

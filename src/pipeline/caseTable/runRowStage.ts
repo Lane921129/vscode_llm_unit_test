@@ -4,7 +4,8 @@
  *
  * Expected values are observed in PR #7 (oracleStatus observed-unconfirmed);
  * PR #8 inserts spec prediction before the method is written. Terminal tiers
- * follow architecture 1.2: usable / failed (quality-passed arrives with PR #9).
+ * return usable / failed here; the pipeline promotes usable only after the
+ * approved v2 coverage, mutation and completed case-table review gates pass.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -18,8 +19,9 @@ import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../.
 import { getSurvivorRowPrompt, parseSurvivorRow } from '../../roles/qualityAnalyst';
 import { currentStopPolicy } from '../stopPolicy';
 import { SurvivorRowEvidence } from './designFindings';
+import type { CaseTableQualityAssessment } from './caseTableQuality';
 
-export type RowStageTerminal = 'usable' | 'failed';
+export type RowStageTerminal = 'usable' | 'quality-passed' | 'failed';
 import { rowTestModule, candidateTestModule, mergedTestModule } from './artifactNames';
 export { CASE_TABLE_TEST_FILE } from './artifactNames';
 
@@ -46,6 +48,7 @@ export interface RowStageOptions {
 }
 
 export interface RowStageResult {
+    qualityAssessment?: CaseTableQualityAssessment;
     survivorRows?: SurvivorRowEvidence[];
     rows: CaseRow[];
     terminal: RowStageTerminal;

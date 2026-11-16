@@ -340,3 +340,24 @@ test('replay registers PR13 details, qualification summary and survivor control 
         }
     } finally { setLanguage('zh-tw'); }
 });
+
+test('v2 quality-passed cards retain their tier and row count in both languages', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.coverage('sample.py', 'inc');
+            for (const tier of ['quality-passed', 'usable', 'failed']) {
+                ui.send({ command: 'updateOutcome', fileName: 'sample.py:inc',
+                    outcome: { label: `v2 ${tier}`, kind: tier === 'quality-passed' ? 'passed' : tier === 'usable' ? 'executed' : 'failed' },
+                    caseTable: { tier, usableRows: 1, totalRows: 1, specMismatch: 0 } });
+                const metrics = ui.element('dashboard-container').children[0].children[0].children[1];
+                assert.ok(metrics.innerHTML.includes(`v2 ${tier}`), metrics.innerHTML);
+                assert.ok(metrics.innerHTML.includes('1/1'), metrics.innerHTML);
+                if (tier === 'quality-passed') {
+                    assert.doesNotMatch(metrics.innerHTML, /v2 failed/);
+                    assert.match(metrics.innerHTML, /#16803c/);
+                }
+            }
+        }
+    } finally { setLanguage('zh-tw'); }
+});

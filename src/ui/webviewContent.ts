@@ -929,8 +929,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (!caseTable || typeof caseTable !== 'object') return '';
             const usable = Number(caseTable.usableRows), total = Number(caseTable.totalRows), mismatch = Number(caseTable.specMismatch);
             if (![usable, total, mismatch].every(Number.isFinite)) return '';
-            const tier = caseTable.tier === 'usable' ? 'usable' : 'failed';
-            let html = '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + (tier === 'usable' ? '#1677a6' : '#c75050')
+            const tier = caseTable.tier === 'quality-passed' ? 'quality-passed' : caseTable.tier === 'usable' ? 'usable' : 'failed';
+            const color = tier === 'quality-passed' ? '#16803c' : tier === 'usable' ? '#1677a6' : '#c75050';
+            let html = '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + color
                 + '; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; white-space:nowrap;">'
                 + escapeHtml('v2 ' + tier + ' · ' + usable + '/' + total + ' ' + i18n.caseTableRows) + '</span>';
             if (mismatch > 0) {

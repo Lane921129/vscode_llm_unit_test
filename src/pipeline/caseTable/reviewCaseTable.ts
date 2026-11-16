@@ -20,13 +20,15 @@ export async function reviewCaseTable(input: {
     const parsed = parseCaseTableReview(await input.ask(prompt.system, prompt.user, { role: 'case-table-review' }), input.rows, ids);
     const actions: CaseTableReviewAction[] = [...parsed.actions];
     const rejected = [...parsed.rejected];
+    let unresolved = 0;
     for (const item of parsed.rejected) {
-        if (item.reason === 'review-limit' || actions.length >= 3) { continue; }
+        if (item.reason === 'review-limit' || actions.length >= 3) { unresolved++; continue; }
         const correction = getCaseTableReviewCorrectionPrompt(promptInput, item.raw, item.reason);
         const result = parseCaseTableReview(await input.ask(correction.system, correction.user, { role: 'case-table-review-correction' }),
             input.rows, ids, nextCaseRowIndex([...input.rows, ...actions.flatMap(action => action.row ? [action.row] : [])]));
         if (result.actions.length) { actions.push(result.actions[0]); }
         else { rejected.push(...result.rejected); }
+        if (result.actions.length !== 1 || result.rejected.length) { unresolved++; }
     }
     const added = await input.validate(actions.flatMap(action => action.row ? [action.row] : []));
     const flags = actions.flatMap(action => action.flag ? [action.flag] : []);
@@ -34,7 +36,7 @@ export async function reviewCaseTable(input: {
         const reasons = flags.filter(flag => flag.id === row.id).map(flag => flag.reason);
         return reasons.length ? { ...row, reviewFlags: [...new Set([...(row.reviewFlags ?? []), ...reasons])] } : row;
     });
-    fs.writeFileSync(path.join(input.directory, CASE_TABLE_REVIEW_JSON), JSON.stringify({ version: 'case-table-review-v1',
+    fs.writeFileSync(path.join(input.directory, CASE_TABLE_REVIEW_JSON), JSON.stringify({ version: 'case-table-review-v1', completed: unresolved === 0,
         addedRowIds: added.map(row => row.id), flags, rejected }, null, 2) + '\n', 'utf8');
     return rows;
 }

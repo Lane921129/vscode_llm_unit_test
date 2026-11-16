@@ -1,3 +1,4 @@
+import { verifyCaseTableQuality } from './caseTable/caseTableQuality';
 import { REQUIREMENTS_COVERAGE_JSON } from './caseTable/artifactNames';
 import { resultDataDirectory, resultArtifactPath } from './resultLayout';
 import { localize, t } from '../i18n/core';
@@ -227,6 +228,7 @@ export class BatchJournal {
     private readonly discoveryFailures: Array<{ file: string; stage: string; target?: string }> = [];
     private readonly files: string[] = [];
     private readonly reportSummaries = new Map<number, TargetReportSummary>();
+    private readonly v2QualityPasses = new Set<number>();
     private readonly targetFailureDetails = new Map<number, TargetFailureDetail>();
     private scope?: BatchScopeSelection;
     /** Stable batch-level stage when work stops before an individual target owns a report. */
@@ -337,6 +339,7 @@ export class BatchJournal {
     }
     dummy(id: number): void { this.targets[id].terminalStatus = 'dummy-skipped'; }
     refresh(id: number): void {
+        this.v2QualityPasses.delete(id);
         const target = this.targets[id];
         const reportRoot = target.reportDirectory && path.join(this.directory, target.reportDirectory);
         try {
@@ -358,7 +361,10 @@ export class BatchJournal {
                     if (manifest.validationMode === 'execution' || knowledge.validationMode === 'execution') { throw Error('mode-mismatch'); }
                     const hasQualityContract = [manifest, knowledge].some(artifact =>
                         ['qualityContractVersion', 'qualityPolicy', 'qualityAssessment'].some(key => Object.hasOwn(artifact, key)));
-                    if (hasQualityContract) {
+                    if (manifest.pipelineVersion === 'v2-case-table' && knowledge.pipelineVersion === 'v2-case-table') {
+                        verifyCaseTableQuality(directory, path.resolve(this.sourceRoot, target.file), target.target, manifest, knowledge);
+                        this.v2QualityPasses.add(id);
+                    } else if (hasQualityContract) {
                         verifyQualityPass(directory, path.resolve(this.sourceRoot, target.file), target.target, manifest, knowledge);
                     } else {
                         // Preserve historical artifacts, but never certify their
@@ -461,7 +467,8 @@ export class BatchJournal {
         this.finishedAt = new Date().toISOString(); this.save();
     }
     summary(): string {
-        const passed = this.targets.filter(t => t.terminalStatus === 'passed').length;
+        const passed = this.targets.filter(t => t.terminalStatus === 'passed'
+            || (t.terminalStatus === 'quality-passed' && this.v2QualityPasses.has(t.id))).length;
         const executed = this.targets.filter(t => t.terminalStatus === 'execution-passed').length;
         const blocked = this.targets.filter(t => ['environment', 'tool'].includes(t.category || '')).length;
         const failed = this.targets.filter(t => !['environment', 'tool'].includes(t.category || '')
@@ -492,7 +499,8 @@ export class BatchJournal {
         }
         const environmentIssues = [...groups.values()].map(group => ({ ...group, files: [...group.files].sort() }));
         const complete = this.status === 'completed';
-        const passed = counts.passed || 0;
+        const passed = (counts.passed || 0) + this.targets.filter(t => t.terminalStatus === 'quality-passed'
+            && this.v2QualityPasses.has(t.id)).length;
         const executed = counts['execution-passed'] || 0;
         const mode = this.identity.validationMode ?? 'full';
         const capabilitySummary = this.capabilitySummary();

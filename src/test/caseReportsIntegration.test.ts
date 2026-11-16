@@ -57,7 +57,7 @@ test('requirement and design report names fit the v2 path preflight bound', asyn
     const names = await import('../pipeline/caseTable/artifactNames.js');
     const { LONGEST_V2_ARTIFACT } = await import('../pipeline/batchOutputPath.js');
     for (const name of [names.REQUIREMENTS_COVERAGE_JSON, names.REQUIREMENTS_COVERAGE_MD,
-        names.DESIGN_FINDINGS_JSON, names.DESIGN_FINDINGS_MD, names.CASE_TABLE_REVIEW_JSON]) {
+        names.DESIGN_FINDINGS_JSON, names.DESIGN_FINDINGS_MD, names.CASE_TABLE_REVIEW_JSON, names.CASE_TABLE_QUALITY_JSON]) {
         assert.ok(name.length <= LONGEST_V2_ARTIFACT.length, name);
     }
 });

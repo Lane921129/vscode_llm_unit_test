@@ -111,6 +111,10 @@ for (const scenario of scenarios) {
             });
             const stage = result.stage!;
             assert.equal(stage.terminal, 'usable');
+            if (scenario.caseTableReview === 'auto') {
+                assert.ok(stage.qualityAssessment);
+                assert.ok(stage.qualityAssessment.reasons.includes('mutation-threshold-not-met'));
+            }
             assert.ok(typeof stage.mutation?.score === 'number');
             assert.ok(result.rows.some(row => row.status === 'test-passed'));
             const coverage = stage.coverage;

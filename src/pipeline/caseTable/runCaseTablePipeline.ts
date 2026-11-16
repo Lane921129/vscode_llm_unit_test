@@ -20,6 +20,7 @@ import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
 import { writeCaseTable } from './caseTableStore';
 import { RequirementEntry, parseRequirements, writeRequirementsCoverage } from './requirements';
 import { writeDesignFindings } from './designFindings';
+import { CaseTableQualityAssessment, writeCaseTableQuality } from './caseTableQuality';
 import { reviewCaseTable, appendCaseTableReviewReport } from './reviewCaseTable';
 import { CASE_SCENARIO_ROW_LIMIT, getCaseRowCorrectionPrompt, getCaseScenarioPrompt, parseCaseRows } from '../../roles/semanticAnalyzer';
 import { RowStageResult, RowStageOptions, rowTestContext, runRowStage } from './runRowStage';
@@ -109,7 +110,7 @@ export interface CaseTablePipelineOptions {
 }
 
 export interface CaseTableCardSummary {
-    tier: 'usable' | 'failed';
+    tier: 'usable' | 'quality-passed' | 'failed';
     usableRows: number;
     totalRows: number;
     specMismatch: number;
@@ -363,6 +364,14 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
         options.log(`[v2] spec oracle ${specOracleUsed ? 'on' : 'off'}: ${specMismatch.specMismatchCount} spec mismatches, `
             + `${specMismatch.needsReviewCount} rows need manual review.`);
     }
+    if (stage) {
+        stage.qualityAssessment = writeCaseTableQuality(directory, options.filePath, options.funcName, stage,
+            finalRows, options.caseTableReview !== 'off');
+        if (stage.qualityAssessment?.fullyPassed) {
+            stage.terminal = 'quality-passed';
+            stage.reasonCode = 'quality-passed';
+        }
+    }
     writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: finalRows, testFocus });
     fs.writeFileSync(path.join(directory, CASE_TABLE_REJECTIONS_FILE), JSON.stringify({
         version: 'case-table-rejections-v1', target: options.funcName, rejected, overLimit: parsed.overLimit,
@@ -372,7 +381,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
         postResultCard(options, directory, finalRows, stage, specMismatch!.specMismatchCount);
         writeStageResult(directory, options.funcName, finalRows, stage, modelRequests, specOracleUsed, specMismatch!, testFocus);
         writeBatchRecords(directory, options.filePath, options.funcName, roleEvents, { terminal: stage.terminal, reasonCode: stage.reasonCode,
-            specMismatchCount: specMismatch!.specMismatchCount, diagnostic: stage.mutation?.diagnostic, caseTableResult: {
+            specMismatchCount: specMismatch!.specMismatchCount, qualityAssessment: stage.qualityAssessment, diagnostic: stage.mutation?.diagnostic, caseTableResult: {
                 mutationScore: stage.mutation?.score ?? null, lineCoveragePercent: stage.coverage?.available ? stage.coverage.linePercent : null,
                 coverageReasonCode: stage.coverage?.reasonCode ?? null, testPassedRows: finalRows.filter(row => row.status === 'test-passed').length,
                 totalRows: finalRows.length, needsReviewCount: specMismatch!.needsReviewCount } });
@@ -428,12 +437,13 @@ function postResultCard(options: CaseTablePipelineOptions, directory: string, ro
         totalRows: rows.length, specMismatch,
         ...(mismatches.length || needsReview.length ? { specMismatchDetails: { mismatches, needsReview } } : {}) };
     options.postMessage({ command: 'updateOutcome', ...identity, reportPath: path.join(directory, 'final_report.md'),
-        outcome: { label: stage.terminal === 'usable' ? 'v2 usable' : 'v2 failed', kind: stage.terminal === 'usable' ? 'executed' : 'failed' }, caseTable });
+        outcome: { label: `v2 ${stage.terminal}`, kind: stage.terminal === 'quality-passed' ? 'passed' : stage.terminal === 'usable' ? 'executed' : 'failed' }, caseTable });
 }
 
 /** Minimal records the batch journal reads (function_knowledge, run_manifest, role_events) for a v2 target. */
 interface BatchRecord {
-    terminal: 'usable' | 'failed';
+    terminal: 'usable' | 'quality-passed' | 'failed';
+    qualityAssessment?: CaseTableQualityAssessment;
     reasonCode: string;
     specMismatchCount: number;
     diagnostic?: unknown;
@@ -454,6 +464,7 @@ function writeBatchRecords(directory: string, file: string, target: string,
         terminalStatus: record.terminal, ...(record.terminal === 'failed' ? {
             failureCategory: record.failure?.category ?? 'validation', failureStage: record.failure?.stage ?? 'case-table',
             reasonCode: record.reasonCode, ...(record.failure ? { failure: record.failure.message, diagnostic: record.failure.diagnostic } : {}) } : {}),
+        ...(record.qualityAssessment ? { qualityContractVersion: 'case-table-quality-v1', qualityAssessment: record.qualityAssessment } : {}),
         specMismatchCount: record.specMismatchCount, caseTableResult: record.caseTableResult }, null, 2) + '\n', 'utf8');
     const time = new Date().toISOString();
     const diagnostic = record.failure?.diagnostic ?? record.diagnostic;
@@ -469,6 +480,7 @@ function writeStageResult(directory: string, target: string, rows: CaseRow[], st
     const run = stage.mutation?.run;
     const summary = {
         version: 'case-table-result-v1', target, terminal: stage.terminal, reasonCode: stage.reasonCode,
+        ...(stage.qualityAssessment ? { qualityAssessment: stage.qualityAssessment } : {}),
         testFocus,
         ...((diagnostic ?? stage.mutation?.diagnostic) ? { diagnostic: diagnostic ?? stage.mutation?.diagnostic } : {}),
         rows: { total: rows.length, invalid: count('invalid'), captureFailed: count('capture-failed'),

@@ -138,7 +138,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
-| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1、2 完成並通過指定驗證；階段 3～4 未開始 | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Codex |
+| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1、2 完成（85248be／9221a1f）；階段 3 實作與核心回歸完成，完整驗證中；階段 4 未開始 | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
@@ -167,7 +167,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 - package.json 只新增 caseTableReview（13 行）；package.nls*.json 只加三個描述鍵，各 +4/-1（末項補逗號），其餘主線內容與值不變。新設定位於進階設定，僅 v2 顯示；demo 與既有 qualityAnalyst 相同，均保留使用者值，不另寫入。CaseRow 嚴格讀取及 every-optional-field 往返同時加入 reviewFlags。
 - Reviewer 新增列走原驗證／setup 守門／capture／規格預測／正式組裝；可疑標記寫回列與 final_report，不阻擋 usable。格式錯誤每行最多補正一次。提示詞只附加「待審（PR #9）」原文，既有已核准段落不變；使用者核准前不得用於實驗室。
 - **Golden harness 例外明列**：原四情境 bmi、bmi-boundary-first、bmi-quality-analyst、database 明確 caseTableReview=off；Quality Analyst 原設定不變。另保留開啟 Reviewer 的 bmi-case-table-review 新快照。其他非 Reviewer 的固定回覆測試明確 off，以隔離其既有測試主題；產品預設 auto，新 Reviewer 整合測試使用預設啟用路徑。
-- [x] 階段 2 指定驗證通過；提交 subject：`feat(pr17): port case-table review / 移植案例表審查`，精確 hash 見本分支 git log（下一階段補記）。[ ] 階段 3 高品質層；[ ] 階段 4 移植 #14 與補兩案例。
+- [x] 階段 2 指定驗證通過；提交 `9221a1f`；相對 lane_edition 為 39 files changed, 764 insertions(+), 32 deletions(-)，完整內容見 log/pr17-s2-diff-stat-windows.log。
 
 | 指令（全部 Windows 原生，非 VM） | 階段 2 結果 | log/ |
 | --- | --- | --- |
@@ -180,7 +180,24 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | npm run test:golden | v1 11/11、v2 5/5；兩個 UPDATE 旗標均 0 | pr17-s2-golden-windows.log |
 
 **Golden 差異逐項**：2581ec6 的既有快照零差異；只新增 bmi-case-table-review.json，內容與 e90c1e5 的原始 fixture 相同，記錄 Reviewer 新增列經實際 capture／測試／突變後為 usable。四個舊情境使用前述明列的 off 例外；QA 開啟情境仍開啟。這些是固定回覆回歸，不是真實模型驗收。
-- 下一步：完成階段 2 指定驗證、提交後，才新增階段 3 的 v2 quality-passed。若額度不足，保留可續接驗證日誌與 WIP commit，不開始後續階段。
+- [x] 階段 3 實作：caseTableQuality.ts 只對既有 usable 加入已核准的五條件；直接讀 standard 的 lineThreshold／mutationThreshold，用完整行與突變計數比較，不以四捨五入百分比放行。分支證據現有 coverage_read／assessTargetCoverageEvidence 已提供，未觸發缺資料停止條件。Reviewer off、補正未完成、新增列未處理完或有 reviewFlags 均不可升級。新增列已完成規格不符／需人工確認處置者屬已處理；沿用原規格處置，不增加品質條件。
+- 新證據檔 q.json 沿 artifactNames.ts 短名，保留本次來源／正式測試 hash、完整突變量測與審查完成資料。批次用 v2 專用核驗重算，並核對原生量測、目前來源／測試、案例列、review.json 與成功 Reviewer 事件；v1 的 evaluateQuality／verifyQualityPass 不變。只有已核驗的 v2 quality-passed 參與新增完整通過計數，v1 既有路徑與計數不變。
+- 結果卡片與 v2_result／function_knowledge 記錄 quality-passed；runRowStage 註解說明品質升級由上層完成。eval_aggregate 原已接受 quality-passed，保留此邏輯並新增 v2 對照回歸（qualityPassedRate=1/2，usableRate=2/2）。Reviewer 格式補正是否完成另行保存，不增加請求／修訂次數，不改提示詞。
+- 核心回歸（Windows 原生）：Node 20/20、Python 10/10。含指定五單元案例及額外分支／未處理新增列／未完成審查／failed 基線；真實隔離流程驗證正向品質、off、卡片、批次，以及新增未處理標記後撤銷品質認證。不是模型真實驗收。
+- bmi-case-table-review 的原量測為 killed=56／selected=96（58.33%），依 standard 門檻仍是 usable；harness 加入缺口斷言，不改輸入／預期值或 JSON 快照。既有 v1／v2 golden 均未修改。
+- [x] 階段 3 指定驗證通過：
+
+| 指令（全部 Windows 原生，非 VM） | 階段 3 結果 | log/ |
+| --- | --- | --- |
+| npm run check-types；npm run lint | 各 exit 0；最終 fast 亦通過 | pr17-s3-types-windows.log、pr17-s3-lint-windows.log |
+| npm run test:related -- --node caseTableQuality --node caseTableReviewIntegration --node batchJournal --python test_eval_aggregate | Node 20/20、Python 10/10 | pr17-s3-related-windows.log |
+| npm run test:related -- --node caseTableQuality --node caseReportsIntegration --node sidebarDashboardReplay | 最終卡片與處置邊界補強後 22/22 | pr17-s3-card-related-final-windows.log |
+| npm run test:fast | Node 818/818、Python 54/54、Webview 通過 | pr17-s3-fast-final-windows.log |
+| npm run test:python | 974 項，failures=0、errors=0、skipped=4；歷史秘密掃描通過，exit 0 | pr17-s3-python-windows.log |
+| npm run test:webview；npm run compile | 各 exit 0 | pr17-s3-webview-final-windows.log、pr17-s3-compile-windows.log |
+| npm run test:golden；最終 v2 golden 重驗 | v1 11/11、v2 5/5；兩個 UPDATE 旗標均 0 | pr17-s3-golden-windows.log、pr17-s3-v2-golden-final-windows.log |
+
+- [ ] 階段 4 移植 #14 與 hist_09／hist_10；[ ] 最終背景 integration 逐案比對既有 14 失敗。
 
 ## 2. PR #16 短路徑與環境預檢（歷史）
 
@@ -1108,6 +1125,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-16（Codex／PR #17 階段 3，Windows 原生）：階段 2 提交 9221a1f；新增 v2 品質 gate 與獨立批次證據核驗，核心 Node 20／Python 10 通過，完整檢查進行中；未修改 v1 政策、預算、提示詞、預設值或快照。
 
 - 2026-11-16（Codex／PR #17 階段 2，Windows 原生）：階段 1 85248be 已通過全部指定驗證；移植 Reviewer，保留六區側欄／thinking／短報告與失敗狀態，套件設定取消來源 commit 的重新排版。階段 2 相關 63/63、補強回歸 10/10、fast 818/53、完整 Python 973（略過 4）、golden 11/5 與其餘指定檢查通過；未開始高品質層或歷史案例移植。
 
