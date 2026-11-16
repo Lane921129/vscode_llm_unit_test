@@ -1,3 +1,4 @@
+import { REQUIREMENTS_COVERAGE_JSON, REQUIREMENTS_COVERAGE_MD, DESIGN_FINDINGS_MD } from './artifactNames';
 /**
  * v2 case-table pipeline entry (llmUnitTest.pipelineVersion = "v2-case-table").
  *
@@ -17,7 +18,8 @@ import { RejectedCaseLine } from './caseRowParser';
 import { applyCaseRowValidation, buildCaseRowValidationRequest } from './caseRowValidation';
 import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
 import { writeCaseTable } from './caseTableStore';
-import { RequirementEntry, parseRequirements } from './requirements';
+import { RequirementEntry, parseRequirements, writeRequirementsCoverage } from './requirements';
+import { writeDesignFindings } from './designFindings';
 import { CASE_SCENARIO_ROW_LIMIT, getCaseRowCorrectionPrompt, getCaseScenarioPrompt, parseCaseRows } from '../../roles/semanticAnalyzer';
 import { RowStageResult, RowStageOptions, rowTestContext, runRowStage } from './runRowStage';
 import { collectSpecSources, hasSpecSource } from './specSources';
@@ -329,6 +331,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
                                 fileSuffix: '_followup',
                                 initialPassing: stage.passing,
                                 initialSetups: stage.setups,
+                                initialSurvivorRows: stage.survivorRows,
                                 ...(decideExpected ? { decideExpected } : {})
                             });
                             finalRows = stage.rows;
@@ -359,6 +362,16 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
                 coverageReasonCode: stage.coverage?.reasonCode ?? null, testPassedRows: finalRows.filter(row => row.status === 'test-passed').length,
                 totalRows: finalRows.length, needsReviewCount: specMismatch!.needsReviewCount } });
     }
+    const requirementsCoverage = writeRequirementsCoverage(directory, options.funcName, requirements, finalRows,
+        Boolean(options.requirementsFile?.trim()));
+    const qualityAnalystEnabled = typeof options.qualityAnalyst === 'boolean' ? options.qualityAnalyst
+        : readQualityAnalystSetting(options.qualityAnalyst) !== 'off';
+    const findings = qualityAnalystEnabled ? writeDesignFindings(directory, options.funcName, stage?.survivorRows ?? [], finalRows) : undefined;
+    fs.appendFileSync(path.join(directory, 'final_report.md'), '\n## 需求涵蓋 / Requirements coverage\n\n'
+        + (requirementsCoverage.hasRequirementsFile ? `${requirementsCoverage.covered}/${requirementsCoverage.total} requirements have a passing row.\n`
+            : '無需求檔 / No requirements file\n')
+        + `See ${REQUIREMENTS_COVERAGE_MD} and ${REQUIREMENTS_COVERAGE_JSON}.\n`
+        + (findings ? `\n## 設計疑點 / Design findings\n\n${findings.length} possible redundant conditions or dead-code findings; see ${DESIGN_FINDINGS_MD}.\n` : ''), 'utf8');
     const valid = validBeforeRows;
     options.log(`[v2] case_table.json: ${valid} valid rows, ${outcome.rows.length - valid} invalid rows, `
         + `${rejected.filter(item => item.source === 'scenario' && !item.corrected).length} rejected lines, `

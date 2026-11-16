@@ -334,6 +334,10 @@ test('batch_failure_summary.json and .md separate quality-passed from usable, co
         fs.writeFileSync(path.join(failDir, 'final_report.md'), '# Failed');
         batch.begin(2); batch.attach(2, failDir); batch.refresh(2);
 
+        fs.writeFileSync(path.join(usableDir, 'req.json'), JSON.stringify({
+            version: 'requirements-coverage-v1', hasRequirementsFile: true, total: 2, covered: 1 }));
+        fs.writeFileSync(path.join(failDir, 'req.json'), JSON.stringify({
+            version: 'requirements-coverage-v1', hasRequirementsFile: false, total: 0, covered: 0 }));
         batch.finish('completed');
 
         const summaryJson = JSON.parse(fs.readFileSync(path.join(batchDir, 'batch_failure_summary.json'), 'utf8'));
@@ -343,6 +347,8 @@ test('batch_failure_summary.json and .md separate quality-passed from usable, co
         assert.equal(summaryJson.expectedTargets, 4);
         assert.equal(summaryJson.totalCount, 4);
         assert.equal(summaryJson.specMismatchCount, 0);
+        assert.deepEqual(summaryJson.requirementsCoverage, { targets: 1, total: 2, covered: 1, rate: 0.5 });
+        assert.match(summaryMd, /需求涵蓋率/);
         assert.deepEqual(summaryJson.tierCounts, {
             'quality-passed': 1,
             usable: 1,

@@ -121,6 +121,9 @@ test('pipeline discards indistinguishable survivor row with survivor-row-indisti
         assert.ok(qualityRows.length > 0, 'Quality Analyst must have proposed at least one row');
         assert.ok(qualityRows.some(r => r.status === 'capture-failed' && r.reason === 'survivor-row-indistinguishable'),
             'Indistinguishable row must be marked capture-failed with reason survivor-row-indistinguishable');
+        const findings = JSON.parse(fs.readFileSync(path.join(result.directory, 'design.json'), 'utf8')).findings;
+        assert.ok(findings.length > 0);
+        assert.ok(findings.every((finding: any) => finding.line > 0 && finding.original && finding.mutated && finding.rowIds.length > 0));
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }

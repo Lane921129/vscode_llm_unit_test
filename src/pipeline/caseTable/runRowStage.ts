@@ -17,6 +17,7 @@ import { getRowSetupPrompt, parseRowSetupResponse } from '../../roles/unittestWr
 import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../../roles/bugFixer';
 import { getSurvivorRowPrompt, parseSurvivorRow } from '../../roles/qualityAnalyst';
 import { currentStopPolicy } from '../stopPolicy';
+import { SurvivorRowEvidence } from './designFindings';
 
 export type RowStageTerminal = 'usable' | 'failed';
 import { rowTestModule, candidateTestModule, mergedTestModule } from './artifactNames';
@@ -36,6 +37,7 @@ export interface RowStageOptions {
     testFocus?: TestFocus;
     /** Preserved passing row methods when running supplementary rows. */
     initialPassing?: ReadonlyMap<string, string>;
+    initialSurvivorRows?: SurvivorRowEvidence[];
     initialSetups?: ReadonlyMap<string, string>;
     /** PR #13b: file suffix for followup/supplementary rounds (e.g. '_followup'). */
     fileSuffix?: string;
@@ -44,6 +46,7 @@ export interface RowStageOptions {
 }
 
 export interface RowStageResult {
+    survivorRows?: SurvivorRowEvidence[];
     rows: CaseRow[];
     terminal: RowStageTerminal;
     reasonCode: string;
@@ -79,6 +82,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
     const rows = [...options.rows];
     const passing = new Map<string, string>(options.initialPassing);
     const setups = new Map<string, string>(options.initialSetups);
+    const survivorRows: SurvivorRowEvidence[] = [...(options.initialSurvivorRows ?? [])];
     for (let index = 0; index < rows.length; index++) {
         let row = rows[index];
         if (row.status !== 'proposed') { continue; }
@@ -198,6 +202,9 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
             }
             let row = candidateRow;
             rows.push(row);
+            survivorRows.push({ mutantId: survivor.id, rowId: row.id, line: survivor.line,
+                original: survivor.codeChange?.before ?? facts.source.split(/\r?\n/)[survivor.line - 1] ?? String(survivor.from),
+                mutated: survivor.codeChange?.after ?? String(survivor.to) });
             const rowIndex = rows.length - 1;
 
             let setup: string | undefined;
@@ -306,6 +313,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
         terminal: 'usable',
         reasonCode: 'usable',
         testFile: path.join(runtime.artifacts, finalTestFileName),
+        survivorRows,
         mutation: currentMutation,
         coverage: currentCoverage,
         passingMethods: passing.size,

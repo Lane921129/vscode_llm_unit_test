@@ -28,6 +28,8 @@
 
 ### 使用者已確認的決策（不需再問）
 
+**2026-11-16 使用者指定 PR #17**：從 `lane_edition=2581ec6` 開 `pr/17-port-11-9-14`，依序移植 #11（87c18ea）、#9（e90c1e5）、新增 v2 quality-passed、移植 #14（b9f045e／9b65391）並補 hist_09／hist_10。不合併、不 push、不碰 main；每階段一個中英雙語 commit 並先完成指定驗證。報告沿 #16 短名稱與路徑預檢；保留 #15／#15b／#16 行為。#9 設定整合六區側欄與 demo，套件 JSON 只加設定、不重新排版。quality-passed 重用 standard policy：usable、完整目標行／分支、突變門檻、審查完成且無未處理標記；審查 off 不能升級。既有 hist_01～08 不動，09／10 witness 必須真實跑兩版。計畫文件禁止修改；既有 golden 差異、新增 integration 失敗、缺分支證據或需要動 v1 品質判定即停止。舊 v2 golden 只有階段 2 明確允許 caseTableReview=off，另保留開啟 Reviewer 的新情境。固定回覆測試不得稱真實模型驗收。
+
 **2026-11-15 使用者指定 PR #16**：從 `lane_edition=origin/lane_edition=1cdae96` 開 `pr/16-short-paths`，不合併、不 push。只縮短 v2 執行產物名稱並保留舊結果讀取；v1 輸出資料夾／檔名不變。批次加入路徑估算與 60 字暫存餘裕，Windows 超過 250 字在開始前停止，其他平台只記錄。對照組在任何模型請求前檢查直譯器、coverage、所選突變引擎與路徑；失敗不建立逐目標失敗 manifest。可只為檔名差異重錄 v2 golden，但必須逐項證明其餘內容一致；v1 golden 不得改。架構計畫文件由監督維護，本輪禁止修改；預設值、提示詞、判定均不改，完成後停止。
 
 **2026-11-14 使用者指定 PR #15b**：從 `lane_edition=origin/lane_edition=b1963eb` 開 `pr/15b-runner-diagnostics`，不合併、不 push。C 類：runner 診斷保存 operation、rowId、exitCode、signal、timedOut、經既有 v1 去密規則處理的 stdout／stderr 尾端最多 1500 字與 runner.json 存在狀態。A 類：v2 每個 model-request 記錄實際 thinking／context／output 設定；demo 明確套用 thinking=disabled 並更新中英文確認框、標籤與選項。全域預設值、提示詞、預算、重試、通過標準不變；本輪完成後停止。
@@ -127,7 +129,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **完成：使用者驗收（11/09 22:15），已合併主線（`8126f94`）** | `lane_edition` | 2026-11-09 監督 |
 | 9 | Reviewer 改審案例表 | 已實作待驗收；程式未帶入 PR #15 | `pr/09-case-table-review`（e90c1e5） | 2026-11-12 Codex |
 | 10 | Quality Analyst 存活突變轉案例列 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
-| 11 | 需求涵蓋表與設計疑點 | 已實作待驗收；程式未帶入 PR #15 | `pr/11-requirements-coverage`（87c18ea） | 2026-11-12 Codex |
+| 11 | 需求涵蓋表與設計疑點 | PR #17 階段 1 已移植，待四階段一次驗收 | `pr/11-requirements-coverage`（87c18ea） | 2026-11-12 Codex |
 | 12a | 評估紀錄與一般 LLM 對照組 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 12b | 埋 bug 評估 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 13 | 側欄精簡與進階設定收合 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
@@ -135,13 +137,36 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
-| 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 完成待驗收：Windows 指定範圍通過；完整 Python 一項 Trace timing 失敗，單案與模組重跑通過 | `pr/16-short-paths`（程式 HEAD 1695796；起點 1cdae96） | 2026-11-15 Codex |
+| 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
+| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1 已完成並通過指定驗證；階段 2～4 未開始 | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #16 短路徑與環境預檢（最新）
+## 2. PR #17 移植與 v2 高品質層（最新）
+
+- Agent：Codex；本機 Windows 原生，非 VM。起點 2581ec6，開工時工作區乾淨；未同步不同的 origin/lane_edition，未合併／push。CodeGraph 可用；本輪無 AOCI MCP，待辦見第 4 節。
+- [x] 階段 1 實作：移植 87c18ea 的需求涵蓋與設計疑點。runRowStage 衝突保留主線 initialPassing／initialSetups、短檔名與 followup 行為，再加入 survivorRows；補問傳遞前輪 survivorRows。HANDOFF／CHANGELOG 保留主線紀錄，另加本輪紀錄；計畫文件改動全部丟棄。
+- 報告命名集中 artifactNames.ts：req.md／req.json、design.md／design.json；均未超過 #16 的最長 v2 產物界限，因此路徑預檢公式與上限不需變更。需求檔存在時計算逐 R-id 對應列、狀態與至少一列通過；沒有需求檔時空表，不影響 usable／既有測試內容。Quality Analyst off 不寫設計疑點；疑點僅為所有同突變提案均不可區分的觀察，不宣稱等價／死碼已證明。
+- [x] 階段 1 指定驗證通過；本階段提交 subject 為 `feat(pr17): port requirements and design reports / 移植需求涵蓋與設計疑點報告`，精確 hash 見本分支 `git log -1`（後續階段補記其父提交）。
+
+| 指令（全部 Windows 原生，非 VM） | 階段 1 結果 | log/ |
+| --- | --- | --- |
+| npm run check-types | exit 0；初輪新增測試 dynamic import 缺副檔名已修正，最終與 fast 均通過 | pr17-s1-types-final-windows.log |
+| npm run lint | exit 0；fast／compile 亦通過 | pr17-s1-lint-windows.log |
+| npm run test:related -- --node caseReportsIntegration --node survivorRow --node batchJournal --node shortOutputPaths --node caseTableTestFocus | 33/33；含批次、真實雙版本 capture、補問與短路徑／同名保護 | pr17-s1-related-final-windows.log |
+| npm run test:fast | Node 817/817、Python 53/53、Webview 通過 | pr17-s1-fast-windows.log |
+| npm run test:python | 973 項，failures=0、errors=0、skipped=4，exit 0；歷史秘密掃描通過 | pr17-s1-python-windows.log |
+| npm run test:webview | exit 0 | pr17-s1-webview-windows.log |
+| npm run test:golden | v1 11/11、v2 4/4；UPDATE_GOLDEN／UPDATE_CASE_TABLE_GOLDEN=0 | pr17-s1-golden-windows.log |
+| npm run compile | exit 0 | pr17-s1-compile-windows.log |
+
+**Golden 差異：無。** 2581ec6 的既有快照均未修改；bmi-quality-analyst 仍開啟 Quality Analyst。固定回覆加真實隔離 Python／coverage／mutation 回歸，不是真實模型驗收。完整 test:integration 依使用者要求待四階段完成後背景執行，目前尚未跑，不能宣稱已比對既有 14 失敗。
+- [ ] 階段 2 移植 #9；[ ] 階段 3 高品質層；[ ] 階段 4 移植 #14 與補兩案例。
+- 下一步：本階段提交後移植 e90c1e5，保留主線設定檔格式與六區側欄；demo 比照 qualityAnalyst 保留選擇。若額度不足，保留可續接驗證日誌與 WIP commit，不開始後續階段。
+
+## 2. PR #16 短路徑與環境預檢（歷史）
 
 - Agent：Codex，Windows 原生；CodeGraph MCP 可用，無 AOCI MCP，未假裝呼叫，維護待辦見第 4 節。分支從 1cdae96 建立，保留原有未追蹤 `Claude outputs/` 與舊重構計畫；未修改架構計畫、`.codex/`、`.aoci/`。
 - [x] v2 命名集中於 `artifactNames.ts`：`v2_runs→r`、`row_c3_0_test→c3_0`、補問後綴 `_followup→f`、候選 `test_candidate_c3→k_c3`、合併 `test_case_table→t`／補問 `tf`、coverage `test_case_table_coverage_<id>→g_<id>`；尾碼改 `.inv.json`／`.iso.jsonl`／`.res.json`。`runTestFile` 的 `flag: 'wx'` 保留。
@@ -959,6 +984,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-16（Codex／PR #17）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後，依 `git diff 2581ec6..pr/17-port-11-9-14 --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
+
 - 2026-11-15（Codex／PR #16）：本輪無 AOCI MCP，請具工具能力的 agent 在穩定後維護 `git diff 1cdae96..pr/16-short-paths --name-only` 所列受管理檔；未改 `.aoci/`、`.codex/`。
 
 - 2026-11-14（Codex／PR #15b）：無 AOCI MCP，請具工具能力的 agent 維護 `git diff b1963eb..pr/15b-runner-diagnostics --name-only` 所列受管理檔。本輪不改 `.codex/`、`.aoci/`。
@@ -1065,6 +1092,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-16（Codex／PR #17 階段 1，Windows 原生）：核對乾淨基底 2581ec6，無 AOCI、使用 CodeGraph；移植 #11 並解決補問狀態衝突，新增短報告名稱與路徑界限回歸。驗證與 commit 狀態以第 2 節最新紀錄及本分支 git log 為準。
 
 | 時間 | Agent | PR / 步驟 | 結果 | Commit |
 | --- | --- | --- | --- | --- |

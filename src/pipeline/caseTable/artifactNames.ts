@@ -10,3 +10,9 @@ export const rowTestModule = (id: string, attempt: number, suffix = ''): string 
 export const candidateTestModule = (id: string, suffix = ''): string => `k_${id.toLowerCase()}${round(suffix)}`;
 export const mergedTestModule = (suffix = ''): string => `t${round(suffix)}`;
 export const coverageTestModule = (id: string): string => `g_${id}`;
+
+// Target-level reports remain shorter than the longest v2 artifact used by preflight.
+export const REQUIREMENTS_COVERAGE_JSON = 'req.json';
+export const REQUIREMENTS_COVERAGE_MD = 'req.md';
+export const DESIGN_FINDINGS_JSON = 'design.json';
+export const DESIGN_FINDINGS_MD = 'design.md';

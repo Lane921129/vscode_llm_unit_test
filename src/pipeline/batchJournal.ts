@@ -1,3 +1,4 @@
+import { REQUIREMENTS_COVERAGE_JSON } from './caseTable/artifactNames';
 import { resultDataDirectory, resultArtifactPath } from './resultLayout';
 import { localize, t } from '../i18n/core';
 import * as fs from 'node:fs';
@@ -47,6 +48,7 @@ export interface BatchFailureSummary {
     finishedTargets: number;
     totalCount: number;
     specMismatchCount: number;
+    requirementsCoverage?: { targets: number; total: number; covered: number; rate: number | null };
     tierCounts: Record<OutcomeTier, number>;
     byStageAndReason: StageReasonSummary[];
     roleUsability: Record<string, RoleUsabilitySummary>;
@@ -702,6 +704,11 @@ export class BatchJournal {
             };
         }
 
+        const requirementReports = this.targets.map(target => ({ target,
+            coverage: readRequirementsCoverage(this.directory, target.reportDirectory) }))
+            .filter((item): item is { target: BatchTarget; coverage: { total: number; covered: number } } => item.coverage !== null);
+        const requirementsTotal = requirementReports.reduce((sum, item) => sum + item.coverage.total, 0);
+        const requirementsCovered = requirementReports.reduce((sum, item) => sum + item.coverage.covered, 0);
         const totalCount = Object.values(tierCounts).reduce((sum, count) => sum + count, 0);
         const failureSummary: BatchFailureSummary = {
             schemaVersion: 'batch-failure-summary-v1',
@@ -715,6 +722,9 @@ export class BatchJournal {
             tierCounts,
             byStageAndReason,
             roleUsability,
+            ...(requirementReports.length ? { requirementsCoverage: { targets: requirementReports.length,
+                total: requirementsTotal, covered: requirementsCovered,
+                rate: requirementsTotal ? requirementsCovered / requirementsTotal : null } } : {}),
             targets: summaryTargets
         };
 
@@ -760,6 +770,12 @@ export class BatchJournal {
                 : ['| — | 0 | 0 | 0 | 0 | 0 | N/A |']),
             ''
         ];
+        if (requirementReports.length) {
+            mdLines.push('## 需求涵蓋率 / Requirements coverage', '',
+                '| Target | 需求涵蓋率 |', '| --- | --- |',
+                ...requirementReports.map(item => `| ${safe(item.target.file)}:${safe(item.target.target)} | ${item.coverage.covered}/${item.coverage.total} |`),
+                `| Total | ${requirementsCovered}/${requirementsTotal} |`, '');
+        }
         fs.writeFileSync(path.join(this.directory, 'batch_failure_summary.md'), mdLines.join('\n'), 'utf8');
     }
 }
@@ -771,4 +787,15 @@ function readSpecMismatchCount(batchDirectory: string, reportDirectory: string |
         const knowledge = JSON.parse(fs.readFileSync(path.join(resultDataDirectory(path.join(batchDirectory, reportDirectory)), 'function_knowledge.json'), 'utf8'));
         return Number.isSafeInteger(knowledge.specMismatchCount) && knowledge.specMismatchCount >= 0 ? knowledge.specMismatchCount : 0;
     } catch { return 0; }
+}
+
+function readRequirementsCoverage(batchDirectory: string, reportDirectory: string | undefined): { total: number; covered: number } | null {
+    if (!reportDirectory) { return null; }
+    try {
+        const report = JSON.parse(fs.readFileSync(path.join(resultDataDirectory(path.join(batchDirectory, reportDirectory)), REQUIREMENTS_COVERAGE_JSON), 'utf8'));
+        return report.version === 'requirements-coverage-v1' && report.hasRequirementsFile === true
+            && Number.isSafeInteger(report.total) && Number.isSafeInteger(report.covered)
+            && report.total >= 0 && report.covered >= 0 && report.covered <= report.total
+            ? { total: report.total, covered: report.covered } : null;
+    } catch { return null; }
 }
