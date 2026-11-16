@@ -134,11 +134,11 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 12b | 埋 bug 評估 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 13 | 側欄精簡與進階設定收合 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 13b | 側欄重排、demo 與 v2 測試重點 | 已驗收合併主線（b1963eb） | `lane_edition` | 2026-11-14 核對 Git |
-| 14 | 真實歷史 bug 候選（15 項，未執行 witness） | 已產出待挑選；程式未帶入 PR #15 | `pr/14-historical-bugs`（9b65391） | 2026-11-12 Codex |
+| 14 | 真實歷史 bug 候選與 10 個已轉換案例 | PR #17 階段 4 已移植並補齊 hist_09／hist_10，待四階段一次驗收 | `pr/14-historical-bugs`（9b65391） | 2026-11-16 Antigravity |
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
-| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1、2 完成（85248be／9221a1f）；階段 3 實作與核心回歸完成，完整驗證中；階段 4 未開始 | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Codex |
+| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1～4 實作與驗證完成（85248be／9221a1f／42a1072＋階段 4） | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Antigravity |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
@@ -146,7 +146,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 
 ## 2. PR #17 移植與 v2 高品質層（最新）
 
-- Agent：Codex；本機 Windows 原生，非 VM。起點 2581ec6，開工時工作區乾淨；未同步不同的 origin/lane_edition，未合併／push。CodeGraph 可用；本輪無 AOCI MCP，待辦見第 4 節。
+- Agent：Codex（階段 1～3）、Antigravity（階段 3 最終驗證收尾、階段 4 與整合測試）；本機 Windows 原生，非 VM。起點 2581ec6，開工時工作區乾淨；未同步不同的 origin/lane_edition，未合併／push。本輪無 AOCI MCP，待辦見第 4 節。
 - [x] 階段 1 實作：移植 87c18ea 的需求涵蓋與設計疑點。runRowStage 衝突保留主線 initialPassing／initialSetups、短檔名與 followup 行為，再加入 survivorRows；補問傳遞前輪 survivorRows。HANDOFF／CHANGELOG 保留主線紀錄，另加本輪紀錄；計畫文件改動全部丟棄。
 - 報告命名集中 artifactNames.ts：req.md／req.json、design.md／design.json；均未超過 #16 的最長 v2 產物界限，因此路徑預檢公式與上限不需變更。需求檔存在時計算逐 R-id 對應列、狀態與至少一列通過；沒有需求檔時空表，不影響 usable／既有測試內容。Quality Analyst off 不寫設計疑點；疑點僅為所有同突變提案均不可區分的觀察，不宣稱等價／死碼已證明。
 - [x] 階段 1 指定驗證通過；提交 `85248be`；相對 lane_edition 的 diff --stat 為 12 files changed, 243 insertions(+), 4 deletions(-)，完整內容見 log/pr17-s1-diff-stat-windows.log。
@@ -185,7 +185,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 - 結果卡片與 v2_result／function_knowledge 記錄 quality-passed；runRowStage 註解說明品質升級由上層完成。eval_aggregate 原已接受 quality-passed，保留此邏輯並新增 v2 對照回歸（qualityPassedRate=1/2，usableRate=2/2）。Reviewer 格式補正是否完成另行保存，不增加請求／修訂次數，不改提示詞。
 - 核心回歸（Windows 原生）：Node 20/20、Python 10/10。含指定五單元案例及額外分支／未處理新增列／未完成審查／failed 基線；真實隔離流程驗證正向品質、off、卡片、批次，以及新增未處理標記後撤銷品質認證。不是模型真實驗收。
 - bmi-case-table-review 的原量測為 killed=56／selected=96（58.33%），依 standard 門檻仍是 usable；harness 加入缺口斷言，不改輸入／預期值或 JSON 快照。既有 v1／v2 golden 均未修改。
-- [x] 階段 3 指定驗證通過：
+- [x] 階段 3 指定驗證通過，提交 `42a1072`；相對 lane_edition 為 44 files changed, 1080 insertions(+), 43 deletions(-)，完整內容見 log/pr17-s3-diff-stat-windows.log。
 
 | 指令（全部 Windows 原生，非 VM） | 階段 3 結果 | log/ |
 | --- | --- | --- |
@@ -197,7 +197,20 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | npm run test:webview；npm run compile | 各 exit 0 | pr17-s3-webview-final-windows.log、pr17-s3-compile-windows.log |
 | npm run test:golden；最終 v2 golden 重驗 | v1 11/11、v2 5/5；兩個 UPDATE 旗標均 0 | pr17-s3-golden-windows.log、pr17-s3-v2-golden-final-windows.log |
 
-- [ ] 階段 4 移植 #14 與 hist_09／hist_10；[ ] 最終背景 integration 逐案比對既有 14 失敗。
+- [x] 階段 4 實作：移植 b9f045e／9b65391（`mine_bug_fix_commits.py`、`test_mine_bug_fix_commits.py`、`candidates.json`、`candidates.md`、`licenses/`、測試清單更新）。衝突解法：手動合併 `eval/historical_bugs/README.md`，保留 2581ec6 的已轉換案例說明與執行指令，並整合挖掘工具、重現指令與候選／授權說明；`CHANGELOG.zh-TW.md` 與 `docs/HANDOFF.md` 保留本輪進度與歷史紀錄；既有 `hist_01`～`hist_08` 的 `meta.json` 與 `patch` 零修改。
+- 新增 `hist_09_touni_bytearray`（H01，`8804dd9`，`touni(bytearray(b"abc"))`：乾淨版回傳 `'abc'`，還原修復後回傳 `"bytearray(b'abc')"`）與 `hist_10_tob_none_typeerror`（H05，`06cc47b`，`tob(None)`：乾淨版回傳 `b''`，還原修復後拋 `TypeError: string argument without an encoding`）。兩者皆於現行 `eval/eval_screening/bottle_utils.py` 實跑兩版取得 witness，並補入 `test_eval_seeded_bugs.py` 的 10 案例 `prepare` 與契約驗證。
+- [x] 階段 4 指定驗證通過：
+
+| 指令（全部 Windows 原生，非 VM） | 階段 4 結果 | log/ |
+| --- | --- | --- |
+| npm run check-types；npm run lint | 各 exit 0 | pr17-s4-types-windows.log、pr17-s4-lint-windows.log |
+| npm run test:related -- --node verificationRunner --python test_mine_bug_fix_commits --python test_eval_seeded_bugs | Node 16/16、Python 14/14（含 10 份歷史 bug prepare 驗證） | pr17-s4-related-windows.log |
+| npm run test:fast | Node 818/818、Python 54/54、Webview 通過 | pr17-s4-fast-windows.log |
+| npm run test:python | 979 項，failures=0、errors=0、skipped=4；歷史秘密掃描通過，exit 0 | pr17-s4-python-windows.log |
+| npm run test:webview；npm run compile | 各 exit 0 | pr17-s4-webview-windows.log、pr17-s4-compile-windows.log |
+| npm run test:golden | v1 11/11、v2 5/5；兩個 UPDATE 旗標均 0 | pr17-s4-golden-windows.log |
+
+- [ ] 最終背景 `npm run test:integration` 逐案比對既有 14 失敗（執行中）。
 
 ## 2. PR #16 短路徑與環境預檢（歷史）
 
@@ -255,7 +268,6 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 以使用者提供的實驗室根目錄及 26 目標清單、批次名 eval_screening_2026_11_14_xx_xx 計算，v2 縮名後估算 247 字（含 60 字餘裕），C:/r 為 179 字；兩者都在 250 字以內。此為具體命名長度估算，不宣稱已在實驗室執行；同分鐘重跑造成 __runN 後綴時會用實際新批次目錄重新估算。紀錄：`log/pr16-path-examples-windows.json`。過長路徑、250/251 邊界與無法建立的極長根目錄，均有 Windows 測試。
 
 本輪未跑完整 `test:integration`，不宣稱第 5 節既有 14 個失敗已修復。使用者在 `pr/16-short-paths` 驗收後，請於實驗室重跑 v2 與對照組，確認實際複製／突變暫存也可完成；對照組先以不存在的 --python 檢查中文預檢，再以備妥 coverage／mutatest 的直譯器執行。沒有新 B 類待決事項；本輪交接後停止，不合併、不 push。
-
 
 ---
 
@@ -1017,7 +1029,7 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
-- 2026-11-16（Codex／PR #17）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後，依 `git diff 2581ec6..pr/17-port-11-9-14 --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
+- 2026-11-16（Codex／Antigravity／PR #17）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後，依 `git diff 2581ec6..pr/17-port-11-9-14 --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
 
 - 2026-11-15（Codex／PR #16）：本輪無 AOCI MCP，請具工具能力的 agent 在穩定後維護 `git diff 1cdae96..pr/16-short-paths --name-only` 所列受管理檔；未改 `.aoci/`、`.codex/`。
 
@@ -1126,7 +1138,9 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 
 ## 6. 工作階段紀錄（最新的放最上面）
 
-- 2026-11-16（Codex／PR #17 階段 3，Windows 原生）：階段 2 提交 9221a1f；新增 v2 品質 gate 與獨立批次證據核驗，核心 Node 20／Python 10 通過，完整檢查進行中；未修改 v1 政策、預算、提示詞、預設值或快照。
+- 2026-11-16（Antigravity／PR #17 階段 4，Windows 原生）：階段 3 提交 `42a1072`；移植 #14（b9f045e／9b65391）、合併 `eval/historical_bugs/README.md`、新增 `hist_09_touni_bytearray` 與 `hist_10_tob_none_typeerror`（實跑兩版 witness 與 10 案例 `prepare` 驗證），階段 4 指定檢查全過（fast 818/54、Python 979 OK／4 skipped、golden 11/5 零差異）。
+
+- 2026-11-16（Codex／Antigravity／PR #17 階段 3，Windows 原生）：階段 2 提交 9221a1f；新增 v2 品質 gate 與獨立批次證據核驗，核心 Node 20／Python 10、最終卡片與邊界 22/22、fast 818/54、Python 974（略過 4）、golden 11/5 全過；提交 `42a1072`。未修改 v1 政策、預算、提示詞、預設值或快照。
 
 - 2026-11-16（Codex／PR #17 階段 2，Windows 原生）：階段 1 85248be 已通過全部指定驗證；移植 Reviewer，保留六區側欄／thinking／短報告與失敗狀態，套件設定取消來源 commit 的重新排版。階段 2 相關 63/63、補強回歸 10/10、fast 818/53、完整 Python 973（略過 4）、golden 11/5 與其餘指定檢查通過；未開始高品質層或歷史案例移植。
 
@@ -1139,6 +1153,9 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 | 2026-11-12 23:20 | Antigravity | fix(pr13b) | rowExecution 改回 flag: 'wx' 保護、覆蓋率補問輪次產生的測試檔與合併檔使用 _followup 後綴避免覆蓋既有檔、補 runTestFile 重複寫入拋 EEXIST 測試；caseTable.test.ts 補 testFocus 往返與格式驗證；check-types 0、lint 0、related 34/34 全過 | 最新 commit |
 | 2026-11-12 19:25 | Antigravity | PR #13b | 側欄六區重排、v1/v2 說明、套用 demo 設定、規格不符卡片面板、測試重點接進 v2（4 種策略＋prompt 一句＋未覆蓋分支補問＋突變 6 次嘗試）；check-types 0、lint 0、test:webview 通過、新測試 10/10、fast 817/52、v1 golden 11/11 零差異、v2 golden 4/4（含新 bmi-boundary-first） | 5ae34ac |
 | 2026-11-12 17:37 | Codex（GPT-6） | PR #15 | 從 5fc43b6 建分支；唯讀調查實驗室結果；setup 共用 AST 守門、v2 runner 例外報告與四項整合／兩項邊界回歸；Windows fast 817/52、Python 965 OK（4 skips）與歷史掃描、Node 新案 6/6、v1/v2 golden 11/3 全過且零差異 | `7b51079`（程式）；本筆 docs 收尾 |
+| 2026-11-12 11:26 | Codex（GPT-6） | PR #14／三 PR 收尾 | 唯讀歷史挖掘、實際 clone 兩個上游、15 項候選與未執行 witness 建議；Windows 型別／lint、Node 16/16、Python 4/4 通過；三分支依序疊加，無 merge／push；驗收四指令見最新第 2 節 | `b9f045e`（程式）；本筆 docs(pr14) 收尾，HEAD 見 git log |
+| 2026-11-12 11:11 | Codex（GPT-6） | PR #9 | 案例表 Reviewer、新增列實跑與規格預測、可疑標記、設定與側欄；Windows 型別／lint／Webview、相關 12/12、新 v2 golden 1/1 錄製與四情境比對通過；舊快照／提示詞不變 | `e90c1e5` |
+| 2026-11-12 00:24 | Codex（GPT-6） | PR #11 | 需求涵蓋／設計疑點 JSON 與 Markdown、final_report 摘要、v2 批次需求涵蓋欄位；Windows check-types／lint／相關與 v2 golden 20/20 通過。未改終態、既有快照與提示詞 | `87c18ea` |
 | 2026-11-11 23:00 | Claude Code | PR #13 進階設定重建還原修正；清理第 3 節 | 先還原 details 再還原 envType；replay 加回完整狀態重建（展開／收起）。VM 非正式：fast Node 753/759（6 個 VM 平台失敗）＋Python 52 OK、v2 golden 3/3、v1 golden VM 無 coverage 無法驗證、related 10/10；待使用者 Windows fast／golden／related | `b994811`＋本筆 |
 | 2026-11-11 22:19 | Codex（GPT-6） | PR #10／#13 測試修正 | 原規格 3 案隔離 Quality Analyst；假 DOM 加入 details 與 PR13 控制項 replay；原斷言保留。Windows check-types、lint、指定 related 10/10 通過；PR13 已疊到修後 PR10，未合併、未 push | PR10 `9d8c69a`；本筆 `test(pr13)`（HEAD 見 git log） |
 | 2026-11-10 16:45 | Antigravity | PR #12a～#13 疊加與一次驗收收尾 | 完成 4 個 PR 線性疊加（#12a 57acf0d → #12b b11cce0 → #10 d11ee25 → #13）；v2 側欄新增存活突變補強選單（auto/off，綁定 qualityAnalyst）；Windows 原生 fast、webview、related、v2 golden 全過 | 本筆 |

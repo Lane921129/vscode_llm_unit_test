@@ -1,0 +1,31 @@
+{
+  "id": "hist_10_tob_none_typeerror",
+  "sourceFile": "bottle_utils.py",
+  "target": "tob",
+  "type": "unhandled-exception",
+  "description": "傳入 None 時執行 bytes(\"\")，在 Python 3 因缺少 encoding 參數拋出 TypeError（bottle issue #1018）",
+  "witness": {
+    "call": "tob(None)",
+    "clean": {
+      "status": "ok",
+      "value": null,
+      "repr": "b''"
+    },
+    "bug": {
+      "status": "exception",
+      "type": "TypeError",
+      "msg": "string argument without an encoding"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 2,
+  "upstream": {
+    "repo": "bottlepy/bottle",
+    "commit": "06cc47b1f5403767ccc792b4ac739c4948982de4",
+    "date": "2017-12-09",
+    "message": "fix pass None to tob (#1018)",
+    "url": "https://github.com/bottlepy/bottle/commit/06cc47b1f5403767ccc792b4ac739c4948982de4"
+  }
+}

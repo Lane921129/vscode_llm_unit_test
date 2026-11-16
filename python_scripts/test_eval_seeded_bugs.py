@@ -492,6 +492,28 @@ class TestEvalSeededBugs(unittest.TestCase):
             self.assertTrue(rec['writtenAsCorrect'])
             self.assertEqual(v1_res['bugWrittenAsCorrectAnswerRate'], 1.0)
 
+    def test_prepare_historical_bugs_all_ten_cases(self):
+        hist_dir = ROOT / 'eval' / 'historical_bugs'
+        bugs = load_seeded_bugs(hist_dir)
+        self.assertEqual(len(bugs), 10)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / 'hist_prepared'
+            res = prepare_seeded_bugs(output_dir=out, bugs_dir=hist_dir)
+            self.assertEqual(res['status'], 'prepared')
+            self.assertEqual(res['bugsPrepared'], 10)
+            clean_dir = out / 'clean'
+            for bug in bugs:
+                meta = bug['meta']
+                for key in ('upstream', 'origin', 'reconstructed', 'batch', 'witness'):
+                    self.assertIn(key, meta)
+                for ukey in ('repo', 'commit', 'date', 'message', 'url'):
+                    self.assertIn(ukey, meta['upstream'])
+                sf = meta['sourceFile']
+                clean_src = (clean_dir / sf).read_text(encoding='utf-8')
+                bug_src = (out / 'bugs' / bug['id'] / sf).read_text(encoding='utf-8')
+                self.assertEqual(bug_src, apply_patch(clean_src, bug['patch']))
+                self.assertNotEqual(clean_src, bug_src)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -2,6 +2,11 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-16 PR #17 階段 4（移植 #14 與歷史案例 hist_09／hist_10）
+- 移植 `mine_bug_fix_commits.py` 唯讀歷史修復挖掘工具、測試與 15 項候選清單（`candidates.json`／`candidates.md`／`licenses/`）。
+- 依 H01（`touni` 辨識 `bytearray`）與 H05（`tob(None)` Python 3 例外）新增 `hist_09`、`hist_10` 評估案例，實跑兩版確認 witness 差異。
+- 合併 `eval/historical_bugs/README.md`，保留既有 `hist_01`～`hist_08` 不變，10 個歷史 bug 全數通過 `eval_seeded_bugs.py prepare` 驗證。
+
 ## 2026-11-16 PR #17 階段 3（v2 高品質層）
 - usable 通過 standard 行／分支／突變門檻、Reviewer 完成且無未處理標記時升為 quality-passed；off 不升級。
 - q.json 保存本次證據，批次獨立核驗 v2 品質；結果卡片、終態與批次計數同步，評估既有狀態統計加 v2 回歸。

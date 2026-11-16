@@ -107,7 +107,8 @@ const pythonTests = [
     'python_scripts/test_case_oracle_compare.py',
     'python_scripts/test_mutant_capture.py',
     'python_scripts/test_eval_baseline_plain_llm.py',
-    'python_scripts/test_eval_seeded_bugs.py'
+    'python_scripts/test_eval_seeded_bugs.py',
+    'python_scripts/test_mine_bug_fix_commits.py'
 ];
 const fastPythonTests = new Set([
     'python_scripts/test_static_type_shape.py',
