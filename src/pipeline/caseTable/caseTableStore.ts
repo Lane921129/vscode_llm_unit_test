@@ -18,7 +18,7 @@ export const CASE_TABLE_FILE = 'case_table.json';
 const PENDING_FILE = 'case_table.pending.json';
 const ROW_ID = /^C[1-9]\d*$/;
 const ROW_KEYS = new Set(['id', 'origin', 'scenario', 'category', 'call', 'mocks', 'requirementId', 'predictions',
-    'actual', 'expected', 'oracleStatus', 'status', 'reason', 'testMethod', 'normalizations']);
+    'actual', 'expected', 'oracleStatus', 'status', 'reason', 'testMethod', 'normalizations', 'reviewFlags']);
 
 export class CaseTableFormatError extends Error {
     readonly code = 'case-table-invalid';
@@ -88,6 +88,7 @@ function validateRow(value: unknown, at: string): CaseRow {
         status: oneOf(row.status, CASE_ROW_STATUSES, `${at}.status`)
     };
     if (row.requirementId !== undefined) { result.requirementId = text(row.requirementId, `${at}.requirementId`); }
+    if (row.reviewFlags !== undefined) { result.reviewFlags = list(row.reviewFlags, `${at}.reviewFlags`).map((flag, index) => text(flag, `${at}.reviewFlags[${index}]`)); }
     if (row.predictions !== undefined) {
         result.predictions = list(row.predictions, `${at}.predictions`).map((entry, index) => {
             const where = `${at}.predictions[${index}]`;

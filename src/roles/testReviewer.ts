@@ -802,3 +802,6 @@ export function reviewConstraintDiagnostics(review: TestReview, context: ReviewC
     }
     return [...codes];
 }
+
+// v2 case-table review; the v1 review functions above are unchanged.
+export { getCaseTableReviewPrompt, parseCaseTableReview, getCaseTableReviewCorrectionPrompt } from './caseTableReviewer';

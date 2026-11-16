@@ -20,7 +20,7 @@ async function run(target: string, replies: string[], extra: Partial<Parameters<
     fs.writeFileSync(path.join(project, 'shapes.py'), SOURCE, 'utf8');
     const prompts: string[] = [];
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'shapes.py'), funcName: target, projectRoot: project, outputPath: path.join(directory, 'out'),
             sessionDate: 'rows', pythonExecutable: python, specOracle: 'off', qualityAnalyst: 'off', log: () => undefined,
             mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },

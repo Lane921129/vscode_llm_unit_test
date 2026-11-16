@@ -16,3 +16,4 @@ export const REQUIREMENTS_COVERAGE_JSON = 'req.json';
 export const REQUIREMENTS_COVERAGE_MD = 'req.md';
 export const DESIGN_FINDINGS_JSON = 'design.json';
 export const DESIGN_FINDINGS_MD = 'design.md';
+export const CASE_TABLE_REVIEW_JSON = 'review.json';

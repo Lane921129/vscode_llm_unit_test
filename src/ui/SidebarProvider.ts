@@ -355,7 +355,7 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 
                 case 'setPipelineSetting': {
                     const allowed: Record<string, readonly string[] | null> = {
-                        pipelineVersion: ['v1', 'v2-case-table'], specOracle: ['auto', 'off'], qualityAnalyst: ['auto', 'off'], requirementsFile: null
+                        pipelineVersion: ['v1', 'v2-case-table'], specOracle: ['auto', 'off'], qualityAnalyst: ['auto', 'off'], caseTableReview: ['auto', 'off'], requirementsFile: null
                     };
                     const choices = allowed[message.key];
                     if (!this.activeAnalysis && message.key in allowed && typeof message.value === 'string'
@@ -1204,12 +1204,13 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
 }
 
 /** v2 pipeline settings shown in the sidebar; values outside the declared enums fall back to the defaults. */
-function pipelineSettings(config: vscode.WorkspaceConfiguration): { version: string; specOracle: string; qualityAnalyst: string; requirementsFile: string } {
+function pipelineSettings(config: vscode.WorkspaceConfiguration): { version: string; specOracle: string; qualityAnalyst: string; caseTableReview: string; requirementsFile: string } {
     const version = config.get<string>('pipelineVersion', 'v1');
     const specOracle = config.get<string>('specOracle', 'auto');
     const qualityAnalyst = config.get<string>('qualityAnalyst', 'auto');
     const requirementsFile = config.get<string>('requirementsFile', '');
     return { version: version === 'v2-case-table' ? version : 'v1', specOracle: specOracle === 'off' ? 'off' : 'auto',
         qualityAnalyst: qualityAnalyst === 'off' ? 'off' : 'auto',
+        caseTableReview: config.get<string>('caseTableReview', 'auto') === 'off' ? 'off' : 'auto',
         requirementsFile: typeof requirementsFile === 'string' ? requirementsFile : '' };
 }

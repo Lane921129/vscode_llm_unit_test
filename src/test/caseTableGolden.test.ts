@@ -30,6 +30,7 @@ const scenarios: Array<{
     target: string;
     qualityAnalyst?: 'auto' | 'off';
     testFocus?: TestFocus;
+    caseTableReview?: 'auto' | 'off';
     replies: string[];
 }> = [
     {
@@ -70,6 +71,18 @@ const scenarios: Array<{
         ]
     },
     {
+        name: 'bmi-case-table-review', source: path.join(root, 'test', 'test_mut', 'bmi.py'), target: 'calculate_bmi',
+        caseTableReview: 'auto',
+        replies: [[
+            line({ scenario: '一般體重', category: 'normal', args: '(65, 170)' }),
+            line({ scenario: '身高為 0', category: 'error', args: '(60, 0)' }),
+            line({ scenario: '故意壞列', category: 'error', args: '(1, 2, 3)' })
+        ].join('\n'), [
+            JSON.stringify({ action: 'add', scenario: '體重過輕', category: 'boundary', args: '(45, 170)', kwargs: '{}', mocks: '', requirement: '' }),
+            JSON.stringify({ action: 'flag', id: 'C1', reason: 'Confirm that the normal-weight example represents the intended input range.' })
+        ].join('\n')]
+    },
+    {
         name: 'database', source: path.join(root, 'eval', 'eval_screening', 'vehicle_db.py'), target: 'authenticate_user',
         replies: [[
             line({ scenario: '帳密正確', category: 'normal', args: '("amy", "pw")', mocks: 'cur.fetchone -> ("amy", "Amy", "admin")' }),
@@ -89,7 +102,7 @@ for (const scenario of scenarios) {
             const file = path.join(project, path.basename(scenario.source));
             fs.copyFileSync(scenario.source, file);
             const replies = [...scenario.replies];
-            const result = await runCaseTablePipeline({
+            const result = await runCaseTablePipeline({ caseTableReview: scenario.caseTableReview ?? 'off',
                 filePath: file, funcName: scenario.target, projectRoot: project, outputPath: path.join(directory, 'out'),
                 sessionDate: 'golden', pythonExecutable: python, specOracle: 'off', qualityAnalyst: scenario.qualityAnalyst ?? 'off',
                 testFocus: scenario.testFocus,
@@ -112,12 +125,17 @@ for (const scenario of scenarios) {
             }
             assert.ok(result.rows.some(row => row.status === 'invalid' || row.status === 'capture-failed'),
                 'the deliberately broken row fails on its own');
+            if (scenario.caseTableReview === 'auto') {
+                assert.ok(result.rows.some(row => row.origin === 'reviewer' && row.status === 'test-passed'));
+                assert.ok(result.rows.some(row => row.reviewFlags?.length));
+            }
             const run = stage.mutation!.run!;
             const snapshot = {
                 scenario: scenario.name, terminal: stage.terminal, reasonCode: stage.reasonCode, modelRequests: result.modelRequests,
                 rows: readCaseTable(result.directory).rows.map(row => ({ id: row.id, status: row.status, reason: row.reason ?? null,
                     actual: row.actual ?? null, expected: row.expected ?? null, oracleStatus: row.oracleStatus ?? null,
-                    testMethod: row.testMethod ?? null })),
+                    testMethod: row.testMethod ?? null,
+                    ...(scenario.caseTableReview === 'auto' ? { reviewFlags: row.reviewFlags ?? [] } : {}) })),
                 testFile: fs.readFileSync(stage.testFile!, 'utf8').replace(/\r\n/g, '\n'),
                 mutation: { engine: run.engine, selected: run.counts.selected, executed: run.counts.executed,
                     killed: run.counts.killed, survived: run.counts.survived, score: stage.mutation!.score }

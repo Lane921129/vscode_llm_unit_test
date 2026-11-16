@@ -69,7 +69,7 @@ test('PR #13b: boundary test focus sorts boundary and error rows to front and re
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'math_ops.py'),
             funcName: 'classify_number',
             projectRoot: project,
@@ -127,7 +127,7 @@ test('PR #13b: full test focus preserves default order and records testFocus ful
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'math_ops.py'),
             funcName: 'classify_number',
             projectRoot: project,
@@ -177,7 +177,7 @@ test('PR #13b: coverage test focus calls supplementary round when missing branch
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'math_ops.py'),
             funcName: 'classify_number',
             projectRoot: project,

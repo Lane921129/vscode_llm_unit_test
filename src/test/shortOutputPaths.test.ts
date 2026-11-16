@@ -140,7 +140,7 @@ for (const sourceName of ['t', 'T', 'tf', 'c1_0']) {
             fs.writeFileSync(file, sourceName === 'tf' ? 'def double(x):\n    if x > 0:\n        return x * 2\n    return -x\n' : 'def double(x): return x * 2\n', 'utf8');
             let requests = 0;
             const original = fs.readFileSync(file, 'utf8');
-            const result = await runCaseTablePipeline({ filePath: file, funcName: 'double', projectRoot: directory,
+            const result = await runCaseTablePipeline({ caseTableReview: 'off', filePath: file, funcName: 'double', projectRoot: directory,
                 outputPath: path.join(directory, 'out'), sessionDate: 'collision',
                 pythonExecutable: resolvePythonExecutable(undefined, path.resolve(__dirname, '../..')),
                 specOracle: 'off', qualityAnalyst: 'off', mutation: { engine: 'builtin', workers: 1, stageSeconds: 30 },

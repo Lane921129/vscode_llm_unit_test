@@ -20,6 +20,7 @@ import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
 import { writeCaseTable } from './caseTableStore';
 import { RequirementEntry, parseRequirements, writeRequirementsCoverage } from './requirements';
 import { writeDesignFindings } from './designFindings';
+import { reviewCaseTable, appendCaseTableReviewReport } from './reviewCaseTable';
 import { CASE_SCENARIO_ROW_LIMIT, getCaseRowCorrectionPrompt, getCaseScenarioPrompt, parseCaseRows } from '../../roles/semanticAnalyzer';
 import { RowStageResult, RowStageOptions, rowTestContext, runRowStage } from './runRowStage';
 import { collectSpecSources, hasSpecSource } from './specSources';
@@ -58,7 +59,7 @@ export interface ModelRequestOptions {
 
 /** v2 role names recorded in role_events.jsonl (v1's event format is unchanged). */
 export type CaseTableRole = 'analyst-scenario' | 'analyst-scenario-correction' | 'writer-row-setup' | 'bug-fixer-row'
-    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst';
+    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst' | 'case-table-review' | 'case-table-review-correction';
 
 export interface RoleAskOptions {
     role: CaseTableRole;
@@ -96,6 +97,7 @@ export interface CaseTablePipelineOptions {
     runRows?: boolean;
     /** PR #10 Quality Analyst survivor loop (default 'auto'; 'off' disables). */
     qualityAnalyst?: QualityAnalystSetting | boolean;
+    caseTableReview?: 'auto' | 'off';
     /** PR #8 hook passed to the row stage. */
     decideExpected?: RowStageOptions['decideExpected'];
     /** Sidebar result card updates (updateCoverage / updateOutcome with a caseTable summary). */
@@ -262,10 +264,23 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
         }
     })();
 
-    let finalRows = outcome.rows;
+    state.rows = outcome.rows;
+    const reviewedRows = options.caseTableReview === 'off' ? outcome.rows : await reviewCaseTable({
+        directory, rows: outcome.rows, source: facts.source, requirements, ask,
+        validate: async proposed => {
+            if (!proposed.length) { return []; }
+            const request = buildCaseRowValidationRequest(proposed, { source, target: options.funcName,
+                dependencies: facts.dependencies.map(dependency => dependency.name) });
+            const result = await runTool(pythonToolPath('caseRowValidator'), [], JSON.stringify(request));
+            try { return applyCaseRowValidation(proposed, JSON.parse(result.stdout)).rows; } catch {
+                throw new AnalysisStageError('tool', 'case-row-validation', 'Reviewer row validator returned malformed output.');
+            }
+        }
+    });
+    let finalRows = reviewedRows;
     state.rows = finalRows;
     let stage: RowStageResult | undefined;
-    const validBeforeRows = outcome.rows.filter(row => row.status === 'proposed').length;
+    const validBeforeRows = reviewedRows.filter(row => row.status === 'proposed').length;
     const spec = collectSpecSources(facts, requirements);
     const specOracleUsed = options.specOracle === 'auto' && hasSpecSource(spec);
     state.specOracleUsed = specOracleUsed;
@@ -280,7 +295,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
             ? options.qualityAnalyst
             : readQualityAnalystSetting(options.qualityAnalyst) !== 'off';
         stage = await runRowStage({
-            runtime, facts, rows: outcome.rows, ask, log: options.log,
+            runtime, facts, rows: reviewedRows, ask, log: options.log,
             mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
             qualityAnalyst: qualityAnalystEnabled,
             testFocus,
@@ -372,8 +387,9 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
             : '無需求檔 / No requirements file\n')
         + `See ${REQUIREMENTS_COVERAGE_MD} and ${REQUIREMENTS_COVERAGE_JSON}.\n`
         + (findings ? `\n## 設計疑點 / Design findings\n\n${findings.length} possible redundant conditions or dead-code findings; see ${DESIGN_FINDINGS_MD}.\n` : ''), 'utf8');
+    if (options.caseTableReview !== 'off') { appendCaseTableReviewReport(directory, finalRows); }
     const valid = validBeforeRows;
-    options.log(`[v2] case_table.json: ${valid} valid rows, ${outcome.rows.length - valid} invalid rows, `
+    options.log(`[v2] case_table.json: ${valid} valid rows, ${reviewedRows.length - valid} invalid rows, `
         + `${rejected.filter(item => item.source === 'scenario' && !item.corrected).length} rejected lines, `
         + `${parsed.overLimit.length} over the row limit.`);
     if (valid === 0) {

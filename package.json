@@ -171,6 +171,19 @@
           ],
           "description": "%contributes.configuration.properties.llmUnitTest.specOracle.description%"
         },
+        "llmUnitTest.caseTableReview": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "default": "auto",
+          "description": "%contributes.configuration.properties.llmUnitTest.caseTableReview.description%",
+          "enumDescriptions": [
+            "%contributes.configuration.properties.llmUnitTest.caseTableReview.enumDescriptions.0%",
+            "%contributes.configuration.properties.llmUnitTest.caseTableReview.enumDescriptions.1%"
+          ]
+        },
         "llmUnitTest.qualityAnalyst": {
           "type": "string",
           "enum": [

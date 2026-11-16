@@ -104,7 +104,7 @@ test('pipeline discards indistinguishable survivor row with survivor-row-indisti
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'clamp.py'), funcName: 'clamp_value', projectRoot: project,
             outputPath: path.join(directory, 'out'), sessionDate: 'survivor', pythonExecutable: python,
             specOracle: 'off', qualityAnalyst: true, log: () => undefined,
@@ -159,7 +159,7 @@ test('distinguishable survivor row improves mutation score and is merged', async
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'grade.py'), funcName: 'score_grade', projectRoot: project,
             outputPath: path.join(directory, 'out'), sessionDate: 'survivor', pythonExecutable: python,
             specOracle: 'off', qualityAnalyst: true, log: () => undefined,
@@ -212,7 +212,7 @@ test('survivor rows stop at qualityNoImprovementLimit or max 3 attempts', async 
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'sign.py'), funcName: 'check_sign', projectRoot: project,
             outputPath: path.join(directory, 'out'), sessionDate: 'survivor', pythonExecutable: python,
             specOracle: 'off', qualityAnalyst: true, log: () => undefined,

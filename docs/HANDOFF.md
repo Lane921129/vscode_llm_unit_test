@@ -127,7 +127,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 6 | 設定分流、Analyst-情境提示、UI 設定 | **完成：使用者驗收（11/09 22:15），已合併主線（`674dab1`）** | `lane_edition` | 2026-11-09 監督 |
 | 7 | Capture run、列轉測試、逐方法執行、Bug Fixer 單列修正 | **完成：使用者驗收（11/09 22:15），已合併主線（`a52900f`）** | `lane_edition` | 2026-11-09 監督 |
 | 8 | **規格預測**（規格來源、Analyst-規格、比對分級、規格不符報告） | **完成：使用者驗收（11/09 22:15），已合併主線（`8126f94`）** | `lane_edition` | 2026-11-09 監督 |
-| 9 | Reviewer 改審案例表 | 已實作待驗收；程式未帶入 PR #15 | `pr/09-case-table-review`（e90c1e5） | 2026-11-12 Codex |
+| 9 | Reviewer 改審案例表 | PR #17 階段 2 已移植，待四階段一次驗收 | `pr/09-case-table-review`（e90c1e5） | 2026-11-12 Codex |
 | 10 | Quality Analyst 存活突變轉案例列 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
 | 11 | 需求涵蓋表與設計疑點 | PR #17 階段 1 已移植，待四階段一次驗收 | `pr/11-requirements-coverage`（87c18ea） | 2026-11-12 Codex |
 | 12a | 評估紀錄與一般 LLM 對照組 | 已驗收並合併至主線（5fc43b6） | `lane_edition` | 2026-11-12 使用者確認 |
@@ -138,7 +138,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
-| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1 已完成並通過指定驗證；階段 2～4 未開始 | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Codex |
+| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1、2 完成並通過指定驗證；階段 3～4 未開始 | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Codex |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
@@ -149,7 +149,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 - Agent：Codex；本機 Windows 原生，非 VM。起點 2581ec6，開工時工作區乾淨；未同步不同的 origin/lane_edition，未合併／push。CodeGraph 可用；本輪無 AOCI MCP，待辦見第 4 節。
 - [x] 階段 1 實作：移植 87c18ea 的需求涵蓋與設計疑點。runRowStage 衝突保留主線 initialPassing／initialSetups、短檔名與 followup 行為，再加入 survivorRows；補問傳遞前輪 survivorRows。HANDOFF／CHANGELOG 保留主線紀錄，另加本輪紀錄；計畫文件改動全部丟棄。
 - 報告命名集中 artifactNames.ts：req.md／req.json、design.md／design.json；均未超過 #16 的最長 v2 產物界限，因此路徑預檢公式與上限不需變更。需求檔存在時計算逐 R-id 對應列、狀態與至少一列通過；沒有需求檔時空表，不影響 usable／既有測試內容。Quality Analyst off 不寫設計疑點；疑點僅為所有同突變提案均不可區分的觀察，不宣稱等價／死碼已證明。
-- [x] 階段 1 指定驗證通過；本階段提交 subject 為 `feat(pr17): port requirements and design reports / 移植需求涵蓋與設計疑點報告`，精確 hash 見本分支 `git log -1`（後續階段補記其父提交）。
+- [x] 階段 1 指定驗證通過；提交 `85248be`；相對 lane_edition 的 diff --stat 為 12 files changed, 243 insertions(+), 4 deletions(-)，完整內容見 log/pr17-s1-diff-stat-windows.log。
 
 | 指令（全部 Windows 原生，非 VM） | 階段 1 結果 | log/ |
 | --- | --- | --- |
@@ -163,8 +163,24 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | npm run compile | exit 0 | pr17-s1-compile-windows.log |
 
 **Golden 差異：無。** 2581ec6 的既有快照均未修改；bmi-quality-analyst 仍開啟 Quality Analyst。固定回覆加真實隔離 Python／coverage／mutation 回歸，不是真實模型驗收。完整 test:integration 依使用者要求待四階段完成後背景執行，目前尚未跑，不能宣稱已比對既有 14 失敗。
-- [ ] 階段 2 移植 #9；[ ] 階段 3 高品質層；[ ] 階段 4 移植 #14 與補兩案例。
-- 下一步：本階段提交後移植 e90c1e5，保留主線設定檔格式與六區側欄；demo 比照 qualityAnalyst 保留選擇。若額度不足，保留可續接驗證日誌與 WIP commit，不開始後續階段。
+- [x] 階段 2 實作：移植 e90c1e5；衝突解法為保留主線 testFocus／knownSecrets／requestSettings、失敗收尾 state、六區側欄與 thinking 參數，再加入 Reviewer。需求／設計報告保留本輪短名；Reviewer 紀錄用 artifactNames.ts 的 review.json。
+- package.json 只新增 caseTableReview（13 行）；package.nls*.json 只加三個描述鍵，各 +4/-1（末項補逗號），其餘主線內容與值不變。新設定位於進階設定，僅 v2 顯示；demo 與既有 qualityAnalyst 相同，均保留使用者值，不另寫入。CaseRow 嚴格讀取及 every-optional-field 往返同時加入 reviewFlags。
+- Reviewer 新增列走原驗證／setup 守門／capture／規格預測／正式組裝；可疑標記寫回列與 final_report，不阻擋 usable。格式錯誤每行最多補正一次。提示詞只附加「待審（PR #9）」原文，既有已核准段落不變；使用者核准前不得用於實驗室。
+- **Golden harness 例外明列**：原四情境 bmi、bmi-boundary-first、bmi-quality-analyst、database 明確 caseTableReview=off；Quality Analyst 原設定不變。另保留開啟 Reviewer 的 bmi-case-table-review 新快照。其他非 Reviewer 的固定回覆測試明確 off，以隔離其既有測試主題；產品預設 auto，新 Reviewer 整合測試使用預設啟用路徑。
+- [x] 階段 2 指定驗證通過；提交 subject：`feat(pr17): port case-table review / 移植案例表審查`，精確 hash 見本分支 git log（下一階段補記）。[ ] 階段 3 高品質層；[ ] 階段 4 移植 #14 與補兩案例。
+
+| 指令（全部 Windows 原生，非 VM） | 階段 2 結果 | log/ |
+| --- | --- | --- |
+| npm run check-types；npm run lint | 各 exit 0；fast／compile 亦重新通過 | pr17-s2-types-windows.log、pr17-s2-lint-windows.log |
+| npm run test:related -- --node caseTableReviewIntegration --node sidebarDashboardReplay --node sidebarSectionLayout --node sidebarSimplification --node caseTableTestFocus --node caseSetupGuardIntegration --node runnerDiagnosticsIntegration --node caseTable.test.ts | 63/63，含 #15／#15b 與既有補問行為 | pr17-s2-related-windows.log |
+| npm run test:related -- --node caseReportsIntegration --node sidebarSectionLayout | 補強兩個測試後 10/10（非不重複總數），驗證短報告路徑界限與真實 v2 demo 選擇狀態 | pr17-s2-related-final-windows.log |
+| npm run test:fast | Node 818/818、Python 53/53、Webview 通過 | pr17-s2-fast-windows.log |
+| npm run test:python | 973 項，failures=0、errors=0、skipped=4；歷史秘密掃描通過，exit 0 | pr17-s2-python-windows.log |
+| npm run test:webview；npm run compile | 各 exit 0 | pr17-s2-webview-windows.log、pr17-s2-compile-windows.log |
+| npm run test:golden | v1 11/11、v2 5/5；兩個 UPDATE 旗標均 0 | pr17-s2-golden-windows.log |
+
+**Golden 差異逐項**：2581ec6 的既有快照零差異；只新增 bmi-case-table-review.json，內容與 e90c1e5 的原始 fixture 相同，記錄 Reviewer 新增列經實際 capture／測試／突變後為 usable。四個舊情境使用前述明列的 off 例外；QA 開啟情境仍開啟。這些是固定回覆回歸，不是真實模型驗收。
+- 下一步：完成階段 2 指定驗證、提交後，才新增階段 3 的 v2 quality-passed。若額度不足，保留可續接驗證日誌與 WIP commit，不開始後續階段。
 
 ## 2. PR #16 短路徑與環境預檢（歷史）
 
@@ -1092,6 +1108,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-16（Codex／PR #17 階段 2，Windows 原生）：階段 1 85248be 已通過全部指定驗證；移植 Reviewer，保留六區側欄／thinking／短報告與失敗狀態，套件設定取消來源 commit 的重新排版。階段 2 相關 63/63、補強回歸 10/10、fast 818/53、完整 Python 973（略過 4）、golden 11/5 與其餘指定檢查通過；未開始高品質層或歷史案例移植。
 
 - 2026-11-16（Codex／PR #17 階段 1，Windows 原生）：核對乾淨基底 2581ec6，無 AOCI、使用 CodeGraph；移植 #11 並解決補問狀態衝突，新增短報告名稱與路徑界限回歸。驗證與 commit 狀態以第 2 節最新紀錄及本分支 git log 為準。
 

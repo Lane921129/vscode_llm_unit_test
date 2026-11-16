@@ -55,5 +55,8 @@
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPoints.description": "在此檔案模組頂層模擬為返回 None 的外部初始化函式。可由實測阻擋自動提出建議，預覽確認後套用。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointLines.description": "自動建議綁定的入口名稱與來源行號；只模擬這些行的頂層呼叫，保留其他呼叫。",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointSourceHash.description": "自動產生的初始化入口來源版本；來源變更後必須重新預覽確認，不可沿用舊行號設定。",
-  "contributes.configuration.properties.llmUnitTest.targetBudget.description": "每個目標共用的總預算；角色、策略切換與重試不會重設。輸入 tokens 是每次傳送的估算，不是供應商實際計費；耗盡時保留已驗證成果並標示未完成。"
+  "contributes.configuration.properties.llmUnitTest.targetBudget.description": "每個目標共用的總預算；角色、策略切換與重試不會重設。輸入 tokens 是每次傳送的估算，不是供應商實際計費；耗盡時保留已驗證成果並標示未完成。",
+  "contributes.configuration.properties.llmUnitTest.caseTableReview.description": "僅 v2：審查輸入情境並記錄可疑案例列。",
+  "contributes.configuration.properties.llmUnitTest.caseTableReview.enumDescriptions.0": "啟用案例表 Reviewer（預設）。",
+  "contributes.configuration.properties.llmUnitTest.caseTableReview.enumDescriptions.1": "不發出案例表 Reviewer 請求。"
 }

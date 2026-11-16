@@ -15,7 +15,7 @@ test('requirements reports include each requirement and an empty no-file table w
             const file = path.join(directory, 'sample.py');
             fs.writeFileSync(file, 'def inc(value):\n    return value + 1\n');
             fs.writeFileSync(path.join(directory, 'requirements.md'), 'R1: increment\nR2: boundary\n');
-            const result = await runCaseTablePipeline({ filePath: file, funcName: 'inc', projectRoot: directory,
+            const result = await runCaseTablePipeline({ caseTableReview: 'off', filePath: file, funcName: 'inc', projectRoot: directory,
                 outputPath: path.join(directory, 'out'), sessionDate: 'requirements',
                 pythonExecutable: resolvePythonExecutable(undefined, path.resolve(__dirname, '../..')),
                 specOracle: 'off', qualityAnalyst: configured ? 'off' : 'auto',
@@ -57,7 +57,7 @@ test('requirement and design report names fit the v2 path preflight bound', asyn
     const names = await import('../pipeline/caseTable/artifactNames.js');
     const { LONGEST_V2_ARTIFACT } = await import('../pipeline/batchOutputPath.js');
     for (const name of [names.REQUIREMENTS_COVERAGE_JSON, names.REQUIREMENTS_COVERAGE_MD,
-        names.DESIGN_FINDINGS_JSON, names.DESIGN_FINDINGS_MD]) {
+        names.DESIGN_FINDINGS_JSON, names.DESIGN_FINDINGS_MD, names.CASE_TABLE_REVIEW_JSON]) {
         assert.ok(name.length <= LONGEST_V2_ARTIFACT.length, name);
     }
 });

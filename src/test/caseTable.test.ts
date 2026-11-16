@@ -321,6 +321,7 @@ test('a row with every optional field (and a needs-setup call) round-trips throu
         status: 'test-failed',
         reason: 'assertion-failed',
         testMethod: 'test_c4_missing_vehicle',
+        reviewFlags: ['需求擁有者需確認此情境'],
         normalizations: ['args-wrapped-single']
     };
     const table: CaseTableFile = { version: 'case-table-v1', target: 'Garage.find', rows: [full], testFocus: 'boundary' };
@@ -329,7 +330,7 @@ test('a row with every optional field (and a needs-setup call) round-trips throu
         writeCaseTable(directory, table);
         assert.deepStrictEqual(readCaseTable(directory), table);
         assert.strictEqual(readCaseTable(directory).testFocus, 'boundary');
-        const optional = ['requirementId', 'predictions', 'actual', 'expected', 'oracleStatus', 'reason', 'testMethod', 'normalizations'];
+        const optional = ['requirementId', 'predictions', 'actual', 'expected', 'oracleStatus', 'reason', 'testMethod', 'normalizations', 'reviewFlags'];
         assert.deepStrictEqual(optional.filter(key => !(key in readCaseTable(directory).rows[0])), [], 'every optional field survives');
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });

@@ -55,5 +55,8 @@
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPoints.description": "External initialization functions mocked to return None at module top level in this file. Actual blocked calls can suggest fixtures for preview and confirmation.",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointLines.description": "Suggested entry-point names bound to source lines. Mock only top-level calls on these lines; preserve other calls.",
   "contributes.configuration.properties.llmUnitTest.importFixtures.items.properties.entryPointSourceHash.description": "Generated source version for initialization entry points. Source changes require a new preview and confirmation; old line bindings must not be reused.",
-  "contributes.configuration.properties.llmUnitTest.targetBudget.description": "Shared total budget per target, never reset by role/strategy changes or retries. Input tokens are estimates per request, not provider billing. Exhaustion retains verified results and marks the run incomplete."
+  "contributes.configuration.properties.llmUnitTest.targetBudget.description": "Shared total budget per target, never reset by role/strategy changes or retries. Input tokens are estimates per request, not provider billing. Exhaustion retains verified results and marks the run incomplete.",
+  "contributes.configuration.properties.llmUnitTest.caseTableReview.description": "v2 only: review input scenarios and record questionable rows.",
+  "contributes.configuration.properties.llmUnitTest.caseTableReview.enumDescriptions.0": "Review the case table (default).",
+  "contributes.configuration.properties.llmUnitTest.caseTableReview.enumDescriptions.1": "Do not request a case-table Reviewer."
 }
