@@ -1,0 +1,31 @@
+{
+  "id": "hist_05_iban_non_ascii_case",
+  "sourceFile": "validators_basic.py",
+  "target": "iban",
+  "type": "regex-flag",
+  "description": "IGNORECASE 未搭配 ASCII，非 ASCII 的大小寫等價字元（ſ、K）通過格式檢查並被判為有效 IBAN",
+  "witness": {
+    "call": "bool(iban(\"GB82WE\\u017fT12345698765432\"))",
+    "clean": {
+      "status": "ok",
+      "value": false,
+      "repr": "False"
+    },
+    "bug": {
+      "status": "ok",
+      "value": true,
+      "repr": "True"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 2,
+  "upstream": {
+    "repo": "python-validators/validators",
+    "commit": "d9ec2ff634c345badaa577f8db9a52d6ce61efff",
+    "date": "2026-10-13",
+    "message": "Reject non-ASCII case equivalents in IBANs",
+    "url": "https://github.com/python-validators/validators/commit/d9ec2ff634c345badaa577f8db9a52d6ce61efff"
+  }
+}

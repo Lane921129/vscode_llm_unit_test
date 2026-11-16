@@ -1,0 +1,31 @@
+{
+  "id": "hist_07_html_quote_newline_entity",
+  "sourceFile": "bottle_utils.py",
+  "target": "html_quote",
+  "type": "typo",
+  "description": "換行應轉成 &#10;，誤寫成 %#10;（bottle issue #575）",
+  "witness": {
+    "call": "html_quote(\"a\\nb\")",
+    "clean": {
+      "status": "ok",
+      "value": "\"a&#10;b\"",
+      "repr": "'\"a&#10;b\"'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "\"a%#10;b\"",
+      "repr": "'\"a%#10;b\"'"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 1,
+  "upstream": {
+    "repo": "bottlepy/bottle",
+    "commit": "9b3ade8d9c44b8f26f2fbb61baa0c7ad72336b79",
+    "date": "2014-02-04",
+    "message": "fix 575: typing error in html_quote util funcion",
+    "url": "https://github.com/bottlepy/bottle/commit/9b3ade8d9c44b8f26f2fbb61baa0c7ad72336b79"
+  }
+}

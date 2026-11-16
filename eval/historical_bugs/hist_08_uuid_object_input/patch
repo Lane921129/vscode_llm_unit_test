@@ -1,0 +1,20 @@
+--- a/validators_basic.py
++++ b/validators_basic.py
+@@ -121,7 +121,7 @@
+ 
+     Args:
+         value:
+-            UUID string or object to validate.
++            UUID string to validate.
+ 
+     Returns:
+         (Literal[True]): If `value` is a valid UUID.
+@@ -129,8 +129,6 @@
+     """
+     if not value:
+         return False
+-    if isinstance(value, UUID):
+-        return True
+     try:
+         return UUID(value) or re.match(
+             r"^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$", value

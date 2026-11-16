@@ -1,0 +1,14 @@
+--- a/validators_utils.py
++++ b/validators_utils.py
+@@ -74,7 +74,10 @@
+ 
+     @wraps(func)
+     def wrapper(*args: Any, **kwargs: Any):
+-        raise_validation_error = bool(kwargs.pop("r_ve", False))
++        raise_validation_error = False
++        if "r_ve" in kwargs:
++            raise_validation_error = True
++            del kwargs["r_ve"]
+         if environ.get("RAISE_VALIDATION_ERROR", "False") == "True":
+             raise_validation_error = True
+ 

@@ -1,0 +1,31 @@
+{
+  "id": "hist_08_uuid_object_input",
+  "sourceFile": "validators_basic.py",
+  "target": "uuid",
+  "type": "missing-check",
+  "description": "傳入 uuid.UUID 物件時沒有特別處理，合法的 UUID 物件無法通過驗證（依現行結構改寫的修復前行為，非原始程式碼）",
+  "witness": {
+    "call": "uuid(UUID(\"2bc1c94f-0deb-43e9-92a1-4775189ec9f8\"))",
+    "clean": {
+      "status": "ok",
+      "value": true,
+      "repr": "True"
+    },
+    "bug": {
+      "status": "exception",
+      "type": "AttributeError",
+      "msg": "'UUID' object has no attribute 'replace'"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": true,
+  "batch": 2,
+  "upstream": {
+    "repo": "python-validators/validators",
+    "commit": "0ea54dd309b3be8cd96f9f09ac849b632644c0c1",
+    "date": "2020-09-03",
+    "message": "Validate non-string UUID types (#174)",
+    "url": "https://github.com/python-validators/validators/commit/0ea54dd309b3be8cd96f9f09ac849b632644c0c1"
+  }
+}

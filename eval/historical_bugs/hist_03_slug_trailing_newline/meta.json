@@ -1,0 +1,31 @@
+{
+  "id": "hist_03_slug_trailing_newline",
+  "sourceFile": "validators_basic.py",
+  "target": "slug",
+  "type": "regex-anchor",
+  "description": "re.match 搭配 $ 會接受結尾換行，含換行的字串被判為合法 slug",
+  "witness": {
+    "call": "slug(\"my-slug\\n\")",
+    "clean": {
+      "status": "ok",
+      "value": null,
+      "repr": "ValidationError(func=slug, args={'value': 'my-slug\\n'})"
+    },
+    "bug": {
+      "status": "ok",
+      "value": true,
+      "repr": "True"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 1,
+  "upstream": {
+    "repo": "python-validators/validators",
+    "commit": "bea386c6c81ccb8b3ca46b341fcd2b15958f8df7",
+    "date": "2026-10-10",
+    "message": "fix(slug): use fullmatch so a trailing newline is rejected",
+    "url": "https://github.com/python-validators/validators/commit/bea386c6c81ccb8b3ca46b341fcd2b15958f8df7"
+  }
+}

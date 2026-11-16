@@ -1,0 +1,31 @@
+{
+  "id": "hist_01_mac_address_trailing_newline",
+  "sourceFile": "validators_basic.py",
+  "target": "mac_address",
+  "type": "regex-anchor",
+  "description": "re.match 搭配 $ 會接受結尾換行，MAC 位址後面多一個換行仍被判為有效",
+  "witness": {
+    "call": "bool(mac_address(\"01:23:45:67:ab:CD\\n\"))",
+    "clean": {
+      "status": "ok",
+      "value": false,
+      "repr": "False"
+    },
+    "bug": {
+      "status": "ok",
+      "value": true,
+      "repr": "True"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 1,
+  "upstream": {
+    "repo": "python-validators/validators",
+    "commit": "6ffd8625ee4272dade063653bff615014bdc4734",
+    "date": "2026-10-10",
+    "message": "Reject trailing newlines in MAC addresses and regional identifiers",
+    "url": "https://github.com/python-validators/validators/commit/6ffd8625ee4272dade063653bff615014bdc4734"
+  }
+}

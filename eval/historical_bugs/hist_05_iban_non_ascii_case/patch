@@ -1,0 +1,11 @@
+--- a/validators_basic.py
++++ b/validators_basic.py
+@@ -42,7 +42,7 @@
+     """
+     return (
+         (
+-            re.match(r"^[a-z]{2}[0-9]{2}[a-z0-9]{11,30}$", value, re.IGNORECASE | re.ASCII)
++            re.match(r"^[a-z]{2}[0-9]{2}[a-z0-9]{11,30}$", value, re.IGNORECASE)
+             and _mod_check(value)
+         )
+         if value

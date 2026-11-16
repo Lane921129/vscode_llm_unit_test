@@ -1,0 +1,31 @@
+{
+  "id": "hist_06_validator_r_ve_false",
+  "sourceFile": "validators_utils.py",
+  "target": "validator",
+  "type": "flag-logic",
+  "description": "只要有傳 r_ve 參數就丟出例外，明確傳 r_ve=False 時仍然 raise，而不是回傳 ValidationError",
+  "witness": {
+    "call": "validator(lambda value: False)(1, r_ve=False)",
+    "clean": {
+      "status": "ok",
+      "value": null,
+      "repr": "ValidationError(func=<lambda>, args={'value': 1})"
+    },
+    "bug": {
+      "status": "exception",
+      "type": "ValidationError",
+      "msg": "ValidationError(func=<lambda>, args={'value': 1})"
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 1,
+  "upstream": {
+    "repo": "python-validators/validators",
+    "commit": "3ae7b78acab973f8e7b0bdcd8c35ee7184b19ba4",
+    "date": "2026-10-11",
+    "message": "Respect false values for the validation error raise flag",
+    "url": "https://github.com/python-validators/validators/commit/3ae7b78acab973f8e7b0bdcd8c35ee7184b19ba4"
+  }
+}
