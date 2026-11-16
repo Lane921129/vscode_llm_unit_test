@@ -210,7 +210,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | npm run test:webview；npm run compile | 各 exit 0 | pr17-s4-webview-windows.log、pr17-s4-compile-windows.log |
 | npm run test:golden | v1 11/11、v2 5/5；兩個 UPDATE 旗標均 0 | pr17-s4-golden-windows.log |
 
-- [ ] 最終背景 `npm run test:integration` 逐案比對既有 14 失敗（執行中）。
+- [x] 最終背景 `npm run test:integration`（Windows 原生，`log/pr17-integration-windows.log`）：Node 1129 項（1104 pass、25 fail、0 skip）。逐案比對結果：**PR #17 新增失敗 0**。25 個失敗包含第 5 節既有 14 個葉節點失敗（加 4 個父群組計數）及 7 個已在基底 `2581ec6`（`lane_edition`）存在之失敗（以獨立 worktree 於 `2581ec6` 重跑該 5 檔驗證完全一致，含 `batchQualificationReuseIntegration` 2 案、`orchestratorLifecycle` 1 案、`resultPresentation` `window is not defined` 1 案、`targetList` 1 案、`webviewContent` 2 案）。階段 4 提交 `6f8354f`；受保護檔案（`docs/三週改版架構_2026_11_04.md`、`.codex/`、`.aoci/`、`hist_01`～`hist_08`、既有 v1／v2 golden）零變更。
 
 ## 2. PR #16 短路徑與環境預檢（歷史）
 
@@ -1138,7 +1138,7 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 
 ## 6. 工作階段紀錄（最新的放最上面）
 
-- 2026-11-16（Antigravity／PR #17 階段 4，Windows 原生）：階段 3 提交 `42a1072`；移植 #14（b9f045e／9b65391）、合併 `eval/historical_bugs/README.md`、新增 `hist_09_touni_bytearray` 與 `hist_10_tob_none_typeerror`（實跑兩版 witness 與 10 案例 `prepare` 驗證），階段 4 指定檢查全過（fast 818/54、Python 979 OK／4 skipped、golden 11/5 零差異）。
+- 2026-11-16（Antigravity／PR #17 階段 4 與最終整合比對，Windows 原生）：階段 3 提交 `42a1072`；移植 #14（b9f045e／9b65391）、合併 `eval/historical_bugs/README.md`、新增 `hist_09_touni_bytearray` 與 `hist_10_tob_none_typeerror`（實跑兩版 witness 與 10 案例 `prepare` 驗證），階段 4 指定檢查全過（fast 818/54、Python 979 OK／4 skipped、golden 11/5 零差異）並提交 `6f8354f`。背景 `test:integration`（1129 項：1104 pass／25 fail，含既有 14 葉節點＋4 父群組＋7 個已於基底 `2581ec6` 重現的失敗）新增失敗 0。本筆僅更新交接文件。
 
 - 2026-11-16（Codex／Antigravity／PR #17 階段 3，Windows 原生）：階段 2 提交 9221a1f；新增 v2 品質 gate 與獨立批次證據核驗，核心 Node 20／Python 10、最終卡片與邊界 22/22、fast 818/54、Python 974（略過 4）、golden 11/5 全過；提交 `42a1072`。未修改 v1 政策、預算、提示詞、預設值或快照。
 
