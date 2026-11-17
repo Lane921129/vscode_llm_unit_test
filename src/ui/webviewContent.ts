@@ -4,7 +4,7 @@ import { MAX_EXECUTION_TIMEOUT_SECONDS } from '../pipeline/executionTimingSettin
 import { planAnalysisTargetBudget } from '../pipeline/targetBudget';
 
 export function getWebviewContent(t: (key: string, ...args: any[]) => string, currentLang: string = 'auto', currentStrategy: string = 'auto', ollamaBaseUrl: string = 'http://127.0.0.1:11434', validationMode: string = 'full', mutationEngine: string = 'builtin', mutationWorkers: number = 2, requireRoleQualification: boolean = false,
-    pipeline: { version: string; specOracle: string; qualityAnalyst?: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', qualityAnalyst: 'auto', requirementsFile: '' },
+    pipeline: { version: string; specOracle: string; qualityAnalyst?: string; caseTableReview?: string; requirementsFile: string } = { version: 'v1', specOracle: 'auto', qualityAnalyst: 'auto', requirementsFile: '' },
     thinkingMode: string = 'provider-default') {
     const attribute = (value: string) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const isV2 = pipeline.version === 'v2-case-table';
@@ -443,6 +443,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 <option value="mutmut" ${selectedEngine === 'mutmut' ? 'selected' : ''}>${t('ui.mutationMutmut')}</option>
             </select>
             <p>${t('ui.mutationEngineHint')}</p>
+
+            <div id="v2-review-settings" style="display:${isV2 ? 'block' : 'none'};">
+                <label for="case-table-review">${t('ui.caseTableReview')}</label>
+                <select id="case-table-review">
+                    <option value="auto" ${pipeline.caseTableReview === 'off' ? '' : 'selected'}>${t('ui.caseTableReviewAuto')}</option>
+                    <option value="off" ${pipeline.caseTableReview === 'off' ? 'selected' : ''}>${t('ui.caseTableReviewOff')}</option>
+                </select>
+            </div>
 
             <div id="v2-advanced-requirements" style="border-top:1px solid var(--vscode-editorGroup-border); margin-top:8px; padding-top:8px;">
                 <label for="requirements-file">${t('ui.requirementsFile')}</label>
@@ -921,8 +929,9 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (!caseTable || typeof caseTable !== 'object') return '';
             const usable = Number(caseTable.usableRows), total = Number(caseTable.totalRows), mismatch = Number(caseTable.specMismatch);
             if (![usable, total, mismatch].every(Number.isFinite)) return '';
-            const tier = caseTable.tier === 'usable' ? 'usable' : 'failed';
-            let html = '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + (tier === 'usable' ? '#1677a6' : '#c75050')
+            const tier = caseTable.tier === 'quality-passed' ? 'quality-passed' : caseTable.tier === 'usable' ? 'usable' : 'failed';
+            const color = tier === 'quality-passed' ? '#16803c' : tier === 'usable' ? '#1677a6' : '#c75050';
+            let html = '<span class="case-table-badge" title="' + escapeHtml(i18n.caseTableTitle) + '" style="background:' + color
                 + '; color:#fff; padding:2px 6px; border-radius:4px; font-size:10px; white-space:nowrap;">'
                 + escapeHtml('v2 ' + tier + ' · ' + usable + '/' + total + ' ' + i18n.caseTableRows) + '</span>';
             if (mismatch > 0) {
@@ -1642,6 +1651,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (analysisRunning) return;
             const val = e && e.target ? e.target.value : document.getElementById('pipeline-version').value;
             document.getElementById('v2-settings').style.display = val === 'v2-case-table' ? 'block' : 'none';
+            document.getElementById('v2-review-settings').style.display = val === 'v2-case-table' ? 'block' : 'none';
             updatePipelineVersionSummary();
             updateFocusMutationHint();
             vscode.postMessage({ command: 'setPipelineSetting', key: 'pipelineVersion', value: val });
@@ -1650,6 +1660,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         document.getElementById('spec-oracle').onchange = (e) => {
             if (analysisRunning) return;
             vscode.postMessage({ command: 'setPipelineSetting', key: 'specOracle', value: e.target.value });
+        };
+        document.getElementById('case-table-review').onchange = (e) => {
+            if (analysisRunning) return;
+            vscode.postMessage({ command: 'setPipelineSetting', key: 'caseTableReview', value: e.target.value });
         };
         document.getElementById('quality-analyst').onchange = (e) => {
             if (analysisRunning) return;

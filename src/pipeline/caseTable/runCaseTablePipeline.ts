@@ -1,3 +1,4 @@
+import { REQUIREMENTS_COVERAGE_JSON, REQUIREMENTS_COVERAGE_MD, DESIGN_FINDINGS_MD } from './artifactNames';
 /**
  * v2 case-table pipeline entry (llmUnitTest.pipelineVersion = "v2-case-table").
  *
@@ -17,7 +18,10 @@ import { RejectedCaseLine } from './caseRowParser';
 import { applyCaseRowValidation, buildCaseRowValidationRequest } from './caseRowValidation';
 import { CaseTableFacts, readCaseTableFacts } from './caseTableFacts';
 import { writeCaseTable } from './caseTableStore';
-import { RequirementEntry, parseRequirements } from './requirements';
+import { RequirementEntry, parseRequirements, writeRequirementsCoverage } from './requirements';
+import { writeDesignFindings } from './designFindings';
+import { CaseTableQualityAssessment, writeCaseTableQuality } from './caseTableQuality';
+import { reviewCaseTable, appendCaseTableReviewReport } from './reviewCaseTable';
 import { CASE_SCENARIO_ROW_LIMIT, getCaseRowCorrectionPrompt, getCaseScenarioPrompt, parseCaseRows } from '../../roles/semanticAnalyzer';
 import { RowStageResult, RowStageOptions, rowTestContext, runRowStage } from './runRowStage';
 import { collectSpecSources, hasSpecSource } from './specSources';
@@ -56,7 +60,7 @@ export interface ModelRequestOptions {
 
 /** v2 role names recorded in role_events.jsonl (v1's event format is unchanged). */
 export type CaseTableRole = 'analyst-scenario' | 'analyst-scenario-correction' | 'writer-row-setup' | 'bug-fixer-row'
-    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst';
+    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst' | 'case-table-review' | 'case-table-review-correction';
 
 export interface RoleAskOptions {
     role: CaseTableRole;
@@ -94,6 +98,7 @@ export interface CaseTablePipelineOptions {
     runRows?: boolean;
     /** PR #10 Quality Analyst survivor loop (default 'auto'; 'off' disables). */
     qualityAnalyst?: QualityAnalystSetting | boolean;
+    caseTableReview?: 'auto' | 'off';
     /** PR #8 hook passed to the row stage. */
     decideExpected?: RowStageOptions['decideExpected'];
     /** Sidebar result card updates (updateCoverage / updateOutcome with a caseTable summary). */
@@ -105,7 +110,7 @@ export interface CaseTablePipelineOptions {
 }
 
 export interface CaseTableCardSummary {
-    tier: 'usable' | 'failed';
+    tier: 'usable' | 'quality-passed' | 'failed';
     usableRows: number;
     totalRows: number;
     specMismatch: number;
@@ -260,10 +265,23 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
         }
     })();
 
-    let finalRows = outcome.rows;
+    state.rows = outcome.rows;
+    const reviewedRows = options.caseTableReview === 'off' ? outcome.rows : await reviewCaseTable({
+        directory, rows: outcome.rows, source: facts.source, requirements, ask,
+        validate: async proposed => {
+            if (!proposed.length) { return []; }
+            const request = buildCaseRowValidationRequest(proposed, { source, target: options.funcName,
+                dependencies: facts.dependencies.map(dependency => dependency.name) });
+            const result = await runTool(pythonToolPath('caseRowValidator'), [], JSON.stringify(request));
+            try { return applyCaseRowValidation(proposed, JSON.parse(result.stdout)).rows; } catch {
+                throw new AnalysisStageError('tool', 'case-row-validation', 'Reviewer row validator returned malformed output.');
+            }
+        }
+    });
+    let finalRows = reviewedRows;
     state.rows = finalRows;
     let stage: RowStageResult | undefined;
-    const validBeforeRows = outcome.rows.filter(row => row.status === 'proposed').length;
+    const validBeforeRows = reviewedRows.filter(row => row.status === 'proposed').length;
     const spec = collectSpecSources(facts, requirements);
     const specOracleUsed = options.specOracle === 'auto' && hasSpecSource(spec);
     state.specOracleUsed = specOracleUsed;
@@ -278,7 +296,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
             ? options.qualityAnalyst
             : readQualityAnalystSetting(options.qualityAnalyst) !== 'off';
         stage = await runRowStage({
-            runtime, facts, rows: outcome.rows, ask, log: options.log,
+            runtime, facts, rows: reviewedRows, ask, log: options.log,
             mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
             qualityAnalyst: qualityAnalystEnabled,
             testFocus,
@@ -329,6 +347,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
                                 fileSuffix: '_followup',
                                 initialPassing: stage.passing,
                                 initialSetups: stage.setups,
+                                initialSurvivorRows: stage.survivorRows,
                                 ...(decideExpected ? { decideExpected } : {})
                             });
                             finalRows = stage.rows;
@@ -345,6 +364,14 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
         options.log(`[v2] spec oracle ${specOracleUsed ? 'on' : 'off'}: ${specMismatch.specMismatchCount} spec mismatches, `
             + `${specMismatch.needsReviewCount} rows need manual review.`);
     }
+    if (stage) {
+        stage.qualityAssessment = writeCaseTableQuality(directory, options.filePath, options.funcName, stage,
+            finalRows, options.caseTableReview !== 'off');
+        if (stage.qualityAssessment?.fullyPassed) {
+            stage.terminal = 'quality-passed';
+            stage.reasonCode = 'quality-passed';
+        }
+    }
     writeCaseTable(directory, { version: CASE_TABLE_VERSION, target: options.funcName, rows: finalRows, testFocus });
     fs.writeFileSync(path.join(directory, CASE_TABLE_REJECTIONS_FILE), JSON.stringify({
         version: 'case-table-rejections-v1', target: options.funcName, rejected, overLimit: parsed.overLimit,
@@ -354,13 +381,24 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
         postResultCard(options, directory, finalRows, stage, specMismatch!.specMismatchCount);
         writeStageResult(directory, options.funcName, finalRows, stage, modelRequests, specOracleUsed, specMismatch!, testFocus);
         writeBatchRecords(directory, options.filePath, options.funcName, roleEvents, { terminal: stage.terminal, reasonCode: stage.reasonCode,
-            specMismatchCount: specMismatch!.specMismatchCount, diagnostic: stage.mutation?.diagnostic, caseTableResult: {
+            specMismatchCount: specMismatch!.specMismatchCount, qualityAssessment: stage.qualityAssessment, diagnostic: stage.mutation?.diagnostic, caseTableResult: {
                 mutationScore: stage.mutation?.score ?? null, lineCoveragePercent: stage.coverage?.available ? stage.coverage.linePercent : null,
                 coverageReasonCode: stage.coverage?.reasonCode ?? null, testPassedRows: finalRows.filter(row => row.status === 'test-passed').length,
                 totalRows: finalRows.length, needsReviewCount: specMismatch!.needsReviewCount } });
     }
+    const requirementsCoverage = writeRequirementsCoverage(directory, options.funcName, requirements, finalRows,
+        Boolean(options.requirementsFile?.trim()));
+    const qualityAnalystEnabled = typeof options.qualityAnalyst === 'boolean' ? options.qualityAnalyst
+        : readQualityAnalystSetting(options.qualityAnalyst) !== 'off';
+    const findings = qualityAnalystEnabled ? writeDesignFindings(directory, options.funcName, stage?.survivorRows ?? [], finalRows) : undefined;
+    fs.appendFileSync(path.join(directory, 'final_report.md'), '\n## 需求涵蓋 / Requirements coverage\n\n'
+        + (requirementsCoverage.hasRequirementsFile ? `${requirementsCoverage.covered}/${requirementsCoverage.total} requirements have a passing row.\n`
+            : '無需求檔 / No requirements file\n')
+        + `See ${REQUIREMENTS_COVERAGE_MD} and ${REQUIREMENTS_COVERAGE_JSON}.\n`
+        + (findings ? `\n## 設計疑點 / Design findings\n\n${findings.length} possible redundant conditions or dead-code findings; see ${DESIGN_FINDINGS_MD}.\n` : ''), 'utf8');
+    if (options.caseTableReview !== 'off') { appendCaseTableReviewReport(directory, finalRows); }
     const valid = validBeforeRows;
-    options.log(`[v2] case_table.json: ${valid} valid rows, ${outcome.rows.length - valid} invalid rows, `
+    options.log(`[v2] case_table.json: ${valid} valid rows, ${reviewedRows.length - valid} invalid rows, `
         + `${rejected.filter(item => item.source === 'scenario' && !item.corrected).length} rejected lines, `
         + `${parsed.overLimit.length} over the row limit.`);
     if (valid === 0) {
@@ -399,12 +437,13 @@ function postResultCard(options: CaseTablePipelineOptions, directory: string, ro
         totalRows: rows.length, specMismatch,
         ...(mismatches.length || needsReview.length ? { specMismatchDetails: { mismatches, needsReview } } : {}) };
     options.postMessage({ command: 'updateOutcome', ...identity, reportPath: path.join(directory, 'final_report.md'),
-        outcome: { label: stage.terminal === 'usable' ? 'v2 usable' : 'v2 failed', kind: stage.terminal === 'usable' ? 'executed' : 'failed' }, caseTable });
+        outcome: { label: `v2 ${stage.terminal}`, kind: stage.terminal === 'quality-passed' ? 'passed' : stage.terminal === 'usable' ? 'executed' : 'failed' }, caseTable });
 }
 
 /** Minimal records the batch journal reads (function_knowledge, run_manifest, role_events) for a v2 target. */
 interface BatchRecord {
-    terminal: 'usable' | 'failed';
+    terminal: 'usable' | 'quality-passed' | 'failed';
+    qualityAssessment?: CaseTableQualityAssessment;
     reasonCode: string;
     specMismatchCount: number;
     diagnostic?: unknown;
@@ -425,6 +464,7 @@ function writeBatchRecords(directory: string, file: string, target: string,
         terminalStatus: record.terminal, ...(record.terminal === 'failed' ? {
             failureCategory: record.failure?.category ?? 'validation', failureStage: record.failure?.stage ?? 'case-table',
             reasonCode: record.reasonCode, ...(record.failure ? { failure: record.failure.message, diagnostic: record.failure.diagnostic } : {}) } : {}),
+        ...(record.qualityAssessment ? { qualityContractVersion: 'case-table-quality-v1', qualityAssessment: record.qualityAssessment } : {}),
         specMismatchCount: record.specMismatchCount, caseTableResult: record.caseTableResult }, null, 2) + '\n', 'utf8');
     const time = new Date().toISOString();
     const diagnostic = record.failure?.diagnostic ?? record.diagnostic;
@@ -440,6 +480,7 @@ function writeStageResult(directory: string, target: string, rows: CaseRow[], st
     const run = stage.mutation?.run;
     const summary = {
         version: 'case-table-result-v1', target, terminal: stage.terminal, reasonCode: stage.reasonCode,
+        ...(stage.qualityAssessment ? { qualityAssessment: stage.qualityAssessment } : {}),
         testFocus,
         ...((diagnostic ?? stage.mutation?.diagnostic) ? { diagnostic: diagnostic ?? stage.mutation?.diagnostic } : {}),
         rows: { total: rows.length, invalid: count('invalid'), captureFailed: count('capture-failed'),

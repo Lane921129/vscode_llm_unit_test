@@ -2,6 +2,26 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-16 PR #17 階段 4（移植 #14 與歷史案例 hist_09／hist_10）
+- 移植 `mine_bug_fix_commits.py` 唯讀歷史修復挖掘工具、測試與 15 項候選清單（`candidates.json`／`candidates.md`／`licenses/`）。
+- 依 H01（`touni` 辨識 `bytearray`）與 H05（`tob(None)` Python 3 例外）新增 `hist_09`、`hist_10` 評估案例，實跑兩版確認 witness 差異。
+- 合併 `eval/historical_bugs/README.md`，保留既有 `hist_01`～`hist_08` 不變，10 個歷史 bug 全數通過 `eval_seeded_bugs.py prepare` 驗證。
+
+## 2026-11-16 PR #17 階段 3（v2 高品質層）
+- usable 通過 standard 行／分支／突變門檻、Reviewer 完成且無未處理標記時升為 quality-passed；off 不升級。
+- q.json 保存本次證據，批次獨立核驗 v2 品質；結果卡片、終態與批次計數同步，評估既有狀態統計加 v2 回歸。
+- v1 品質路徑不變；BMI Reviewer 情境因 56/96 突變維持 usable，既有快照不變，驗證數字見 HANDOFF。
+
+## 2026-11-16 PR #17 階段 2（移植 #9）
+- Reviewer 審案例表並提出新增列／可疑標記；新增列走原執行與規格預測，可疑標記僅記錄於列與報告。
+- 新增 caseTableReview 設定與進階設定 v2 下拉選單；demo 比照 qualityAnalyst 保留選擇，套件設定不重新排版。
+- 四個既有 v2 golden 情境明確關閉 Reviewer，另保留開啟情境；提示詞全文標待審（PR #9），驗證數字見 HANDOFF。
+
+## 2026-11-16 PR #17 階段 1（移植 #11）
+- 需求涵蓋表使用 req.md/json，設計疑點使用 design.md/json，集中短檔名並納入既有路徑長度界限回歸。
+- 保留主線 setup 守門、runner 診斷與短檔名；補問沿用原通過方法及前輪突變提案證據，批次僅彙總有需求檔的目標。
+- 驗證結果及尚未執行範圍見 HANDOFF PR #17；v1、既有 golden 與計畫文件不變。
+
 ## 2026-11-15 PR #16（v2 短路徑與批次預檢）
 - v2 執行目錄與檔名縮短，保留 wx 保護並處理與受測模組同名的載入／突變衝突；正式測試讀取支援新舊結果。
 - 批次開始前估算路徑並保留 60 字餘裕；Windows 超過 250 字停止並提示短目錄，其他平台只記錄。

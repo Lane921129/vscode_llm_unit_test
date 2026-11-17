@@ -26,7 +26,7 @@ async function run(source: string, specReplies: Record<string, string[]>, settin
     let scenarioRequests = 0;
     const messages: Record<string, any>[] = [];
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'limits.py'), funcName: 'clamp', projectRoot: project, outputPath: path.join(directory, 'out'),
             sessionDate: 'spec', pythonExecutable: python, specOracle: setting, qualityAnalyst: 'off', log: () => undefined,
             postMessage: message => messages.push(message),

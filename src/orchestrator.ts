@@ -1921,6 +1921,7 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
             knownSecrets: [params.customKey, params.cloudKey].filter((value): value is string => !!value),
             requestSettings: { localThinkingMode: params.envType === 'local' ? localThinkingMode(params.localThinkingMode) : null,
                 requestContextTokens: params.requestContextTokens ?? null, requestOutputTokens: params.requestOutputTokens ?? null },
+            caseTableReview: config.get<string>('caseTableReview', 'auto') === 'off' ? 'off' : 'auto',
             mutation: { engine: params.mutationEngine, workers: params.mutationWorkers, stageSeconds: normalizeExecutionSettings(params).mutpyTimeout },
             postMessage: message => { void sidebarProvider.webview?.postMessage(message); },
             requestModel: (system, user, options) => requestLlmApi(options?.temperature === undefined ? params

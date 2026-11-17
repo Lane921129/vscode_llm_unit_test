@@ -358,3 +358,28 @@ test('demo confirmation includes thinking in both languages and cancellation pre
         assert.match(env.html, language === 'zh-tw' ? /關閉（省輸出額度，建議小模型使用）/ : /Off \(saves output tokens; recommended for small models\)/);
     }
 });
+
+test('PR #17: Reviewer is in advanced v2 settings and demo preserves both v2 feature choices', () => {
+    for (const language of ['zh-tw', 'en'] as const) {
+        const env = createMockEnvironment({ language });
+        const start = env.html.indexOf('id="advanced-settings-details"');
+        const end = env.html.indexOf('</details>', start);
+        const review = env.html.indexOf('id="case-table-review"');
+        assert.ok(start < review && review < end);
+        const pipeline = env.elements.get('pipeline-version')!;
+        const group = env.elements.get('v2-review-settings')!;
+        assert.equal(group.style.display, 'none');
+        pipeline.value = 'v2-case-table';
+        pipeline.onchange!({ target: pipeline });
+        assert.equal(group.style.display, 'block');
+        const reviewer = env.elements.get('case-table-review')!;
+        const analyst = env.elements.get('quality-analyst')!;
+        reviewer.value = analyst.value = 'off';
+        env.messages.length = 0;
+        env.elements.get('btn-apply-demo-settings')!.onclick!();
+        assert.equal(reviewer.value, 'off');
+        assert.equal(analyst.value, 'off');
+        assert.equal(env.messages.filter(m => m.command === 'setPipelineSetting'
+            && ['qualityAnalyst', 'caseTableReview'].includes(m.key)).length, 0);
+    }
+});

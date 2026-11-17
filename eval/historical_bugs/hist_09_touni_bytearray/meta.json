@@ -1,0 +1,31 @@
+{
+  "id": "hist_09_touni_bytearray",
+  "sourceFile": "bottle_utils.py",
+  "target": "touni",
+  "type": "missing-check",
+  "description": "只將 bytes 進行解碼，bytearray 落入一般 str() 轉換而回傳容器字串表示式",
+  "witness": {
+    "call": "touni(bytearray(b\"abc\"))",
+    "clean": {
+      "status": "ok",
+      "value": "abc",
+      "repr": "'abc'"
+    },
+    "bug": {
+      "status": "ok",
+      "value": "bytearray(b'abc')",
+      "repr": "\"bytearray(b'abc')\""
+    }
+  },
+  "docstringAdded": false,
+  "origin": "historical-fix",
+  "reconstructed": false,
+  "batch": 2,
+  "upstream": {
+    "repo": "bottlepy/bottle",
+    "commit": "8804dd957f544255e71a5a4bade7bd7483ba8073",
+    "date": "2024-10-12",
+    "message": "fix: touni() should recognize bytearray",
+    "url": "https://github.com/bottlepy/bottle/commit/8804dd957f544255e71a5a4bade7bd7483ba8073"
+  }
+}

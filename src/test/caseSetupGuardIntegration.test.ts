@@ -50,7 +50,7 @@ async function withBatch(first: string, replies: string[], check: (result: {
             batch.begin(id);
             const responses = id === 0 ? [...replies] : [row('(3,)')];
             try {
-                await runCaseTablePipeline({
+                await runCaseTablePipeline({ caseTableReview: 'off',
                     filePath: source, funcName: target, projectRoot: project, outputPath: temporary,
                     sessionDate: 'guard', batchDirectory: directory, pythonExecutable: python,
                     specOracle: 'off', qualityAnalyst: 'off', mutation: { engine: 'builtin', workers: 1, stageSeconds: 60 },

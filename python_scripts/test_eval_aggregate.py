@@ -22,6 +22,30 @@ from eval_aggregate import (
 
 
 class EvalSetAndAggregateTests(unittest.TestCase):
+
+    def test_v2_quality_passed_and_usable_are_counted_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            targets = []
+            for index, terminal in enumerate(["quality-passed", "usable"]):
+                report = directory / str(index)
+                report.mkdir()
+                (report / "v2_result.json").write_text(json.dumps({
+                    "version": "case-table-result-v1", "terminal": terminal,
+                    "rows": {"testPassed": 1, "total": 1},
+                    "coverage": {"available": True, "linePercent": 100},
+                    "mutation": {"score": 100}, "specOracle": {"used": False}}), encoding="utf-8")
+                targets.append({"file": "sample.py", "target": "inc", "state": "finished",
+                                "terminalStatus": terminal, "reportDirectory": str(index)})
+            manifest = directory / "batch_manifest.json"
+            manifest.write_text(json.dumps({"schemaVersion": "batch-manifest-v1", "status": "completed",
+                "expectedTargets": 2, "finishedTargets": 2, "targets": targets}), encoding="utf-8")
+            result = evaluate_batch_manifest(manifest)
+            self.assertEqual(result["passed"], 1)
+            self.assertEqual(result["retained"], 1)
+            self.assertEqual(result["qualityPassedRate"], 0.5)
+            self.assertEqual(result["usableRate"], 1.0)
+
     def test_eval_set_v1_matches_eval_screening_sources_and_licenses(self):
         self.assertTrue(DEFAULT_EVAL_SET.is_file(), "eval/eval-set-v1.json must exist")
         eval_set = json.loads(DEFAULT_EVAL_SET.read_text(encoding="utf-8"))

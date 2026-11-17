@@ -1,0 +1,11 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -11,7 +11,7 @@
+ def tob(s, enc='utf8'):
+     if isinstance(s, str):
+         return s.encode(enc)
+-    return b'' if s is None else bytes(s)
++    return bytes("" if s is None else s)
+ 
+ 
+ def touni(s, enc='utf8', err='strict'):

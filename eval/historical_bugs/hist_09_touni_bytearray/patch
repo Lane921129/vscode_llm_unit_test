@@ -1,0 +1,13 @@
+--- a/bottle_utils.py
++++ b/bottle_utils.py
+@@ -15,8 +15,8 @@
+ 
+ 
+ def touni(s, enc='utf8', err='strict'):
+-    if isinstance(s, (bytes, bytearray)):
+-        return str(s, enc, err)
++    if isinstance(s, bytes):
++        return s.decode(enc, err)
+     return "" if s is None else str(s)
+ 
+ 

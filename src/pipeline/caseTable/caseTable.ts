@@ -69,6 +69,8 @@ export interface CaseRow {
     call: CaseCall;
     mocks: CaseMock[];
     requirementId?: string;
+    /** Reviewer flags are recorded and never change the usable gate. */
+    reviewFlags?: string[];
     predictions?: CasePrediction[];
     actual?: CaseOutcome;
     expected?: CaseExpected;

@@ -104,7 +104,7 @@ test('pipeline discards indistinguishable survivor row with survivor-row-indisti
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'clamp.py'), funcName: 'clamp_value', projectRoot: project,
             outputPath: path.join(directory, 'out'), sessionDate: 'survivor', pythonExecutable: python,
             specOracle: 'off', qualityAnalyst: true, log: () => undefined,
@@ -121,6 +121,9 @@ test('pipeline discards indistinguishable survivor row with survivor-row-indisti
         assert.ok(qualityRows.length > 0, 'Quality Analyst must have proposed at least one row');
         assert.ok(qualityRows.some(r => r.status === 'capture-failed' && r.reason === 'survivor-row-indistinguishable'),
             'Indistinguishable row must be marked capture-failed with reason survivor-row-indistinguishable');
+        const findings = JSON.parse(fs.readFileSync(path.join(result.directory, 'design.json'), 'utf8')).findings;
+        assert.ok(findings.length > 0);
+        assert.ok(findings.every((finding: any) => finding.line > 0 && finding.original && finding.mutated && finding.rowIds.length > 0));
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }
@@ -156,7 +159,7 @@ test('distinguishable survivor row improves mutation score and is merged', async
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'grade.py'), funcName: 'score_grade', projectRoot: project,
             outputPath: path.join(directory, 'out'), sessionDate: 'survivor', pythonExecutable: python,
             specOracle: 'off', qualityAnalyst: true, log: () => undefined,
@@ -209,7 +212,7 @@ test('survivor rows stop at qualityNoImprovementLimit or max 3 attempts', async 
     ];
 
     try {
-        const result = await runCaseTablePipeline({
+        const result = await runCaseTablePipeline({ caseTableReview: 'off',
             filePath: path.join(project, 'sign.py'), funcName: 'check_sign', projectRoot: project,
             outputPath: path.join(directory, 'out'), sessionDate: 'survivor', pythonExecutable: python,
             specOracle: 'off', qualityAnalyst: true, log: () => undefined,

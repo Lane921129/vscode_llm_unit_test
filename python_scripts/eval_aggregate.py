@@ -18,6 +18,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_EVAL_SET = ROOT / "eval" / "eval-set-v1.json"
 
+# v2 quality-passed is certified by its producer/batch gate, never inferred from a score here.
 PASSED_STATUSES = {"passed", "quality-passed"}
 RETAINED_STATUSES = {"retained-after-failure", "usable", "execution-passed"}
 REVIEW_BLOCKED_STATUSES = {"review-blocked"}

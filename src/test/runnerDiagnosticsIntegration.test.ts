@@ -35,7 +35,7 @@ for (const operation of ['capture', 'runTestFile', 'mutation']) {
                 return original(command, args, options);
             });
             let targetDirectory = '';
-            const run = runCaseTablePipeline({ filePath: source, funcName: 'double', projectRoot: directory,
+            const run = runCaseTablePipeline({ caseTableReview: 'off', filePath: source, funcName: 'double', projectRoot: directory,
                 outputPath: path.join(directory, 'out'), sessionDate: 'diagnostics', pythonExecutable: python,
                 specOracle: 'off', qualityAnalyst: 'off', mutation: { engine: 'builtin', workers: 1, stageSeconds: 30 },
                 requestSettings: settings, log: () => undefined,
@@ -108,7 +108,7 @@ test('output-limit errors record every request setting; omitted wire limits rema
         fs.writeFileSync(file, 'def f(x):\n    return x\n');
         for (const requestSettings of [settings, undefined]) {
             let targetDirectory = '';
-            await assert.rejects(runCaseTablePipeline({ filePath: file, funcName: 'f', projectRoot: directory,
+            await assert.rejects(runCaseTablePipeline({ caseTableReview: 'off', filePath: file, funcName: 'f', projectRoot: directory,
                 outputPath: directory, sessionDate: 'settings', pythonExecutable: python, specOracle: 'off', requestSettings,
                 onTargetDirectory: value => { targetDirectory = value; }, log: () => undefined,
                 requestModel: async (_system, _user, options) => {

@@ -5,6 +5,9 @@
  * (a full-width colon is also accepted; list markers are ignored). Other lines
  * are notes and are skipped. Requirement text is a spec source in PR #8.
  */
+export { writeRequirementsCoverage } from './coverageReports';
+export type { RequirementsCoverage } from './coverageReports';
+
 export interface RequirementEntry {
     id: string;
     text: string;
