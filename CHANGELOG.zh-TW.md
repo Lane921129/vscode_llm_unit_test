@@ -2,6 +2,12 @@
 
 本檔記錄每個已完成、已驗證並提交的專案改動；不記錄 API Key、Token 或其他密鑰。
 
+## 2026-11-17 PR #18（主線既有失敗、v2 單列修正與提示詞修訂）
+- 修復主線 7 個未列管整合失敗：結果卡片腳本在無 window 環境可載入、webviewContent 測試依 PR #13b 配置更新、批次路徑預檢對空的已發現目標清單照實估算、兩個測試改用較短暫存名稱。
+- Bug Fixer 回覆中方法外的 import 移入方法開頭、方法後內容截掉；實例方法的 setup 沒建立 instance 時在 capture 前判為 setup-unavailable。
+- 存活突變提示列出已測輸入、附檔案行號、共用情境提示的 target 描述；格式錯誤重問一次、先驗證、拒收重複輸入。setup 提示加入 Class context（只進 setup，不進規格提示）。
+- 依使用者核准修訂 v2 提示詞措辭（args／kwargs 範例、單行 JSON、Bug Fixer 限制與長度、規格 basis 逐字、規格修正 Problem 行），並依程式重新產生 `docs/v2_提示詞_待審.md`。
+
 ## 2026-11-16 PR #17 階段 4（移植 #14 與歷史案例 hist_09／hist_10）
 - 移植 `mine_bug_fix_commits.py` 唯讀歷史修復挖掘工具、測試與 15 項候選清單（`candidates.json`／`candidates.md`／`licenses/`）。
 - 依 H01（`touni` 辨識 `bytearray`）與 H05（`tob(None)` Python 3 例外）新增 `hist_09`、`hist_10` 評估案例，實跑兩版確認 witness 差異。

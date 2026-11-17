@@ -253,7 +253,7 @@ const SURVIVOR_ROW_FORMAT_LINES = [
     '- "requirement": ""'
 ];
 
-const SURVIVOR_ROW_EXAMPLE = '{"scenario":"value one above the compared limit","category":"boundary","args":"(11, 0, 10)","kwargs":"{}","mocks":"","requirement":""}';
+const SURVIVOR_ROW_EXAMPLE = '{"scenario":"value exactly at the compared limit","category":"boundary","args":"(10, 0, 10)","kwargs":"{}","mocks":"","requirement":""}';
 
 function survivorTarget(options: SurvivorRowPromptOptions): string[] {
     return [

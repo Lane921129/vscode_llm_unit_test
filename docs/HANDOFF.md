@@ -138,13 +138,66 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 15 | v2 setup 守門與失敗收尾 | 已驗收合併主線（89be1ce） | `lane_edition` | 2026-11-14 核對 Git |
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
-| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 階段 1～4 實作與驗證完成（85248be／9221a1f／42a1072＋階段 4） | `pr/17-port-11-9-14`（基底 2581ec6） | 2026-11-16 Antigravity |
+| 17 | 移植 #11／#9／#14 與 v2 高品質層 | 已驗收合併主線（06e3e85） | `lane_edition` | 2026-11-17 核對 Git |
+| 18 | 修主線 7 個未列管整合失敗、v2 單列修正、存活突變與 setup 提示補強、已核准提示詞措辭修訂 | 階段 0～5 實作完成；VM 非正式驗證通過，**待使用者 Windows 驗證**；未合併、未 push | `pr/18-v2-prompt-fixes`（基底 06e3e85） | 2026-11-17 Claude Code |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #17 移植與 v2 高品質層（最新）
+## 2. PR #18 主線既有失敗、v2 單列修正與提示詞修訂（最新）
+
+- Agent：Claude Code。本次 shell 是使用者筆電上的 **Linux VM（Python 3.10），不是 Windows 原生**；以下驗證都是 VM 非正式結果。沒有 AOCI MCP，未呼叫，待辦見第 4 節。分支 `pr/18-v2-prompt-fixes` 從 `lane_edition` 06e3e85 開立；未合併、未 push、未碰 main；未修改 `.codex/`、`.aoci/`、計畫文件、`eval/historical_bugs/`、`eval/seeded_bugs/`、`eval/eval_screening/`；v1 提示詞、預算、重試、停止條件、通過標準、預設值零變更；任何 golden 快照都沒有更新。
+- 提交：階段 0 `a0e13a3`、階段 1 `b9e4369`、階段 2 `e1102eb`、階段 3 `daa43ed`、階段 4 `0663cbe`、階段 5 為本筆 docs commit（另含存活突變範例 args 改回原值的補正，見下）。
+
+### 階段 0：主線 7 個未列管整合失敗
+
+二分法：Webview 兩檔在 5fc43b6／89be1ce／b1963eb／1cdae96／9c7184b 逐點重跑（VM，純 Node），3 個失敗都從 **b1963eb（PR #13b）** 開始。其餘 4 個在 Linux 不會失敗（Linux 不做路徑長度阻擋），改用 PR #16 的估算函式以 Windows 規則、使用者 TEMP（`C:\Users\lane9\AppData\Local\Temp`，34 字）代入計算：失敗的正好是估算超過 250 字的批次，通過的都在 250 以下，來源是 **569e4b9（PR #16，合併於 9c7184b）** 新增的批次輸出路徑預檢。
+
+| 失敗 | 來源 | 判斷 | 修法 |
+| --- | --- | --- | --- |
+| resultPresentation：result-card renderer keeps 100% neutral…（window is not defined） | PR #13b 新增 `window.toggleSpecMismatch = …` | 程式（腳本無 window 環境無法載入） | 改為 `if (typeof window !== 'undefined')` 才掛上；測試未加假 window，`sidebarSectionLayout` 的 `win.toggleSpecMismatch` 斷言照過 |
+| webviewContent：dependency checks … beside the project selection | PR #13b 六區重排（11/12 驗收合併）把「檢查此專案相依」放進 ⑤ 進階設定 | 測試過時 | 斷言改為位於進階設定區、結果在按鈕之後、全頁只有一個、不在 ② 測試資料區與 ⑥ 開始區；測試名稱同步更新 |
+| webviewContent：source selection guidance renders beside project readiness | 同上（「其他範圍」在 ⑤） | 測試過時 | 斷言改為進階設定區內、緊接在專案環境狀態之後，中英文都檢查 |
+| targetList：batch execution with explicit target list (2 files, 3 functions)… | PR #16 預檢：第二批（`results_missing`）估算約 258 字 > 250 | 測試過時（暫存根目錄太深） | 暫存前綴改 `tlx-`，估算約 233 字；斷言不變 |
+| batchQualificationReuse：optional qualification cannot substitute… | PR #16 預檢：輸出名 `optional-rejected-actual-review` 估算 261 字 | 測試過時 | 前綴改 `bqr-`、輸出名縮短為 `optional-rejected`，約 225 字；斷言不變 |
+| batchQualificationReuse：explicit qualification cannot borrow… | PR #16 預檢：`strict-invalid-new-reviewer` 估算 257 字 | 測試過時 | 輸出名改 `strict-new-review`，約 225 字；斷言不變 |
+| orchestratorLifecycle：abort retains ownership through cleanup… | PR #16 預檢：測試掃到 0 個目標，估算函式對空清單套用虛構最壞名稱（25＋29 字）→ 257 字被擋，第二批記為 failed | 程式（PR #16 核准規格是「以已發現目標清單檢查」） | `estimateBatchOutputPath` 對已傳入的清單（即使是空的）照實估算，約 201 字；未知清單（保留目錄預檢）維持最壞情況；`shortOutputPaths` 新增測試 |
+
+- orchestratorLifecycle 在 VM 連跑 5 次都通過（`log/pr18-s0-orchestratorLifecycle-5x-vm.log`）；Windows 上的失敗是確定性的路徑估算結果，不是不穩定，未加重試。
+- 殘留風險：在 `%TEMP%` 底下跑真實批次的整合測試仍取決於 TEMP 長度；這兩個測試在 46 字的 TEMP 下估算仍 ≤ 246 字。
+- VM 的 v1 golden 跑壞時留下 `log/golden-runtime`，已改名保留為 `log/golden-runtime-pr18-vm-leftover-20261117`（未刪除），Windows 跑 golden 不會撞 EEXIST。
+
+### 階段 1～4 摘要
+
+- 階段 1：`parseRowFixResponse` 把 `def` 之前的 import 移到方法本體開頭、方法結束後的內容截掉（方法內三引號字串與第 0 欄註解保留），並修正 header 正規式會吃到前一行換行的問題；契約檢查**不需要放寬**（呼叫前的 import 原本就是 setup），以真實 Python 測試移入的 import 可執行、11 種繞過手法全部仍被擋。`parseRowSetupResponse` 對實例方法要求對 `instance` 賦值，否則 capture 前判 `setup-unavailable`。
+- 階段 2：存活突變提示列出最多 12 列通過列的輸入（JSON：args／kwargs／mocks）、source 附實際檔案行號（facts 新增 `startLine`）、target 與相依改用與情境提示共用的 `caseTargetLines`／`caseDependencyLines`、格式錯誤單行重問一次（新 `getSurvivorRowCorrectionPrompt`，角色 `quality-analyst-correction`）、候選列先經 `case_row_validator`（pipeline 傳入與審查共用的驗證函式）、重複輸入直接拒收不進設計疑點、範例 scenario 改具體中性描述。順帶修正 `survivorRows` 證據取原始行時未扣起始行號的問題。
+- 階段 3：facts 新增 `classContext`（class 行含裝飾器＋完整 `__init__`，或沒有 `__init__` 時的類別欄位宣告），setup 提示在實例方法或 needs-setup 列加「Class context」（上限 60 行、標示截斷）、needs-setup 實例方法加「also build instance」、有 mocks 時說明不要 mock.patch、實例方法改用 `instance = ...` 範例；一般函式提示與 06e3e85 逐字相同（測試逐字比對）；規格提示看不到 Class context（`specPromptBlindness` 新增檢查）。
+- 階段 4：只改清單列出的句子（逐字見 `docs/v2_提示詞_待審.md` 與 `log/pr18-prompt-before-after.md`）；新增 `v2PromptWording.test.ts`（fast 層）檢查新措辭、保留句、範例數、類別清單與不含內部名稱。
+- 階段 5：`docs/v2_提示詞_待審.md` 由編譯後程式以佔位符實際產生（含 raises 為空省略、相依為空寫法、覆蓋率補問一行、async／class／static 標示、needs-setup 實例方法實際輸出、mock raises 與 (none)）。#1～#5 改過的段落標「2026-11-17 修訂（PR #18）」，#6（PR #10）與 PR #9 維持「待審」。補正：階段 2 把存活突變範例的 args 也從 `(10, 0, 10)` 改成 `(11, 0, 10)`，超出第 7 項只換 scenario 的範圍，本筆改回 `(10, 0, 10)`，scenario 為 `value exactly at the compared limit`。
+
+### Golden 差異對照
+
+- v2 golden：每階段 commit 前在 VM 跑 5/5（bmi、bmi-boundary-first、bmi-quality-analyst、bmi-case-table-review、database），**零差異、快照未動**；VM 有 coverage（純 Python tracer），覆蓋率成功路徑也有驗證。v2 快照不含提示詞文字；三個存活突變固定回覆不重複、皆有效，階段 2 的拒收與驗證不影響結果。
+- v1 golden：**VM 無法驗證**（Python 3.10 使 Writer 驗證失敗，與本次修改無關），待 Windows。
+
+### 驗證（VM 非正式）
+
+| 項目 | 結果 | log |
+| --- | --- | --- |
+| check-types／lint | 每階段 exit 0 | `log/pr18-s{0..4}-types-vm.log`、`log/pr18-s{0..4}-lint-vm.log` |
+| test:fast | Node 762/768（最終程式），6 個失敗與基底 06e3e85 逐項相同（`.venv` 為 Windows 版、win32 esbuild），新增 0 | `log/pr18-s5-fast-vm.log`、基底 `log/pr18-base-06e3e85-fast-vm.log` |
+| 相關 Node 測試 | 階段 0：resultPresentation 14/14、webviewContent 7/7、sidebarSectionLayout 7/7、shortOutputPaths 10/10（1 skip 為原有 Windows 專屬）；階段 1～4：caseRowTests、caseRowStageIntegration、survivorRow、caseScenarioPrompt、specPromptBlindness、caseSpecOracleIntegration、caseTablePipelineIntegration、caseSetupGuardIntegration、v2PromptWording 等全過 | `log/pr18-s*-related-vm.log` 等 |
+| Python | test_case_row_assertions 17 OK、test_case_table_facts 7 OK；全量 `test:python` VM 無 Linux `.venv` 且分批超過時限，未跑 | `log/pr18-s1-python-vm.log`、`log/pr18-s3-facts-vm.log` |
+| test:webview | exit 0 | `log/pr18-s0-webview-vm.log` |
+| v2 golden | 每階段及最終程式 5/5 零差異 | `log/pr18-s{1..5}-golden-v2-vm.log` |
+| v1 golden、compile、test:integration、targetList／batchQualificationReuse 實跑 | VM 無法驗證 | — |
+
+- **待使用者在 Windows 執行**：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:related -- --node resultPresentation --node webviewContent --node targetList --node orchestratorLifecycle --node batchQualificationReuseIntegration --node shortOutputPaths --node caseRowStageIntegration --node survivorRow --node v2PromptWording`、`npm run test:python`、`npm run test:webview`、`npm run test:golden`（v1 11/11、v2 5/5 零差異）、`npm run compile`，最後背景 `npm run test:integration`（預期只剩第 5 節 14 個；階段 0 的 7 個全部通過）。若需基底比對，請在 06e3e85 另跑並存 log。
+
+---
+
+## 2. PR #17 移植與 v2 高品質層（歷史）
 
 - Agent：Codex（階段 1～3）、Antigravity（階段 3 最終驗證收尾、階段 4 與整合測試）；本機 Windows 原生，非 VM。起點 2581ec6，開工時工作區乾淨；未同步不同的 origin/lane_edition，未合併／push。本輪無 AOCI MCP，待辦見第 4 節。
 - [x] 階段 1 實作：移植 87c18ea 的需求涵蓋與設計疑點。runRowStage 衝突保留主線 initialPassing／initialSetups、短檔名與 followup 行為，再加入 survivorRows；補問傳遞前輪 survivorRows。HANDOFF／CHANGELOG 保留主線紀錄，另加本輪紀錄；計畫文件改動全部丟棄。
@@ -1020,7 +1073,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 3. 需要使用者決定
 
-目前沒有待決項目。
+- **（PR #18 階段 4，請確認解讀）「行數那句」**：我把它解讀為情境提示的 `Write at most 8 lines, one scenario per line.`（改為 `…, one single-line JSON object per line (do not wrap in a JSON array).`）。情境修正與存活突變提示沒有這種「每行一個」的行數句，所以這一小項沒有改它們；三支提示的 args／kwargs 兩行都已改。若原意是三支都要加，選項：(A) 維持現狀；(B) 把欄位說明開頭 `Each line is one JSON object with exactly these keys:` 一併改寫（三支共用，會動到這句）。
+- **（PR #18 階段 0，請確認）orchestratorLifecycle 判為程式問題**：依據是 PR #16 核准文字「在 batch.start() 前以已發現目標清單檢查」；空的已發現清單不再套虛構最壞名稱。若監督認為應維持最壞估算，替代做法是只縮短該測試的暫存路徑（屬測試過時）。
 
 - 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
 - Windows 原子改名有限重試已依 11/7 批准條件完成。
@@ -1028,6 +1082,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 ---
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
+
+- 2026-11-17（Claude Code／PR #18）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後依 `git diff 06e3e85..pr/18-v2-prompt-fixes --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
 
 - 2026-11-16（Codex／Antigravity／PR #17）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後，依 `git diff 2581ec6..pr/17-port-11-9-14 --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
 
@@ -1137,6 +1193,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-17（Claude Code／PR #18，Linux VM 非正式）：階段 0～5 提交 a0e13a3／b9e4369／e1102eb／daa43ed／0663cbe／本筆。7 個未列管失敗：3 個源自 PR #13b（1 程式、2 測試過時）、4 個源自 PR #16 路徑預檢（1 程式、3 測試過時）。v2 golden 每階段 5/5 零差異；fast 失敗與基底相同 6 個 VM 平台項。v1 golden、test:python 全量、compile、integration 待 Windows。
 
 - 2026-11-16（Antigravity／PR #17 階段 4 與最終整合比對，Windows 原生）：階段 3 提交 `42a1072`；移植 #14（b9f045e／9b65391）、合併 `eval/historical_bugs/README.md`、新增 `hist_09_touni_bytearray` 與 `hist_10_tob_none_typeerror`（實跑兩版 witness 與 10 案例 `prepare` 驗證），階段 4 指定檢查全過（fast 818/54、Python 979 OK／4 skipped、golden 11/5 零差異）並提交 `6f8354f`。背景 `test:integration`（1129 項：1104 pass／25 fail，含既有 14 葉節點＋4 父群組＋7 個已於基底 `2581ec6` 重現的失敗）新增失敗 0。本筆僅更新交接文件。
 
