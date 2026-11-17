@@ -422,7 +422,8 @@ test('Webview target list UI supports multi-file accumulation, batch scope linka
 });
 
 test('batch execution with explicit target list (2 files, 3 functions) runs only those 3 targets in exact list order and records matching batch_manifest.json', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-explicit-targets-'));
+    // Short temp name keeps both real Windows batches inside the PR #16 output-path limit (250 incl. 60 spare).
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tlx-'));
     const output = path.join(root, 'results');
     const python = resolvePythonExecutable(undefined, path.resolve(__dirname, '../..'));
     const Module = require('module'), originalLoad = Module._load, originalFetch = globalThis.fetch;

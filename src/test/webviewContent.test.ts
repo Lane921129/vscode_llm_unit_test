@@ -84,14 +84,21 @@ test('test settings do not expose an unsupported concurrency control', () => {
     assert.ok(!html.includes('Concurrency Workers'));
 });
 
-test('dependency checks and their result are placed beside the project selection with a separate scope option', () => {
+// PR #13b (accepted 11/12) moved dependency checks and "other scope" into section ⑤ advanced settings.
+function advancedSettingsArea(html: string) {
+    return html.slice(html.indexOf('id="advanced-settings-details"'), html.indexOf('id="section-actions"'));
+}
+
+test('dependency checks and their result stay together in advanced settings with a separate scope option', () => {
     const html = getWebviewContent(key => key);
-    const projectArea = html.slice(html.indexOf('id="project-path"'), html.indexOf('id="output-path"'));
-    assert.ok(projectArea.includes('id="btn-prepare-env"'));
-    assert.ok(projectArea.includes('id="btn-prepare-env-scope"'));
-    assert.ok(projectArea.includes('id="python-environment-status"'));
+    const advanced = advancedSettingsArea(html);
+    assert.ok(advanced.includes('id="btn-prepare-env"'));
+    assert.ok(advanced.includes('id="btn-prepare-env-scope"'));
+    assert.ok(advanced.includes('id="python-environment-status"'));
+    assert.ok(advanced.indexOf('id="btn-prepare-env"') < advanced.indexOf('id="python-environment-status"'), 'the result follows its buttons');
     assert.equal((html.match(/id="btn-prepare-env"/g) || []).length, 1);
-    assert.ok(!html.slice(html.indexOf('id="file-select"'), html.indexOf('id="btn-run"')).includes('id="btn-prepare-env"'));
+    assert.ok(!html.slice(html.indexOf('id="section-test-data"'), html.indexOf('id="section-test-method"')).includes('id="btn-prepare-env"'));
+    assert.ok(!html.slice(html.indexOf('id="section-actions"')).includes('id="btn-prepare-env"'));
 });
 
 test('source selection guidance renders beside project readiness in both supported languages', () => {
@@ -99,8 +106,9 @@ test('source selection guidance renders beside project readiness in both support
         for (const language of ['en', 'zh-tw']) {
             setLanguage(language);
             const html = getWebviewContent(t);
-            const area = html.slice(html.indexOf('id="project-path"'), html.indexOf('id="output-path"'));
+            const area = advancedSettingsArea(html);
             assert.ok(area.includes('id="btn-batch-scope"'));
+            assert.ok(area.indexOf('id="python-environment-status"') < area.indexOf('id="btn-batch-scope"'), 'guidance sits right after project readiness');
             assert.ok(area.includes(t('ui.chooseBatchSources')));
             assert.ok(area.includes(t('ui.batchScopeGuide')));
             assert.ok(!area.includes('ui.batchScope'));

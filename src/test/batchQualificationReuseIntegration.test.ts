@@ -10,7 +10,8 @@ import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 import { observedSeedReply, ollamaRuntimeMetadataFixture, readOllamaRoleRequest } from './ollamaRequestFixture';
 
 test('real batch honors optional qualification, reuses strict runtime evidence, and requires actual review before mutation', async t => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'batch-qualification-reuse-'));
+    // Short temp names keep real Windows batches inside the PR #16 output-path limit (250 incl. 60 spare).
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'bqr-'));
     const project = path.join(directory, 'project');
     fs.mkdirSync(project);
     const sourceText = 'def advance(value):\n    # FULL_REQUIRED_SOURCE_MARKER\n'
@@ -177,7 +178,7 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
         });
         await t.test('optional qualification cannot substitute for actual review and stops the remaining batch after failure', async () => {
             rejectActualReviewer = true;
-            const result = await run('optional-rejected-actual-review', 'tier2');
+            const result = await run('optional-rejected', 'tier2');
             assert.equal(result.manifest.allTargetsPassed, false);
             assert.equal(result.targets.length, 1, 'only the first target is actually executed');
             assert.equal(result.manifest.finishedTargets, 2, 'the remaining target receives an explicit policy-not-run diagnostic');
@@ -196,7 +197,7 @@ test('real batch honors optional qualification, reuses strict runtime evidence, 
             setInitialProfile('verified');
             rejectActualReviewer = false;
             rejectProbeReviewer = true;
-            const result = await run('strict-invalid-new-reviewer', 'auto', true);
+            const result = await run('strict-new-review', 'auto', true);
             assert.equal(result.manifest.allTargetsPassed, false);
             assert.ok(result.wire.some(request => request.prompt.includes('Review this exact TEST_FILE')));
             assert.ok(!result.wire.some(request => request.roleInstructions.length > 0),

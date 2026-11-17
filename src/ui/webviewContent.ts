@@ -923,7 +923,8 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
             }
         }
-        window.toggleSpecMismatch = toggleSpecMismatch;
+        // Inline handlers need the global name; the renderer must also load where no window exists.
+        if (typeof window !== 'undefined') { window.toggleSpecMismatch = toggleSpecMismatch; }
 
         function getCaseTableBadge(caseTable, itemId) {
             if (!caseTable || typeof caseTable !== 'object') return '';

@@ -23,7 +23,8 @@ export function estimateBatchOutputPath(options: PathOptions) {
     const paths = platform === 'win32' ? path.win32 : path.posix;
     const targetPaths = options.targets?.map(item => paths.join(`${label(paths.basename(item.file, '.py'), 16)}_00000000`,
         `${label(item.target, 20)}_00000000`));
-    const longestTarget = targetPaths?.length ? targetPaths.reduce((a, b) => a.length >= b.length ? a : b)
+    // A discovered list (even an empty one) is authoritative; only an unknown list uses the worst-case names.
+    const longestTarget = targetPaths ? targetPaths.reduce((a, b) => a.length >= b.length ? a : b, '')
         : paths.join('s'.repeat(25), 't'.repeat(29));
     const longestArtifact = options.pipelineVersion === 'v2-case-table' ? LONGEST_V2_ARTIFACT : LONGEST_V1_ARTIFACT;
     const estimatedLength = paths.resolve(options.batchDirectory, longestTarget, longestArtifact).length + TEMP_PATH_ALLOWANCE;
