@@ -769,11 +769,19 @@ export function getRowSetupPrompt(input: RowSetupPromptInput): { system: string;
     return { system, user };
 }
 
-/** Extract setup lines from a reply; null when there is no usable block or it exceeds the line limit. */
-export function parseRowSetupResponse(response: string): string | null {
+/** True when the setup binds `instance` (plain, annotated or tuple assignment, walrus, or with-as). */
+function bindsInstance(code: string): boolean {
+    return /^[ \t]*\(?[ \t]*(?:[A-Za-z_]\w*[ \t]*,[ \t]*)*instance\b[^=\n]*?(?<![=!<>])=(?!=)/m.test(code)
+        || /\bas[ \t]+instance\b/.test(code) || /\binstance[ \t]*:=/.test(code);
+}
+
+/** Extract setup lines from a reply; null when there is no usable block, it exceeds the line limit,
+ * or an instance-method row's setup never builds `instance`. */
+export function parseRowSetupResponse(response: string, options: { requireInstance?: boolean } = {}): string | null {
     const fenced = /```(?:python|py)?[^\n]*\n([\s\S]*?)```/i.exec(response);
     const code = (fenced ? fenced[1] : response).replace(/\r\n?/g, '\n').trim();
     const lines = code.split('\n').filter(line => line.trim() && !line.trim().startsWith('#'));
     if (!lines.length || lines.length > ROW_SETUP_MAX_LINES || !/^\s*args\s*=/m.test(code)) { return null; }
+    if (options.requireInstance && !bindsInstance(code)) { return null; }
     return code;
 }

@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import { test } from 'node:test';
 import { runCaseTablePipeline } from '../pipeline/caseTable/runCaseTablePipeline';
 import { observedExpectation } from '../pipeline/caseTable/runRowStage';
-import { runTestFile } from '../pipeline/caseTable/rowExecution';
+import { fixPreservesContract, runTestFile } from '../pipeline/caseTable/rowExecution';
+import { parseRowFixResponse } from '../roles/bugFixer';
 import { resolvePythonExecutable } from '../utils/pythonTestEnvironment';
 
 const root = path.resolve(__dirname, '../..');
@@ -93,6 +94,65 @@ test('a failing row gets at most two fixes and a fix that changes the expected v
     assert.match(prompts[1], /self\.assertEqual\(result, 999\)/);
     assert.deepEqual(result.rows.map(row => [row.id, row.status, row.reason ?? null]), [['C1', 'test-failed', 'test-failed'], ['C2', 'test-passed', null]]);
     assert.equal(result.stage!.terminal, 'usable', 'the other row still passes and is measured');
+});
+
+test('an instance-method setup without instance is rejected before capture; one with instance is unchanged', async () => {
+    const { result, prompts } = await run('Box.grow', [
+        [line({ scenario: '加三', category: 'normal', args: '(3,)' }), line({ scenario: '加一', category: 'normal', args: '(1,)' })].join('\n'),
+        '```python\nbox = target_module.Box(2)\nargs = (3,)\nkwargs = {}\n```',
+        '```python\ninstance = target_module.Box(2)\nargs = (1,)\nkwargs = {}\n```'
+    ]);
+    assert.equal(prompts.length, 3);
+    assert.deepEqual(result.rows.map(row => [row.id, row.status, row.reason ?? null, row.actual?.value ?? null]),
+        [['C1', 'capture-failed', 'setup-unavailable', null], ['C2', 'test-passed', null, '3']]);
+});
+
+test('a row fix with imports outside the method runs, trailing text is dropped, and every bypass is still rejected', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'v2-fix-'));
+    try {
+        const project = path.join(directory, 'project');
+        const artifacts = path.join(directory, 'runs');
+        fs.mkdirSync(project);
+        fs.mkdirSync(artifacts);
+        const source = path.join(project, 'shapes.py');
+        fs.writeFileSync(source, SOURCE, 'utf8');
+        const runtime = { python, sourceFile: source, target: 'double', importPaths: [project], artifacts };
+        const header = 'import unittest\nfrom unittest import mock\nimport shapes as target_module\n\n\nclass TestCaseTable(unittest.TestCase):\n';
+        const call = '    result = target_module.double(*(value,), **{})\n    self.assertEqual(result, 4)\n';
+        const before = '    def test_c1(self):\n        value = int(Fraction(4, 2))\n        result = target_module.double(*(value,), **{})\n        self.assertEqual(result, 4)';
+        const failing = await runTestFile(runtime, 'before_test', header + before + '\n');
+        assert.equal(failing.passed, false, 'Fraction is not imported yet');
+        const reply = '```python\nfrom fractions import Fraction\n\ndef test_c1(self):\n    value = int(Fraction(4, 2))\n' + call
+            + '\ndef helper():\n    return 0\n\nThe import was missing.\n```';
+        const fixed = parseRowFixResponse(reply, 'test_c1')!;
+        assert.ok(fixed.startsWith('    def test_c1(self):\n        from fractions import Fraction\n'));
+        assert.doesNotMatch(fixed, /helper|missing/);
+        const callees = ['target_module.double'];
+        assert.deepEqual(await fixPreservesContract(runtime, before, fixed, 'test_c1', callees), { accepted: true, violations: [] });
+        const passing = await runTestFile(runtime, 'after_test', header + fixed + '\n');
+        assert.deepEqual([passing.passed, passing.targetObserved], [true, true]);
+
+        const bypass = (outside: string[], setup: string[], after = '') => '```python\n' + [...outside, '', 'def test_c1(self):',
+            '    value = 2', ...setup.map(item => '    ' + item)].join('\n') + '\n' + call + after + '```';
+        const cases: [string, string][] = [
+            ['change result', bypass([], [], '    result = 4\n')],
+            ['rebind target', bypass([], ['target_module.double = lambda *a, **k: 4'])],
+            ['setattr', bypass([], ["setattr(target_module, 'double', lambda *a, **k: 4)"])],
+            ['sys.modules', bypass(['import sys'], ["sys.modules['shapes'] = object()"])],
+            ['vars', bypass([], ["vars(target_module)['double'] = lambda *a, **k: 4"])],
+            ['patch.object', bypass(['from unittest import mock'], ["mock.patch.object(target_module, 'double', return_value=4).start()"])],
+            ['alias', bypass(['import shapes as again'], ['again.double = lambda *a, **k: 4'])],
+            ['getattr', bypass([], ["f = getattr(target_module, 'double')"])],
+            ['tuple unpacking', bypass([], ['(t, n) = (target_module, 1)'])],
+            ['walrus', bypass([], ['(t := target_module)'])],
+            ['dict container', bypass([], ["d = {'m': target_module}"])]];
+        for (const [name, text] of cases) {
+            const parsed = parseRowFixResponse(text, 'test_c1')!;
+            assert.ok(parsed, name);
+            const verdict = await fixPreservesContract(runtime, before, parsed, 'test_c1', callees);
+            assert.equal(verdict.accepted, false, `${name} must stay rejected: ${parsed}`);
+        }
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
 test('a passing method that never executes the real target is not counted as target-observed', async () => {

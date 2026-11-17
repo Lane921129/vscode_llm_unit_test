@@ -91,3 +91,33 @@ test('setup and fix prompts state one task, a size limit and one example; replie
         '    def test_c2(self):\n        x = 1\n        self.assertEqual(x, 1)');
     assert.equal(parseRowFixResponse('```python\ndef test_other(self):\n    pass\n```', 'test_c2'), null);
 });
+
+test('a row fix keeps imports written outside the method and drops whatever follows the method', () => {
+    const outside = '```python\nfrom decimal import Decimal\nimport math\n\ndef test_c2(self):\n    x = Decimal("1.5")\n    self.assertEqual(x, 1)\n```';
+    assert.equal(parseRowFixResponse(outside, 'test_c2'),
+        '    def test_c2(self):\n        from decimal import Decimal\n        import math\n        x = Decimal("1.5")\n        self.assertEqual(x, 1)');
+    const wrapped = [
+        '```python', 'import unittest', 'from fractions import (', '    Fraction,', ')', '', 'class T(unittest.TestCase):',
+        '    import os', '    def test_c2(self):', '        text = """first', 'column zero inside a string', '"""',
+        '# a column-zero comment inside the method', '        self.assertEqual(text, Fraction(1))', '', '    def helper(self):', '        return 1',
+        '', "if __name__ == '__main__':", '    unittest.main()', 'This explains the fix.', '```'].join('\n');
+    assert.equal(parseRowFixResponse(wrapped, 'test_c2'), [
+        '    def test_c2(self):', '        import unittest', '        from fractions import (', '            Fraction,', '            )', '        import os',
+        '        text = """first', '    column zero inside a string', '    """', '    # a column-zero comment inside the method',
+        '        self.assertEqual(text, Fraction(1))'].join('\n'));
+    assert.equal(parseRowFixResponse('```python\ndef test_c2(self):\n    y = 2\n    self.assertEqual(y, 2)\n# trailing note\n```', 'test_c2'),
+        '    def test_c2(self):\n        y = 2\n        self.assertEqual(y, 2)', 'a trailing comment after the method is dropped');
+});
+
+test('an instance-method setup must build instance before it can be captured', () => {
+    const reply = (lines: string[]) => '```python\n' + lines.join('\n') + '\n```';
+    assert.equal(parseRowSetupResponse(reply(['box = target_module.Box(2)', 'args = (3,)', 'kwargs = {}']), { requireInstance: true }), null);
+    assert.equal(parseRowSetupResponse(reply(['instance == target_module.Box(2)', 'args = (3,)', 'kwargs = {}']), { requireInstance: true }), null);
+    for (const binding of ['instance = target_module.Box(2)', 'instance: target_module.Box = target_module.Box(2)',
+        'instance, other = target_module.Box(2), 1', 'with target_module.make() as instance:\n    pass']) {
+        const code = [binding, 'args = (3,)', 'kwargs = {}'].join('\n');
+        assert.equal(parseRowSetupResponse(reply([code]), { requireInstance: true }), code, binding);
+    }
+    const plain = reply(['box = target_module.Box(2)', 'args = (box,)', 'kwargs = {}']);
+    assert.equal(parseRowSetupResponse(plain), 'box = target_module.Box(2)\nargs = (box,)\nkwargs = {}', 'other targets are unchanged');
+});

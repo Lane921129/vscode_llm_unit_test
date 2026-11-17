@@ -438,13 +438,66 @@ export function getRowFixPrompt(input: RowFixPromptInput): { system: string; use
     return { system, user };
 }
 
-/** Extract the corrected method; null when the reply has no method with the same name. */
+const IMPORT_LINE = /^\s*(?:import\s+[A-Za-z_]|from\s+[.\w]+\s+import\s)/;
+const parenDepth = (line: string): number => (line.match(/[([{]/g) || []).length - (line.match(/[)\]}]/g) || []).length;
+
+/** Track triple-quoted strings so a column-0 line inside one does not end the method. */
+function tripleQuoteStateAfter(line: string, open: string | null): string | null {
+    let index = 0;
+    while (index < line.length) {
+        if (open) {
+            const close = line.indexOf(open, index);
+            if (close < 0) { return open; }
+            index = close + 3; open = null;
+        } else {
+            const double = line.indexOf('"""', index), single = line.indexOf("'''", index);
+            const next = [double, single].filter(position => position >= 0).sort((a, b) => a - b)[0];
+            const hash = line.indexOf('#', index);
+            if (next === undefined || (hash >= 0 && hash < next)) { return null; }
+            open = line.startsWith('"""', next) ? '"""' : "'''"; index = next + 3;
+        }
+    }
+    return open;
+}
+
+/** Extract the corrected method; null when the reply has no method with the same name.
+ * Imports written before the def move to the start of the method body; anything after the method ends is dropped. */
 export function parseRowFixResponse(response: string, methodName: string): string | null {
     const fenced = /```(?:python|py)?[^\n]*\n([\s\S]*?)```/i.exec(response);
     const code = (fenced ? fenced[1] : response).replace(/\r\n?/g, '\n').replace(/\s+$/, '');
-    const header = new RegExp(`^(\\s*)def ${methodName}\\(self\\)\\s*:`, 'm').exec(code);
+    const header = new RegExp(`^([ \\t]*)def ${methodName}\\(self\\)\\s*:`, 'm').exec(code);
     if (!header) { return null; }
-    const lines = code.slice(header.index).split('\n');
     const base = header[1].length;
-    return lines.map(line => line.trim() ? '    ' + line.slice(Math.min(base, line.length - line.trimStart().length)) : '').join('\n');
+    const imports: string[] = [];
+    const outside = code.slice(0, header.index).split('\n');
+    for (let index = 0; index < outside.length; index++) {
+        if (!IMPORT_LINE.test(outside[index])) { continue; }
+        const group = [outside[index].trim()];
+        let depth = parenDepth(outside[index]);
+        while (depth > 0 && index + 1 < outside.length) { index += 1; group.push(outside[index].trim()); depth += parenDepth(outside[index]); }
+        if (!imports.includes(group.join('\n'))) { imports.push(group.join('\n')); }
+    }
+    const all = code.slice(header.index).split('\n');
+    const kept = [all[0]];
+    let pendingComments: string[] = [];
+    let open: string | null = tripleQuoteStateAfter(all[0], null);
+    for (const line of all.slice(1)) {
+        const indent = line.length - line.trimStart().length;
+        if (!open && line.trim() && indent <= base) {
+            if (line.trim().startsWith('#')) { pendingComments.push(line); continue; }
+            break;
+        }
+        kept.push(...pendingComments, line); pendingComments = [];
+        open = tripleQuoteStateAfter(line, open);
+    }
+    while (kept.length > 1 && !kept[kept.length - 1].trim()) { kept.pop(); }
+    const reindent = (line: string) => line.trim() ? '    ' + line.slice(Math.min(base, line.length - line.trimStart().length)) : '';
+    const method = kept.map(reindent);
+    if (imports.length) {
+        const firstBody = kept.slice(1).find(line => line.trim() && !line.trim().startsWith('#'));
+        const bodyIndent = firstBody ? Math.max(1, firstBody.length - firstBody.trimStart().length - base) : 4;
+        const pad = '    ' + ' '.repeat(bodyIndent);
+        method.splice(1, 0, ...imports.flatMap(group => group.split('\n').map((line, offset) => pad + (offset ? '    ' : '') + line)));
+    }
+    return method.join('\n');
 }

@@ -95,7 +95,8 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                 : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
             const prompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
                 targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
-            setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' })) ?? undefined;
+            setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' }),
+                { requireInstance: facts.methodKind === 'instance' }) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
             if (!await validateRowSetup(runtime, setup, row.id)) {
                 rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-forbidden-mutation');
@@ -216,7 +217,8 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
                     : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
                 const setupPrompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
                     targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
-                setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' })) ?? undefined;
+                setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' }),
+                    { requireInstance: facts.methodKind === 'instance' }) ?? undefined;
                 if (!setup) {
                     rows[rowIndex] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable');
                     noImprovementCount += 1;
