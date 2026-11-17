@@ -732,9 +732,23 @@ export interface RowSetupPromptInput {
     source: string;
     scenario: string;
     setupDescription: string;
+    /** Owner class header plus __init__ or field declarations; shown for instance methods and needs-setup rows. */
+    classContext?: string | null;
+    /** The row's args are a needs-setup description. */
+    needsSetup?: boolean;
+    /** Dependencies the host patches for this row. */
+    mockedDependencies?: readonly string[];
 }
 
 export const ROW_SETUP_MAX_LINES = 10;
+export const ROW_SETUP_CLASS_CONTEXT_MAX_LINES = 60;
+
+function classContextLines(context: string): string[] {
+    const lines = context.replace(/\r\n?/g, '\n').split('\n');
+    if (lines.length <= ROW_SETUP_CLASS_CONTEXT_MAX_LINES) { return lines; }
+    return [...lines.slice(0, ROW_SETUP_CLASS_CONTEXT_MAX_LINES),
+        `# ... truncated: ${lines.length - ROW_SETUP_CLASS_CONTEXT_MAX_LINES} more lines not shown`];
+}
 
 export function getRowSetupPrompt(input: RowSetupPromptInput): { system: string; user: string } {
     const system = [
@@ -742,12 +756,15 @@ export function getRowSetupPrompt(input: RowSetupPromptInput): { system: string;
         'Build only the inputs that are described. Do not call the function under test and do not write assertions.'
     ].join('\n');
     const instance = input.methodKind === 'instance';
+    const classContext = (instance || input.needsSetup) && input.classContext ? classContextLines(input.classContext) : [];
+    const mocked = input.mockedDependencies ?? [];
     const user = [
         `Target: ${input.signature}${input.className ? ` (method of class ${input.className})` : ''}`,
         'Source:',
         '```python',
         input.source,
         '```',
+        ...(classContext.length ? ['', 'Class context:', '```python', ...classContext, '```'] : []),
         '',
         `Scenario: ${input.scenario}`,
         `Inputs to build: ${input.setupDescription}`,
@@ -758,10 +775,11 @@ export function getRowSetupPrompt(input: RowSetupPromptInput): { system: string;
         '- kwargs: a dict of keyword arguments ({} when there are none)',
         ...(instance ? [`- instance: the ${input.className ?? 'class'} object whose method is tested`] : []),
         `Do not call ${input.targetName}, do not open files or use the network, and do not write assertions.`,
+        ...(mocked.length ? [`These dependencies are replaced from outside the setup: ${mocked.join(', ')}. Do not call mock.patch in the setup.`] : []),
         'Example:',
         '```python',
-        'item = target_module.Item(name="a", size=2)',
-        'args = (item, 3)',
+        ...(instance ? ['instance = target_module.Item(name="a", size=2)', 'args = (3,)']
+            : ['item = target_module.Item(name="a", size=2)', 'args = (item, 3)']),
         'kwargs = {}',
         '```',
         'Output only one ```python block containing the setup lines.'

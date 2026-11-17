@@ -14,7 +14,7 @@ import { CaseTableFacts } from './caseTableFacts';
 import { TestFocus } from '../testFocus';
 import { buildCaseTableTestFile, buildRowTestMethod, RowExpectation, RowTestContext, rowTestMethodName } from './rowToTest';
 import { captureRow, captureSurvivorRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile, validateRowSetup } from './rowExecution';
-import { getRowSetupPrompt, parseRowSetupResponse } from '../../roles/unittestWriter';
+import { getRowSetupPrompt, parseRowSetupResponse, RowSetupPromptInput } from '../../roles/unittestWriter';
 import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../../roles/bugFixer';
 import { getSurvivorRowCorrectionPrompt, getSurvivorRowPrompt, parseSurvivorReply } from '../../roles/qualityAnalyst';
 import { currentStopPolicy } from '../stopPolicy';
@@ -29,6 +29,18 @@ export { CASE_TABLE_TEST_FILE } from './artifactNames';
 function sameCaseInput(a: CaseRow, b: CaseRow): boolean {
     const key = (row: CaseRow) => JSON.stringify([needsSetup(row.call) ? ['setup', row.call.needsSetup] : [row.call.args, row.call.kwargs], row.mocks]);
     return key(a) === key(b);
+}
+
+/** Setup prompt input for a needs-setup or instance-method row (both the scenario rows and survivor rows). */
+function rowSetupPromptInput(row: CaseRow, facts: CaseTableFacts, targetName: string): RowSetupPromptInput {
+    const instance = facts.methodKind === 'instance';
+    const owner = `the ${facts.className ?? 'class'} object whose method is tested`;
+    const description = needsSetup(row.call)
+        ? (instance ? `${row.call.needsSetup}; also build instance (${owner})` : row.call.needsSetup)
+        : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
+    return { signature: facts.signature, className: facts.className, methodKind: facts.methodKind, targetName, source: facts.source,
+        scenario: row.scenario, setupDescription: description, classContext: facts.classContext ?? null, needsSetup: needsSetup(row.call),
+        mockedDependencies: [...new Set(row.mocks.map(mock => mock.dependency))] };
 }
 
 export interface RowStageOptions {
@@ -100,10 +112,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
         if (row.status !== 'proposed') { continue; }
         let setup: string | undefined;
         if (needsSetup(row.call) || facts.methodKind === 'instance') {
-            const description = needsSetup(row.call) ? row.call.needsSetup
-                : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
-            const prompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
-                targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
+            const prompt = getRowSetupPrompt(rowSetupPromptInput(row, facts, runtime.target));
             setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' }),
                 { requireInstance: facts.methodKind === 'instance' }) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
@@ -251,10 +260,7 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
 
             let setup: string | undefined;
             if (needsSetup(row.call) || facts.methodKind === 'instance') {
-                const description = needsSetup(row.call) ? row.call.needsSetup
-                    : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
-                const setupPrompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
-                    targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
+                const setupPrompt = getRowSetupPrompt(rowSetupPromptInput(row, facts, runtime.target));
                 setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' }),
                     { requireInstance: facts.methodKind === 'instance' }) ?? undefined;
                 if (!setup) {

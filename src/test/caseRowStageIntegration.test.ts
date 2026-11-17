@@ -54,6 +54,9 @@ test('instance methods get one Writer setup per row and then run as host-written
     ], { postMessage: message => { messages.push(message); } });
     assert.equal(prompts.length, 3);
     assert.match(prompts[1], /- instance: the Box object whose method is tested/);
+    assert.ok(prompts[1].includes('Class context:\n```python\nclass Box:\n    def __init__(self, size):\n        self.size = size\n```'),
+        'the real facts tool supplies the class line and __init__ to the setup prompt');
+    assert.ok(prompts[1].includes('instance = target_module.Item(name="a", size=2)\nargs = (3,)'));
     assert.deepEqual(result.rows.map(row => [row.id, row.status, row.actual?.value]), [['C1', 'test-passed', '5'], ['C2', 'test-passed', 'ValueError']]);
     assert.equal(result.stage!.terminal, 'usable');
     const coverage = result.stage!.coverage!;

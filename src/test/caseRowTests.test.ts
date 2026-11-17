@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { CaseRow } from '../pipeline/caseTable/caseTable';
 import { buildCaseTableTestFile, buildRowTestMethod, RowTestContext, rowTestMethodName } from '../pipeline/caseTable/rowToTest';
 import { observedExpectation } from '../pipeline/caseTable/runRowStage';
-import { getRowSetupPrompt, parseRowSetupResponse, ROW_SETUP_MAX_LINES } from '../roles/unittestWriter';
+import { getRowSetupPrompt, parseRowSetupResponse, ROW_SETUP_CLASS_CONTEXT_MAX_LINES, ROW_SETUP_MAX_LINES } from '../roles/unittestWriter';
 import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../roles/bugFixer';
 
 const forbiddenDomainTerms = /\b(?:token|jwt|bmi|payment_gateway|login_user|claims|partner)\b/i;
@@ -120,4 +120,34 @@ test('an instance-method setup must build instance before it can be captured', (
     }
     const plain = reply(['box = target_module.Box(2)', 'args = (box,)', 'kwargs = {}']);
     assert.equal(parseRowSetupResponse(plain), 'box = target_module.Box(2)\nargs = (box,)\nkwargs = {}', 'other targets are unchanged');
+});
+
+test('a plain-function setup prompt is word for word the same as before PR #18', () => {
+    const prompt = getRowSetupPrompt({ signature: 'total(items)', className: null, methodKind: 'module', targetName: 'total',
+        source: 'def total(items):\n    return sum(i.size for i in items)', scenario: 'two items', setupDescription: 'a list of two Item objects',
+        classContext: null, needsSetup: true, mockedDependencies: [] });
+    // Generated from lane_edition 06e3e85 (before PR #18).
+    assert.equal(prompt.user, 'Target: total(items)\nSource:\n```python\ndef total(items):\n    return sum(i.size for i in items)\n```\n\n'
+        + 'Scenario: two items\nInputs to build: a list of two Item objects\n\nThe module under test is available as target_module, and unittest.mock as mock.\n'
+        + 'Write 3 to 10 lines of Python that define:\n- args: a tuple of positional arguments\n- kwargs: a dict of keyword arguments ({} when there are none)\n'
+        + 'Do not call total, do not open files or use the network, and do not write assertions.\nExample:\n```python\n'
+        + 'item = target_module.Item(name="a", size=2)\nargs = (item, 3)\nkwargs = {}\n```\nOutput only one ```python block containing the setup lines.');
+});
+
+test('an instance-method setup prompt shows the class context, the instance example and the mocked dependencies', () => {
+    const classContext = 'class Box:\n    def __init__(self, size, label="box"):\n        self.size = size';
+    const prompt = getRowSetupPrompt({ signature: 'grow(extra)', className: 'Box', methodKind: 'instance', targetName: 'Box.grow',
+        source: 'def grow(self, extra):\n    return self.size + extra', scenario: 'grow a small box',
+        setupDescription: 'a list of two sizes; also build instance (the Box object whose method is tested)', classContext,
+        needsSetup: true, mockedDependencies: ['store.read'] }).user;
+    assert.ok(prompt.includes('```\n\nClass context:\n```python\n' + classContext + '\n```\n\nScenario: grow a small box'));
+    assert.ok(prompt.includes('Inputs to build: a list of two sizes; also build instance (the Box object whose method is tested)'));
+    assert.ok(prompt.includes('These dependencies are replaced from outside the setup: store.read. Do not call mock.patch in the setup.'));
+    assert.ok(prompt.includes('Example:\n```python\ninstance = target_module.Item(name="a", size=2)\nargs = (3,)\nkwargs = {}\n```'));
+    assert.equal((prompt.match(/Example:/g) || []).length, 1, 'still exactly one example');
+    const long = getRowSetupPrompt({ signature: 'grow(extra)', className: 'Box', methodKind: 'instance', targetName: 'Box.grow', source: 'def grow(self, extra): ...',
+        scenario: 's', setupDescription: 'd', classContext: Array.from({ length: 75 }, (_value, index) => `    field_${index} = ${index}`).join('\n') }).user;
+    assert.ok(long.includes(`    field_${ROW_SETUP_CLASS_CONTEXT_MAX_LINES - 1} = ${ROW_SETUP_CLASS_CONTEXT_MAX_LINES - 1}\n# ... truncated: 15 more lines not shown\n\`\`\``));
+    assert.ok(!long.includes(`field_${ROW_SETUP_CLASS_CONTEXT_MAX_LINES} =`));
+    assert.equal(ROW_SETUP_CLASS_CONTEXT_MAX_LINES, 60);
 });

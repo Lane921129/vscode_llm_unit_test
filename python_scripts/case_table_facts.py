@@ -204,6 +204,27 @@ def _dependencies(node, module_names, parameter_names):
     return list(found.values())
 
 
+def _class_context(source, owner):
+    """Class header (with decorators) plus __init__, or the class-level field declarations when there is no __init__.
+
+    Only the row-setup prompt reads this; it never reaches the spec prompt."""
+    if owner is None:
+        return None
+    lines = source.splitlines()
+    start = min([decorator.lineno for decorator in owner.decorator_list] + [owner.lineno])
+    header = lines[start - 1:owner.body[0].lineno - 1] if owner.body else lines[start - 1:owner.lineno]
+    while header and not header[-1].strip():
+        header.pop()
+    init = next((node for node in owner.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == '__init__'), None)
+    if init is not None:
+        first = min([decorator.lineno for decorator in init.decorator_list] + [init.lineno])
+        body = lines[first - 1:init.end_lineno]
+    else:
+        body = [line for node in owner.body if isinstance(node, (ast.AnnAssign, ast.Assign))
+                for line in lines[node.lineno - 1:node.end_lineno]]
+    return '\n'.join(header + body)
+
+
 def collect_facts(source, target):
     try:
         tree = ast.parse(source)
@@ -232,6 +253,7 @@ def collect_facts(source, target):
         'dependencies': _dependencies(node, _module_names(tree), names),
         'source': segment,
         'startLine': node.lineno,
+        'classContext': _class_context(source, owner),
     }
 
 
