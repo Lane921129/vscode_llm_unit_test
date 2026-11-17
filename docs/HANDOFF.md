@@ -139,7 +139,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
 | 17 | 移植 #11／#9／#14 與 v2 高品質層 | 已驗收合併主線（06e3e85） | `lane_edition` | 2026-11-17 核對 Git |
-| 18 | 修主線 7 個未列管整合失敗、v2 單列修正、存活突變與 setup 提示補強、已核准提示詞措辭修訂 | 階段 0～5 完成；Windows：fast／related／compile 通過；HEAD 與基底重跑比對：新增失敗 0、python 波動排除；**v1 golden full 在 HEAD 尚未乾淨通過（突變逾時），待 A/B 重跑**；未合併、未 push | `pr/18-v2-prompt-fixes`（基底 06e3e85） | 2026-11-17 Claude Code |
+| 18 | 修主線 7 個未列管整合失敗、v2 單列修正、存活突變與 setup 提示補強、已核准提示詞措辭修訂 | **可送驗收**：11/18 過夜 Windows 驗證 golden v1 11/11、v2 5/5（A/B 各 3 次全過），integration 只剩既有 14 個（＋3 父）、HEAD 專屬失敗 0、階段 0 的 7 個全過；未合併、未 push | `pr/18-v2-prompt-fixes`（基底 06e3e85） | 2026-11-17 Claude Code |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
@@ -208,6 +208,24 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | compile | exit 0 | `log/pr18-compile-windows.log` |
 | test:integration | 1137 項：1083 pass／54 fail，耗時約 62 分（PR #17 約 37 分）。第 5 節 14 個既有葉節點都在；另有約 40 個（含 5 個 v2 golden、targetList、caseSpecOracle 等）錯誤多為 Python 工具未完成（method inventory tool did not complete、Trace 事實為空、v2 終態 failed、mutatest partial） | `log/pr18-integration-windows.log` |
 
+### 2026-11-18 過夜驗證（使用者執行 `log\pr18-overnight.cmd`，HEAD c568cb2，程式同 035a7cc；Claude Code 分析）
+
+狀態檔 `log/pr18-overnight-status.txt`：11/17 23:52 開始、11/18 02:25 結束，每一步都跑完；HEAD 與基底 06e3e85（`log\pr18-base-wt`）編譯 exit 0。
+
+| 項目 | HEAD | 基底 06e3e85 | log |
+| --- | --- | --- | --- |
+| v1 orchestratorGolden A/B（交替各 3 次） | 3/3 通過，每次 11/11（full 為 passed） | 3/3 通過，每次 11/11 | `log/pr18-overnight-{head,base}-ab-{1,2,3}-windows.log` |
+| test:golden（完整） | **v1 11/11、v2 5/5**，exit 0；快照未動，`log/golden-failure-full/` 沒有新增 run | — | `log/pr18-overnight-head-golden-windows.log` |
+| test:integration（Node） | 1137 項：1120 pass／17 fail，3771 秒 | 1129 項：1104 pass／25 fail，3725 秒（與 PR #17 紀錄相同） | `log/pr18-overnight-{head,base}-integration-windows.log` |
+
+integration 逐案比對（解析各自 log 結尾 failing tests 段）：
+- (a) 兩邊都失敗：17 個＝第 5 節既有 14 個葉節點（全部在）＋父測試 3 個（BMI keeps an executed seed…、formal Writer length recovery…、formal full Writer revision…）。
+- (b) 只有基底失敗：8 個＝階段 0 的 7 個原失敗＋batchQualificationReuse 父測試（real batch honors optional qualification…）。
+- (c) 只有 HEAD 失敗：**0**。HEAD 多 8 項測試是 PR #18 新增的測試。
+- integration runner 在 Node 有失敗後未進入 Python（與先前各 PR 相同）；Python 全量另見 11/17 重跑比對（兩個波動模組兩邊皆 OK）。
+
+結論：11/17 的 v1 golden full 失敗與多出的整合失敗都是負載（突變 5 秒逾時、Python 觀測未完成），空閒時 HEAD 與基底表現一致。**PR #18 可送驗收。** 驗收後請執行 `git worktree remove log\pr18-base-wt` 移除基底 worktree。
+
 ### 2026-11-17 20:36～21:53 HEAD 與基底重跑比對（使用者執行 `log\pr18-windows-recheck.cmd`）
 
 | 項目 | HEAD（1bb8bcb，程式同 035a7cc） | 基底 06e3e85（`log\pr18-base-wt` worktree） | log |
@@ -219,7 +237,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 
 - 結論：第一次 integration 多出的約 40 個失敗是負載造成，與 PR #18 無關；Python 2 個失敗也是波動。
 - v1 golden `full`：今天 HEAD 上 4 次失敗（run-5～run-8），3 次是 builtin 突變 96 個中 3 個 TIMEOUT（每個突變上限 5 秒、4 workers）→ `partial`，1 次是 Python 觀測未完整；BMI 函式沒有迴圈，逾時只可能來自系統過慢（當時記憶體使用 81%）。PR #18 未修改突變引擎、v1 提示詞或 v1 流程，`full` 也未走到快照比對；11/16（PR #17 期間）`run-3` 亦有 `full` 失敗紀錄。**但 HEAD 尚未有一次乾淨通過，依停止條件不宣告 v1 golden 零差異**。
-- 待辦：電腦空閒（關閉不需要的程式）時執行 `.\log\pr18-golden-ab.cmd`：HEAD 與基底交替各跑 3 次 v1 orchestratorGolden（只比對、不更新），狀態在 `log/pr18-golden-ab-status.txt`。
+- 已完成：A/B 改由 11/18 過夜批次 `log\pr18-overnight.cmd` 執行，結果見上方「2026-11-18 過夜驗證」。
 
 - 判讀（未下結論）：執行期間電腦同時開著其他高負載程式，耗時比平常多近一倍，多出的失敗與 golden／Python 失敗都呈現逾時特徵；其中 targetList 在 related 單獨執行時通過、v2 golden 在 VM 每階段通過。**依停止條件（v1 golden 失敗、integration 有新失敗）先停下，未合併**。
 - 待辦：電腦空閒時執行 `log\pr18-windows-recheck.cmd`（在倉庫根目錄的 PowerShell 輸入 `.\log\pr18-windows-recheck.cmd`）。它會在 HEAD 依序跑 golden、上述 22 個多出失敗的 Node 測試檔、2 個 Python 模組，再於 `log\pr18-base-wt`（06e3e85 的 git worktree）跑同一組做基底比對；結果在 `log/pr18-recheck-{head|base}-*-windows.log`，狀態在 `log/pr18-windows-recheck-status.txt`。之後可用 `git worktree remove log\pr18-base-wt` 移除。若 HEAD 與基底結果一致或兩者都通過，即可判定與 PR #18 無關；之後仍需一次乾淨的完整 integration。
@@ -1223,6 +1241,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-18 03:25（Claude Code／PR #18 過夜驗證分析）：A/B v1 golden HEAD 3/3、基底 3/3；完整 golden v1 11/11、v2 5/5；integration HEAD 1120/1137（14 既有＋3 父）、基底 1104/1129，HEAD 專屬失敗 0、階段 0 的 7 個全過。判定 PR #18 可送驗收。
 
 - 2026-11-17 22:45（Claude Code／PR #18 重跑比對）：使用者執行 recheck。22 個檔 HEAD 121/129、基底 111/123，HEAD 新增失敗 0；Python 兩邊 OK；v1 golden full HEAD 失敗（觀測不完整）、基底通過。full 失敗原因為突變逾時／觀測不完整（負載），未到快照比對；已留 `log/pr18-golden-ab.cmd` 待空閒時 A/B 各 3 次。
 
