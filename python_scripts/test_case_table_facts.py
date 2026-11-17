@@ -97,6 +97,13 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(collect_facts(SOURCE, 'Box.make')['signature'], 'make(x)')
         self.assertEqual(collect_facts(SOURCE, 'Box.build')['signature'], 'build(x)')
 
+    def test_start_line_is_the_def_line_in_the_file(self):
+        source = 'import os\n\n\nclass Box:\n    @staticmethod\n    def build(x):\n        return x\n\n\ndef top(a):\n    return a\n'
+        self.assertEqual(collect_facts(source, 'top')['startLine'], 10)
+        build = collect_facts(source, 'Box.build')
+        self.assertEqual(build['startLine'], 6, 'the def line, not the decorator')
+        self.assertEqual(source.splitlines()[build['startLine'] - 1].strip(), build['source'].splitlines()[0].strip())
+
     def test_errors_and_cli(self):
         with self.assertRaises(FactsError):
             collect_facts(SOURCE, 'missing')

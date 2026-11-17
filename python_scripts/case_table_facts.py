@@ -231,6 +231,7 @@ def collect_facts(source, target):
         'raises': _raises(node),
         'dependencies': _dependencies(node, _module_names(tree), names),
         'source': segment,
+        'startLine': node.lineno,
     }
 
 

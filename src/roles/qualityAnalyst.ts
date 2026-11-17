@@ -10,7 +10,7 @@ import type { QualityTaskEvidence, QualityTaskIdentity } from '../pipeline/quali
 import { qualityAnalystContractVersion } from './roleContracts';
 import { TestFocus } from '../pipeline/testFocus';
 import { CaseRow } from '../pipeline/caseTable/caseTable';
-import { parseCaseRows } from '../pipeline/caseTable/caseRowParser';
+import { caseDependencyLines, caseTargetLines, CORRECTION_PROBLEMS, parseCaseRows } from './semanticAnalyzer';
 import type { RolePrompt } from './semanticAnalyzer';
 
 export interface QualityTask {
@@ -216,13 +216,23 @@ export interface SurvivorMutantFact {
     description?: string;
 }
 
+export interface SurvivorTestedInput {
+    call: CaseRow['call'];
+    mocks: CaseRow['mocks'];
+}
+
 export interface SurvivorRowPromptOptions {
     signature: string;
     className?: string;
     methodKind?: 'module' | 'instance' | 'static' | 'class';
+    isAsync?: boolean;
     source: string;
+    /** File line number of the first source line, so the source matches "Surviving mutant at line N". */
+    startLine?: number;
     dependencies?: readonly { name: string }[];
     survivor: SurvivorMutantFact;
+    /** Inputs of passing rows (never their expected or actual results); at most 12 are listed. */
+    testedInputs?: readonly SurvivorTestedInput[];
 }
 
 export const SURVIVOR_ROW_SYSTEM_PROMPT = [
@@ -231,25 +241,47 @@ export const SURVIVOR_ROW_SYSTEM_PROMPT = [
     'Do not write test code. Do not predict or state the expected result.'
 ].join('\n');
 
+export const SURVIVOR_TESTED_INPUT_LIMIT = 12;
+
+const SURVIVOR_ROW_FORMAT_LINES = [
+    'Each line is one JSON object with exactly these keys:',
+    '- "scenario": what the case checks, at most 80 characters',
+    '- "category": one of normal, boundary, error, dependency-failure, state',
+    '- "args": a Python tuple literal of the positional arguments, e.g. "(1, 2)"; write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
+    '- "kwargs": a Python dict literal of keyword arguments, "{}" when there are none',
+    '- "mocks": "" or entries "name -> literal" or "name -> raise ExceptionName", separated by ";"',
+    '- "requirement": ""'
+];
+
+const SURVIVOR_ROW_EXAMPLE = '{"scenario":"value one above the compared limit","category":"boundary","args":"(11, 0, 10)","kwargs":"{}","mocks":"","requirement":""}';
+
+function survivorTarget(options: SurvivorRowPromptOptions): string[] {
+    return [
+        ...caseTargetLines({ signature: options.signature, className: options.className ?? null,
+            methodKind: options.methodKind ?? 'module', isAsync: options.isAsync ?? false }),
+        '',
+        ...caseDependencyLines(options.dependencies ?? [])
+    ];
+}
+
+function testedInputLine(input: SurvivorTestedInput): string {
+    const call = 'needsSetup' in input.call ? { args: `<needs-setup: ${input.call.needsSetup}>`, kwargs: '{}' }
+        : { args: input.call.args, kwargs: input.call.kwargs };
+    const mocks = input.mocks.map(mock => `${mock.dependency} -> ${mock.behavior === 'raise' ? `raise ${mock.value}` : mock.value}`).join('; ');
+    return JSON.stringify({ ...call, mocks });
+}
+
 export function getSurvivorRowPrompt(options: SurvivorRowPromptOptions): RolePrompt {
-    const isInstance = options.methodKind === 'instance' && Boolean(options.className);
-    const targetHeader = isInstance
-        ? `Target: ${options.signature} (method of class ${options.className})`
-        : `Target: ${options.signature}\nModule-level function`;
-
-    const depLines = options.dependencies && options.dependencies.length
-        ? options.dependencies.map(d => `- ${d.name}`)
-        : ['- (none)'];
-
+    const first = options.startLine ?? 1;
+    const sourceLines = options.source.split(/\r?\n/);
+    const width = String(first + sourceLines.length - 1).length;
+    const tested = (options.testedInputs ?? []).slice(0, SURVIVOR_TESTED_INPUT_LIMIT);
     const user = [
-        targetHeader,
+        ...survivorTarget(options),
         '',
-        'Dependencies you may mock (use exactly these names):',
-        ...depLines,
-        '',
-        'Source:',
+        'Source (each line starts with its line number in the file):',
         '```python',
-        options.source,
+        ...sourceLines.map((text, index) => `${String(first + index).padStart(width)}: ${text}`),
         '```',
         '',
         `Surviving mutant at line ${options.survivor.line}:`,
@@ -258,28 +290,54 @@ export function getSurvivorRowPrompt(options: SurvivorRowPromptOptions): RolePro
         'Mutated:',
         options.survivor.mutated,
         ...(options.survivor.description ? [`Note: ${options.survivor.description}`] : []),
+        ...(tested.length ? ['', 'Inputs already used by passing tests:', ...tested.map(testedInputLine),
+            'Propose an input that is different from all of these.'] : []),
         '',
         'Write exactly 1 line proposing an input scenario that distinguishes the original function from this mutant.',
-        'Each line is one JSON object with exactly these keys:',
-        '- "scenario": what the case checks, at most 80 characters',
-        '- "category": one of normal, boundary, error, dependency-failure, state',
-        '- "args": a Python tuple literal of the positional arguments, e.g. "(1, 2)"; write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
-        '- "kwargs": a Python dict literal of keyword arguments, "{}" when there are none',
-        '- "mocks": "" or entries "name -> literal" or "name -> raise ExceptionName", separated by ";"',
-        '- "requirement": ""',
+        ...SURVIVOR_ROW_FORMAT_LINES,
         'Example line:',
-        '{"scenario":"input distinguishing original and mutant","category":"boundary","args":"(10, 0, 10)","kwargs":"{}","mocks":"","requirement":""}',
+        SURVIVOR_ROW_EXAMPLE,
         'Output only that one JSON line, with no other text.'
     ].join('\n');
 
     return { system: SURVIVOR_ROW_SYSTEM_PROMPT, user };
 }
 
+/** One-line format correction for a survivor row, asked once (same flow as the scenario correction). */
+export function getSurvivorRowCorrectionPrompt(line: string, reason: string, field: string | undefined,
+    options: SurvivorRowPromptOptions): RolePrompt {
+    const problem = CORRECTION_PROBLEMS[reason] ?? 'it does not follow the line format';
+    const user = [
+        ...survivorTarget(options),
+        '',
+        'This scenario line could not be used:',
+        line,
+        `Problem: ${problem}${field ? ` (key "${field}")` : ''}.`,
+        '',
+        'Rewrite it as one corrected line that keeps the same scenario.',
+        ...SURVIVOR_ROW_FORMAT_LINES,
+        'Example line:',
+        SURVIVOR_ROW_EXAMPLE,
+        'Output only the one corrected JSON line, with no other text.'
+    ].join('\n');
+    return { system: SURVIVOR_ROW_SYSTEM_PROMPT, user };
+}
+
+export interface SurvivorRowParse {
+    row?: CaseRow;
+    /** The first line that attempted a row but was rejected; only such a line gets the single correction. */
+    rejection?: { line: string; reason: string; field?: string };
+}
+
+export function parseSurvivorReply(raw: string, options?: { firstIndex?: number }): SurvivorRowParse {
+    const parsed = parseCaseRows(raw, { origin: 'quality-analyst', requirementIds: [], firstIndex: options?.firstIndex ?? 1, limit: 1 });
+    if (parsed.rows[0]) { return { row: parsed.rows[0] }; }
+    const lines = raw.split(/\r?\n/);
+    const rejection = parsed.rejected.find(item => (lines[item.line - 1] ?? '').trim().startsWith('{'));
+    return rejection ? { rejection: { line: lines[rejection.line - 1].trim(), reason: rejection.reason,
+        ...(rejection.field ? { field: rejection.field } : {}) } } : {};
+}
+
 export function parseSurvivorRow(raw: string, options?: { firstIndex?: number }): CaseRow | undefined {
-    const parsed = parseCaseRows(raw, {
-        origin: 'quality-analyst',
-        requirementIds: [],
-        firstIndex: options?.firstIndex ?? 1
-    });
-    return parsed.rows[0];
+    return parseSurvivorReply(raw, options).row;
 }

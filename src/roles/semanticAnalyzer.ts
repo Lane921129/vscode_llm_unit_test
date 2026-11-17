@@ -748,14 +748,26 @@ const CASE_ROW_FORMAT_LINES = [
 const CASE_SCENARIO_EXAMPLE = '{"scenario":"value equal to the upper limit","category":"boundary","args":"(10, 0, 10)",'
     + '"kwargs":"{}","mocks":"","requirement":""}';
 
-function caseScenarioContext(facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[]): string[] {
+export type CaseTargetDescription = Pick<CaseScenarioPromptFacts, 'signature' | 'className' | 'methodKind' | 'isAsync'>;
+
+/** Target and owner lines shared by the scenario, scenario-correction and survivor prompts. */
+export function caseTargetLines(facts: CaseTargetDescription): string[] {
     const owner = facts.className
         ? `Method of class ${facts.className} (${facts.methodKind === 'instance' ? 'instance method; args exclude self'
             : facts.methodKind === 'class' ? 'class method; args exclude cls' : 'static method'})`
         : 'Module-level function';
+    return [`Target: ${facts.isAsync ? 'async ' : ''}${facts.signature}`, owner];
+}
+
+/** Mockable dependency lines shared by the scenario, scenario-correction and survivor prompts. */
+export function caseDependencyLines(dependencies: readonly { name: string }[]): string[] {
+    return ['Dependencies you may mock (use exactly these names):',
+        ...(dependencies.length ? dependencies.map(dependency => `- ${dependency.name}`) : ['(none) - leave "mocks" empty'])];
+}
+
+function caseScenarioContext(facts: CaseScenarioPromptFacts, requirements: readonly CaseScenarioRequirement[]): string[] {
     return [
-        `Target: ${facts.isAsync ? 'async ' : ''}${facts.signature}`,
-        owner,
+        ...caseTargetLines(facts),
         '',
         'Docstring:',
         facts.docstring?.trim() || '(none)',
@@ -767,8 +779,7 @@ function caseScenarioContext(facts: CaseScenarioPromptFacts, requirements: reado
         ...(facts.branches.length ? facts.branches.map(branch => `- line ${branch.line}: ${branch.kind} ${branch.condition}`) : ['(none)']),
         ...(facts.raises.length ? ['', `Exceptions raised in the body: ${facts.raises.join(', ')}`] : []),
         '',
-        'Dependencies you may mock (use exactly these names):',
-        ...(facts.dependencies.length ? facts.dependencies.map(dependency => `- ${dependency.name}`) : ['(none) - leave "mocks" empty'])
+        ...caseDependencyLines(facts.dependencies)
     ];
 }
 
@@ -806,7 +817,7 @@ export function getCaseScenarioPrompt(facts: CaseScenarioPromptFacts, requiremen
     return { system: CASE_SCENARIO_SYSTEM_PROMPT, user };
 }
 
-const CORRECTION_PROBLEMS: Record<string, string> = {
+export const CORRECTION_PROBLEMS: Record<string, string> = {
     'invalid-json': 'it is not one valid JSON object',
     'not-an-object': 'it is not a JSON object',
     'missing-field': 'a required key is missing or empty',
