@@ -427,13 +427,14 @@ export function getRowFixPrompt(input: RowFixPromptInput): { system: string; use
         error,
         '```',
         '',
-        'Fix only what makes this method fail. Do not change expected values, the asserted exception, or the arguments of the call under test.',
+        'Change only the setup before the call under test. Keep the mock.patch setup, the call under test, the assertions and everything after the call unchanged.',
+        'Do not add try, if or loops. Write any import you need inside the method, before the call.',
         'Example of the expected reply shape:',
         '```python',
         `    def ${input.methodName}(self):`,
         '        ...',
         '```',
-        `Output only the complete corrected ${input.methodName} method in one \`\`\`python block.`
+        `Output only the complete corrected ${input.methodName} method in one \`\`\`python block, with no helper functions and no explanation.`
     ].join('\n');
     return { system, user };
 }

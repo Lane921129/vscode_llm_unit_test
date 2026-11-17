@@ -738,9 +738,9 @@ const CASE_ROW_FORMAT_LINES = [
     'Each line is one JSON object with exactly these keys:',
     '- "scenario": what the case checks, at most 80 characters',
     '- "category": one of normal, boundary, error, dependency-failure, state',
-    '- "args": a Python tuple literal of the positional arguments, e.g. "(1, 2)";'
+    '- "args": a Python tuple literal of the positional arguments, e.g. "(1, \'a\')"; write a single argument as "(x,)";'
         + ' write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
-    '- "kwargs": a Python dict literal of keyword arguments, "{}" when there are none',
+    '- "kwargs": a Python dict literal of keyword arguments, e.g. "{\'k\': \'v\'}"; "{}" when there are none',
     '- "mocks": "" or entries "name -> literal" or "name -> raise ExceptionName", separated by ";"',
     '- "requirement": a requirement id from the list, or ""'
 ];
@@ -805,7 +805,7 @@ export function getCaseScenarioPrompt(facts: CaseScenarioPromptFacts, requiremen
         facts.source,
         '```',
         '',
-        `Write at most ${limit} lines, one scenario per line.`,
+        `Write at most ${limit} lines, one single-line JSON object per line (do not wrap in a JSON array).`,
         ...CASE_ROW_FORMAT_LINES,
         'Use each category at least once when it applies to this function.',
         ...boundaryLine,

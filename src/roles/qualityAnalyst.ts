@@ -247,8 +247,8 @@ const SURVIVOR_ROW_FORMAT_LINES = [
     'Each line is one JSON object with exactly these keys:',
     '- "scenario": what the case checks, at most 80 characters',
     '- "category": one of normal, boundary, error, dependency-failure, state',
-    '- "args": a Python tuple literal of the positional arguments, e.g. "(1, 2)"; write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
-    '- "kwargs": a Python dict literal of keyword arguments, "{}" when there are none',
+    '- "args": a Python tuple literal of the positional arguments, e.g. "(1, \'a\')"; write a single argument as "(x,)"; write "<needs-setup: what must be built>" when an argument cannot be written as a literal',
+    '- "kwargs": a Python dict literal of keyword arguments, e.g. "{\'k\': \'v\'}"; "{}" when there are none',
     '- "mocks": "" or entries "name -> literal" or "name -> raise ExceptionName", separated by ";"',
     '- "requirement": ""'
 ];
