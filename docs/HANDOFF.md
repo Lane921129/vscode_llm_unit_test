@@ -139,7 +139,7 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 15b | runner 診斷、v2 請求設定紀錄、demo thinking | 已驗收合併主線（1cdae96） | `lane_edition` | 2026-11-15 核對 Git |
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
 | 17 | 移植 #11／#9／#14 與 v2 高品質層 | 已驗收合併主線（06e3e85） | `lane_edition` | 2026-11-17 核對 Git |
-| 18 | 修主線 7 個未列管整合失敗、v2 單列修正、存活突變與 setup 提示補強、已核准提示詞措辭修訂 | 階段 0～5 實作完成；VM 非正式驗證通過，**待使用者 Windows 驗證**；未合併、未 push | `pr/18-v2-prompt-fixes`（基底 06e3e85） | 2026-11-17 Claude Code |
+| 18 | 修主線 7 個未列管整合失敗、v2 單列修正、存活突變與 setup 提示補強、已核准提示詞措辭修訂 | 階段 0～5 完成；Windows：fast／related（7 個原失敗全過）／compile 通過；python 2F、v1 golden full、integration 多約 40 F，疑似高負載逾時，**待空閒時重跑比對**；未合併、未 push | `pr/18-v2-prompt-fixes`（基底 06e3e85） | 2026-11-17 Claude Code |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
@@ -193,7 +193,23 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | v2 golden | 每階段及最終程式 5/5 零差異 | `log/pr18-s{1..5}-golden-v2-vm.log` |
 | v1 golden、compile、test:integration、targetList／batchQualificationReuse 實跑 | VM 無法驗證 | — |
 
-- **待使用者在 Windows 執行**：`npm run check-types`、`npm run lint`、`npm run test:fast`、`npm run test:related -- --node resultPresentation --node webviewContent --node targetList --node orchestratorLifecycle --node batchQualificationReuseIntegration --node shortOutputPaths --node caseRowStageIntegration --node survivorRow --node v2PromptWording`、`npm run test:python`、`npm run test:webview`、`npm run test:golden`（v1 11/11、v2 5/5 零差異）、`npm run compile`，最後背景 `npm run test:integration`（預期只剩第 5 節 14 個；階段 0 的 7 個全部通過）。若需基底比對，請在 06e3e85 另跑並存 log。
+### 2026-11-17 16:56～18:25 Windows 原生驗證（Claude Code 經 VS Code 暫時工作代為執行，HEAD `035a7cc`）
+
+使用者要求代為執行。終端機在電腦操作中只能點選、不能輸入，所以在 `.vscode/tasks.json` 暫加一個工作（執行後已用 git 還原），由它執行 `log/pr18-windows-verify.cmd`（log/ 不進版控）依序跑以下指令；結束碼在 `log/pr18-windows-status.txt`。
+
+| 項目 | Windows 結果 | log |
+| --- | --- | --- |
+| check-types／lint | exit 0／0 | `log/pr18-types-windows.log`、`log/pr18-lint-windows.log` |
+| test:fast | Node 826/826、Python 54 OK，exit 0 | `log/pr18-fast-windows.log` |
+| test:related（resultPresentation、webviewContent、targetList、orchestratorLifecycle、batchQualificationReuseIntegration、shortOutputPaths、caseRowStageIntegration、survivorRow、v2PromptWording） | **66/66**，階段 0 的 7 個原失敗全部通過 | `log/pr18-related-windows.log` |
+| test:python | 981 項，failures=2、skipped=4，exit 1：`test_trace_observation_guard`（別名呼叫未被觀察到）、`test_quality_experiments`（真實 mutatest 回報 partial）；兩模組本 PR 未修改 | `log/pr18-python-windows.log` |
+| test:webview | exit 0 | `log/pr18-webview-windows.log` |
+| test:golden | v1 9/11：`full` 終態 `retained-after-failure`（mutatest「partial」，非快照比對差異）及其父測試；runner 在 v1 失敗後停止，v2 未在此步執行；快照未動 | `log/pr18-golden-windows.log`、`log/golden-failure-full/run-5` |
+| compile | exit 0 | `log/pr18-compile-windows.log` |
+| test:integration | 1137 項：1083 pass／54 fail，耗時約 62 分（PR #17 約 37 分）。第 5 節 14 個既有葉節點都在；另有約 40 個（含 5 個 v2 golden、targetList、caseSpecOracle 等）錯誤多為 Python 工具未完成（method inventory tool did not complete、Trace 事實為空、v2 終態 failed、mutatest partial） | `log/pr18-integration-windows.log` |
+
+- 判讀（未下結論）：執行期間電腦同時開著其他高負載程式，耗時比平常多近一倍，多出的失敗與 golden／Python 失敗都呈現逾時特徵；其中 targetList 在 related 單獨執行時通過、v2 golden 在 VM 每階段通過。**依停止條件（v1 golden 失敗、integration 有新失敗）先停下，未合併**。
+- 待辦：電腦空閒時執行 `log\pr18-windows-recheck.cmd`（在倉庫根目錄的 PowerShell 輸入 `.\log\pr18-windows-recheck.cmd`）。它會在 HEAD 依序跑 golden、上述 22 個多出失敗的 Node 測試檔、2 個 Python 模組，再於 `log\pr18-base-wt`（06e3e85 的 git worktree）跑同一組做基底比對；結果在 `log/pr18-recheck-{head|base}-*-windows.log`，狀態在 `log/pr18-windows-recheck-status.txt`。之後可用 `git worktree remove log\pr18-base-wt` 移除。若 HEAD 與基底結果一致或兩者都通過，即可判定與 PR #18 無關；之後仍需一次乾淨的完整 integration。
 
 ---
 
@@ -1073,9 +1089,10 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 3. 需要使用者決定
 
-- **（PR #18 階段 4，請確認解讀）「行數那句」**：我把它解讀為情境提示的 `Write at most 8 lines, one scenario per line.`（改為 `…, one single-line JSON object per line (do not wrap in a JSON array).`）。情境修正與存活突變提示沒有這種「每行一個」的行數句，所以這一小項沒有改它們；三支提示的 args／kwargs 兩行都已改。若原意是三支都要加，選項：(A) 維持現狀；(B) 把欄位說明開頭 `Each line is one JSON object with exactly these keys:` 一併改寫（三支共用，會動到這句）。
-- **（PR #18 階段 0，請確認）orchestratorLifecycle 判為程式問題**：依據是 PR #16 核准文字「在 batch.start() 前以已發現目標清單檢查」；空的已發現清單不再套虛構最壞名稱。若監督認為應維持最壞估算，替代做法是只縮短該測試的暫存路徑（屬測試過時）。
+目前沒有待決項目。
 
+- 已決定（使用者 2026-11-17 16:21「照你決定的修改」）：PR #18 階段 4「行數那句」只指情境提示的 `Write at most 8 lines, …` 一句（改為 one single-line JSON object per line (do not wrap in a JSON array)）；情境修正與存活突變提示沒有這種行數句，維持不改，三支共用的 `Each line is one JSON object with exactly these keys:` 也不改。
+- 已決定（同上）：PR #18 階段 0 的 orchestratorLifecycle 屬程式問題，維持 `estimateBatchOutputPath` 對已發現（含空）目標清單照實估算、未知清單維持最壞情況的修法。
 - 已決定：**PR #4 延後（使用者 11/08 決定）**，下一步直接做 PR #5。
 - Windows 原子改名有限重試已依 11/7 批准條件完成。
 
@@ -1193,6 +1210,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-17 18:30（Claude Code／PR #18 Windows 驗證）：經 VS Code 暫時工作代跑。types／lint／fast 826＋54／related 66（7 個原失敗全過）／webview／compile 通過；python 981 中 2F（未改模組）、v1 golden full 因 mutatest partial 失敗、integration 1083/1137（14 既有＋約 40 個逾時特徵失敗）。疑似高負載，待重跑比對（`log/pr18-windows-recheck.cmd`）。第 3 節兩項依使用者 16:21 指示改為已決定。
 
 - 2026-11-17（Claude Code／PR #18，Linux VM 非正式）：階段 0～5 提交 a0e13a3／b9e4369／e1102eb／daa43ed／0663cbe／本筆。7 個未列管失敗：3 個源自 PR #13b（1 程式、2 測試過時）、4 個源自 PR #16 路徑預檢（1 程式、3 測試過時）。v2 golden 每階段 5/5 零差異；fast 失敗與基底相同 6 個 VM 平台項。v1 golden、test:python 全量、compile、integration 待 Windows。
 
