@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import * as vm from 'node:vm';
+import { spawnSync } from 'node:child_process';
 import {
     addTargetsToList,
     clearTargetList,
@@ -213,6 +214,58 @@ test('R4 importing eval_screening/targets.json and eval/eval-set-v1.json produce
     const resultEvalSet = await importTargetListFromJson(evalDir, fs.readFileSync(evalSetV1Path, 'utf8'), resolver);
     assert.deepEqual(resultEvalSet.missing, []);
     assert.deepEqual(resultEvalSet.targets, resultTargets.targets);
+});
+
+test('PR19 a target list file in a subfolder resolves its paths from its own folder (hist/clean and hist/bugs)', async () => {
+    const repo = path.resolve(__dirname, '../..');
+    const python = resolvePythonExecutable(undefined, repo);
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'pr19-hist-'));
+    const hist = path.join(parent, 'hist');
+    try {
+        const prepared = spawnSync(python, ['-B', path.join(repo, 'python_scripts', 'eval_seeded_bugs.py'), 'prepare', '-o', hist,
+            '--bugs-dir', path.join(repo, 'eval', 'historical_bugs')], { cwd: repo, encoding: 'utf8' });
+        assert.equal(prepared.status, 0, prepared.stderr);
+        const resolver = defaultFunctionInventoryResolver(python);
+        const read = (relative: string) => fs.readFileSync(path.join(hist, relative), 'utf8');
+        const listed = (relative: string) => Object.values(JSON.parse(read(relative)).targets as Record<string, string[]>).flat().length;
+
+        // clean/targets.json lists files relative to clean/. The 10 historical bugs touch 8 distinct functions
+        // (hist_01/02 share mac_address, hist_04/05 share iban); bugs/targets.json holds all 10 entries.
+        const clean = await importTargetListFromJson(hist, read('clean/targets.json'), resolver, { sourceFile: path.join(hist, 'clean', 'targets.json') });
+        assert.deepEqual(clean.missing, []);
+        assert.equal(clean.targets.length, listed('clean/targets.json'));
+        assert.equal(clean.targets.length, 8);
+        assert.ok(clean.targets.every(item => item.file.startsWith('clean/')), 'stored relative to the project root');
+        const bugs = await importTargetListFromJson(hist, read('bugs/targets.json'), resolver, { sourceFile: path.join(hist, 'bugs', 'targets.json') });
+        assert.deepEqual(bugs.missing, []);
+        assert.equal(bugs.targets.length, 10);
+        assert.ok(bugs.targets.every(item => /^bugs\/hist_\d\d_[^/]+\/[^/]+\.py$/.test(item.file)));
+
+        // rawJson has no location and stays relative to the project root (unchanged behaviour).
+        const raw = await importTargetListFromJson(hist, read('clean/targets.json'), resolver);
+        assert.equal(raw.targets.length, 0);
+        assert.ok(raw.missing.every(item => item.reason === 'missing-file'));
+
+        // A list that already resolved from the project root gives the same result when read from a subfolder file.
+        const rootList = await importTargetListFromJson(hist, read('targets.json'), resolver);
+        assert.deepEqual(await importTargetListFromJson(hist, read('targets.json'), resolver, { sourceFile: path.join(hist, 'targets.json') }), rootList);
+        fs.writeFileSync(path.join(hist, 'clean', 'root-relative.json'), JSON.stringify({ version: TARGET_LIST_VERSION,
+            targets: { 'clean/bottle_utils.py': ['tob'] } }), 'utf8');
+        const rootRelative = await importTargetListFromJson(hist, read('clean/root-relative.json'), resolver,
+            { sourceFile: path.join(hist, 'clean', 'root-relative.json') });
+        assert.deepEqual(rootRelative, await importTargetListFromJson(hist, read('clean/root-relative.json'), resolver));
+        assert.deepEqual(rootRelative.targets, [{ file: 'clean/bottle_utils.py', target: 'tob' }]);
+
+        // ".." stays allowed inside the project root; anything resolving outside it is invalid-path.
+        fs.writeFileSync(path.join(parent, 'outside.py'), 'def f():\n    return 1\n', 'utf8');
+        fs.writeFileSync(path.join(hist, 'clean', 'mixed.json'), JSON.stringify({ version: TARGET_LIST_VERSION,
+            targets: { '../bugs/hist_09_touni_bytearray/bottle_utils.py': ['touni'], '../../outside.py': ['f'] } }), 'utf8');
+        const mixed = await importTargetListFromJson(hist, read('clean/mixed.json'), resolver, { sourceFile: path.join(hist, 'clean', 'mixed.json') });
+        assert.deepEqual(mixed.targets, [{ file: 'bugs/hist_09_touni_bytearray/bottle_utils.py', target: 'touni' }]);
+        assert.deepEqual(mixed.missing, [{ file: '../../outside.py', target: 'f', reason: 'invalid-path' }]);
+    } finally {
+        fs.rmSync(parent, { recursive: true, force: true });
+    }
 });
 
 test('R5 target list state persists per canonical project root in workspace state', async () => {
@@ -738,6 +791,20 @@ test('SidebarProvider handles target list persistence, batchScope linkage, JSON 
         assert.equal(evalImportMsg.projectRoot, evalDir);
         assert.equal(evalImportMsg.targets.length, 26);
         assert.deepEqual(evalImportMsg.missing, []);
+
+        // 6. PR19: a list file in a subfolder resolves from that folder; the same text as rawJson stays root-relative.
+        fs.mkdirSync(path.join(root, 'sub'));
+        fs.writeFileSync(path.join(root, 'sub', 'mod_c.py'), 'def gamma():\n    return 4\n', 'utf8');
+        const subList = JSON.stringify({ version: 'eval-screening-v1', targets: { 'mod_c.py': ['gamma'] } });
+        fs.writeFileSync(path.join(root, 'sub', 'targets.json'), subList, 'utf8');
+        await view.receive({ command: 'importTargetList', projectRoot: root, filePath: path.join(root, 'sub', 'targets.json') });
+        const subImportMsg = view.messages.filter(m => m.command === 'targetListUpdated').at(-1);
+        assert.deepEqual(subImportMsg.targets, [{ file: 'sub/mod_c.py', target: 'gamma' }]);
+        assert.deepEqual(subImportMsg.missing, []);
+        await view.receive({ command: 'importTargetList', projectRoot: root, rawJson: subList });
+        const rawImportMsg = view.messages.filter(m => m.command === 'targetListUpdated').at(-1);
+        assert.deepEqual(rawImportMsg.targets, []);
+        assert.deepEqual(rawImportMsg.missing, [{ file: 'mod_c.py', target: 'gamma', reason: 'missing-file' }]);
     } finally {
         delete require.cache[require.resolve('../ui/SidebarProvider')];
         delete require.cache[require.resolve('../ui/BatchScopeController')];
