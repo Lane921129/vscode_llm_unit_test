@@ -14,9 +14,9 @@ import { CaseTableFacts } from './caseTableFacts';
 import { TestFocus } from '../testFocus';
 import { buildCaseTableTestFile, buildRowTestMethod, RowExpectation, RowTestContext, rowTestMethodName } from './rowToTest';
 import { captureRow, captureSurvivorRow, CaptureReport, CoverageMeasurement, fixPreservesContract, measureCoverage, measureMutation, MutationMeasurement, RowRuntime, runTestFile, validateRowSetup } from './rowExecution';
-import { getRowSetupPrompt, parseRowSetupResponse } from '../../roles/unittestWriter';
+import { getRowSetupPrompt, parseRowSetupResponse, RowSetupPromptInput } from '../../roles/unittestWriter';
 import { getRowFixPrompt, parseRowFixResponse, ROW_FIX_MAX_ATTEMPTS } from '../../roles/bugFixer';
-import { getSurvivorRowPrompt, parseSurvivorRow } from '../../roles/qualityAnalyst';
+import { getSurvivorRowCorrectionPrompt, getSurvivorRowPrompt, parseSurvivorReply } from '../../roles/qualityAnalyst';
 import { currentStopPolicy } from '../stopPolicy';
 import { SurvivorRowEvidence } from './designFindings';
 import type { CaseTableQualityAssessment } from './caseTableQuality';
@@ -25,11 +25,30 @@ export type RowStageTerminal = 'usable' | 'quality-passed' | 'failed';
 import { rowTestModule, candidateTestModule, mergedTestModule } from './artifactNames';
 export { CASE_TABLE_TEST_FILE } from './artifactNames';
 
+/** Same args/kwargs (or setup description) and mocks: such a survivor candidate tests nothing new. */
+function sameCaseInput(a: CaseRow, b: CaseRow): boolean {
+    const key = (row: CaseRow) => JSON.stringify([needsSetup(row.call) ? ['setup', row.call.needsSetup] : [row.call.args, row.call.kwargs], row.mocks]);
+    return key(a) === key(b);
+}
+
+/** Setup prompt input for a needs-setup or instance-method row (both the scenario rows and survivor rows). */
+function rowSetupPromptInput(row: CaseRow, facts: CaseTableFacts, targetName: string): RowSetupPromptInput {
+    const instance = facts.methodKind === 'instance';
+    const owner = `the ${facts.className ?? 'class'} object whose method is tested`;
+    const description = needsSetup(row.call)
+        ? (instance ? `${row.call.needsSetup}; also build instance (${owner})` : row.call.needsSetup)
+        : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
+    return { signature: facts.signature, className: facts.className, methodKind: facts.methodKind, targetName, source: facts.source,
+        scenario: row.scenario, setupDescription: description, classContext: facts.classContext ?? null, needsSetup: needsSetup(row.call),
+        mockedDependencies: [...new Set(row.mocks.map(mock => mock.dependency))] };
+}
+
 export interface RowStageOptions {
     runtime: RowRuntime;
     facts: CaseTableFacts;
     rows: CaseRow[];
-    ask: (system: string, user: string, options: { role: 'writer-row-setup' | 'bug-fixer-row' | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst';
+    ask: (system: string, user: string, options: { role: 'writer-row-setup' | 'bug-fixer-row' | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst'
+        | 'quality-analyst-correction';
         temperature?: number }) => Promise<string>;
     mutation: { engine: unknown; workers: unknown; stageSeconds: number };
     log: (text: string) => void;
@@ -43,6 +62,8 @@ export interface RowStageOptions {
     initialSetups?: ReadonlyMap<string, string>;
     /** PR #13b: file suffix for followup/supplementary rounds (e.g. '_followup'). */
     fileSuffix?: string;
+    /** Same case_row_validator check as the scenario rows; survivor candidates that fail it are never captured. */
+    validateRows?: (rows: CaseRow[]) => Promise<CaseRow[]>;
     /** PR #8 hook: decide the expected value after capture; default keeps the observed outcome. */
     decideExpected?: (row: CaseRow, capture: CaptureReport) => Promise<{ row: CaseRow; expectation: RowExpectation | null }>;
 }
@@ -91,11 +112,9 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
         if (row.status !== 'proposed') { continue; }
         let setup: string | undefined;
         if (needsSetup(row.call) || facts.methodKind === 'instance') {
-            const description = needsSetup(row.call) ? row.call.needsSetup
-                : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
-            const prompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
-                targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
-            setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' })) ?? undefined;
+            const prompt = getRowSetupPrompt(rowSetupPromptInput(row, facts, runtime.target));
+            setup = parseRowSetupResponse(await options.ask(prompt.system, prompt.user, { role: 'writer-row-setup' }),
+                { requireInstance: facts.methodKind === 'instance' }) ?? undefined;
             if (!setup) { rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable'); continue; }
             if (!await validateRowSetup(runtime, setup, row.id)) {
                 rows[index] = transitionCaseRow(row, 'capture-failed', 'setup-forbidden-mutation');
@@ -177,46 +196,73 @@ export async function runRowStage(options: RowStageOptions): Promise<RowStageRes
             attempts += 1;
 
             options.log(`[v2] Quality Analyst targeting surviving mutant at line ${survivor.line} (${survivor.from} -> ${survivor.to}, attempt ${attempts}/${maxAttempts}).`);
-            const prompt = getSurvivorRowPrompt({
+            const promptOptions = {
                 signature: facts.signature,
                 className: facts.className ?? undefined,
                 methodKind: facts.methodKind,
+                isAsync: facts.isAsync,
                 source: facts.source,
+                startLine: facts.startLine,
                 dependencies: facts.dependencies,
                 survivor: {
                     line: survivor.line,
                     original: survivor.codeChange?.before ?? `${survivor.from} (line ${survivor.line})`,
                     mutated: survivor.codeChange?.after ?? `${survivor.to} (line ${survivor.line})`
-                }
-            });
-            let reply: string;
+                },
+                testedInputs: rows.filter(existing => passing.has(existing.id)).map(existing => ({ call: existing.call, mocks: existing.mocks }))
+            };
+            const prompt = getSurvivorRowPrompt(promptOptions);
+            let parsedReply: ReturnType<typeof parseSurvivorReply>;
             try {
-                reply = await options.ask(prompt.system, prompt.user, { role: 'quality-analyst' });
+                parsedReply = parseSurvivorReply(await options.ask(prompt.system, prompt.user, { role: 'quality-analyst' }),
+                    { firstIndex: nextCaseRowIndex(rows) });
+                if (!parsedReply.row && parsedReply.rejection) {
+                    const { line: badLine, reason, field } = parsedReply.rejection;
+                    const correction = getSurvivorRowCorrectionPrompt(badLine, reason, field, promptOptions);
+                    parsedReply = parseSurvivorReply(await options.ask(correction.system, correction.user, { role: 'quality-analyst-correction' }),
+                        { firstIndex: nextCaseRowIndex(rows) });
+                }
             } catch (askError) {
                 options.log(`[v2] Quality Analyst request failed: ${(askError as Error)?.message}`);
                 noImprovementCount += 1;
                 continue;
             }
-            const candidateRow = parseSurvivorRow(reply, { firstIndex: nextCaseRowIndex(rows) });
-            if (!candidateRow) {
+            if (!parsedReply.row) {
                 options.log(`[v2] Quality Analyst response could not be parsed as a case row.`);
                 noImprovementCount += 1;
                 continue;
             }
-            let row = candidateRow;
+            let row = parsedReply.row;
+            if (rows.some(existing => sameCaseInput(existing, row))) {
+                options.log(`[v2] Quality Analyst row repeats an existing input; rejected without capture.`);
+                noImprovementCount += 1;
+                continue;
+            }
+            if (options.validateRows) {
+                row = (await options.validateRows([row]))[0] ?? { ...row, status: 'invalid', reason: 'validation-missing' };
+                if (row.status === 'invalid') {
+                    rows.push(row);
+                    options.log(`[v2] Quality Analyst row ${row.id} is invalid (${row.reason}); not captured.`);
+                    noImprovementCount += 1;
+                    continue;
+                }
+                if (rows.some(existing => sameCaseInput(existing, row))) {
+                    options.log(`[v2] Quality Analyst row repeats an existing input after normalization; rejected without capture.`);
+                    noImprovementCount += 1;
+                    continue;
+                }
+            }
             rows.push(row);
             survivorRows.push({ mutantId: survivor.id, rowId: row.id, line: survivor.line,
-                original: survivor.codeChange?.before ?? facts.source.split(/\r?\n/)[survivor.line - 1] ?? String(survivor.from),
+                original: survivor.codeChange?.before ?? facts.source.split(/\r?\n/)[survivor.line - (facts.startLine ?? 1)] ?? String(survivor.from),
                 mutated: survivor.codeChange?.after ?? String(survivor.to) });
             const rowIndex = rows.length - 1;
 
             let setup: string | undefined;
             if (needsSetup(row.call) || facts.methodKind === 'instance') {
-                const description = needsSetup(row.call) ? row.call.needsSetup
-                    : `an instance of ${facts.className ?? 'the class'} for this scenario; use args = ${row.call.args} and kwargs = ${row.call.kwargs}`;
-                const setupPrompt = getRowSetupPrompt({ signature: facts.signature, className: facts.className, methodKind: facts.methodKind,
-                    targetName: runtime.target, source: facts.source, scenario: row.scenario, setupDescription: description });
-                setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' })) ?? undefined;
+                const setupPrompt = getRowSetupPrompt(rowSetupPromptInput(row, facts, runtime.target));
+                setup = parseRowSetupResponse(await options.ask(setupPrompt.system, setupPrompt.user, { role: 'writer-row-setup' }),
+                    { requireInstance: facts.methodKind === 'instance' }) ?? undefined;
                 if (!setup) {
                     rows[rowIndex] = transitionCaseRow(row, 'capture-failed', 'setup-unavailable');
                     noImprovementCount += 1;

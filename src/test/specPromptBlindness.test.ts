@@ -38,6 +38,16 @@ test('the spec prompt contains only signature, docstring, annotations, requireme
     assert.equal(SPEC_PREDICTION_TEMPERATURE, 0.7);
 });
 
+test('the class context for row setup never reaches the spec prompt', () => {
+    const classFacts: CaseTableFacts = { ...facts, className: 'Limiter', methodKind: 'instance',
+        classContext: 'class Limiter:\n    def __init__(self, ceiling):\n        self.class_context_marker = ceiling' };
+    const spec = collectSpecSources(classFacts, []);
+    for (const prompt of [getSpecPredictionPrompt(spec, row, 'clamp'), getSpecPredictionCorrectionPrompt(spec, row, 'clamp', '{"expect":"x"}')]) {
+        const text = prompt.system + '\n' + prompt.user;
+        assert.ok(!text.includes('Class context') && !text.includes('class_context_marker') && !text.includes('__init__'));
+    }
+});
+
 test('spec calls are written as ordinary Python and omit empty kwargs', () => {
     assert.equal(formatSpecCall('bmi', '(70, 1.75)', '{}'), 'bmi(70, 1.75)');
     assert.equal(formatSpecCall('f', '(1,)', "{'key': 'a'}"), "f(1, key='a')");

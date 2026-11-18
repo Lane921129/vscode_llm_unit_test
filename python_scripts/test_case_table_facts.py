@@ -97,6 +97,24 @@ class FactsTests(unittest.TestCase):
         self.assertEqual(collect_facts(SOURCE, 'Box.make')['signature'], 'make(x)')
         self.assertEqual(collect_facts(SOURCE, 'Box.build')['signature'], 'build(x)')
 
+    def test_start_line_is_the_def_line_in_the_file(self):
+        source = 'import os\n\n\nclass Box:\n    @staticmethod\n    def build(x):\n        return x\n\n\ndef top(a):\n    return a\n'
+        self.assertEqual(collect_facts(source, 'top')['startLine'], 10)
+        build = collect_facts(source, 'Box.build')
+        self.assertEqual(build['startLine'], 6, 'the def line, not the decorator')
+        self.assertEqual(source.splitlines()[build['startLine'] - 1].strip(), build['source'].splitlines()[0].strip())
+
+    def test_class_context_has_the_class_line_and_init_or_the_field_declarations(self):
+        source = ('from dataclasses import dataclass\n\n\n@dataclass\nclass Point:\n    """A point."""\n    x: int\n    y: int = 0\n'
+                  '    LIMIT = 3\n\n    def norm(self):\n        return abs(self.x) + abs(self.y)\n\n\n'
+                  'class Box(Base,\n          metaclass=Meta):\n    def __init__(self, size):\n        self.size = size\n\n'
+                  '    def grow(self, extra):\n        return self.size + extra\n\n\ndef top(a):\n    return a\n')
+        self.assertEqual(collect_facts(source, 'Point.norm')['classContext'],
+                         '@dataclass\nclass Point:\n    x: int\n    y: int = 0\n    LIMIT = 3')
+        self.assertEqual(collect_facts(source, 'Box.grow')['classContext'],
+                         'class Box(Base,\n          metaclass=Meta):\n    def __init__(self, size):\n        self.size = size')
+        self.assertIsNone(collect_facts(source, 'top')['classContext'])
+
     def test_errors_and_cli(self):
         with self.assertRaises(FactsError):
             collect_facts(SOURCE, 'missing')

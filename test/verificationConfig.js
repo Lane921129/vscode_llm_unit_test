@@ -34,7 +34,7 @@ const fastNodeTests = new Set([
     'supplementalProbeInputs', 'targetBudget', 'targetCoverage', 'testRuleLibrary',
     'tier1Literals', 'tier1TestBuilder', 'tier1TestFileBuilder', 'tier2SubtaskGate',
     'tierFailurePolicy', 'tierRouter', 'traceRecovery', 'traceTestAugmenter',
-    'traceTimingReport', 'unittestExceptionRouting', 'verificationRunner',
+    'traceTimingReport', 'unittestExceptionRouting', 'v2PromptWording', 'verificationRunner',
     'writerContextProjection', 'writerInstructionCompaction', 'writerOutputGrowth',
     'writerPhases', 'writerPromptCompression', 'writerPromptProjection',
     'writerRevisionContext', 'writerRevisionOutputBudget', 'writerSeedOutputBudget',

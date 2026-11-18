@@ -60,7 +60,7 @@ export interface ModelRequestOptions {
 
 /** v2 role names recorded in role_events.jsonl (v1's event format is unchanged). */
 export type CaseTableRole = 'analyst-scenario' | 'analyst-scenario-correction' | 'writer-row-setup' | 'bug-fixer-row'
-    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst' | 'case-table-review' | 'case-table-review-correction';
+    | 'analyst-spec' | 'analyst-spec-correction' | 'quality-analyst' | 'quality-analyst-correction' | 'case-table-review' | 'case-table-review-correction';
 
 export interface RoleAskOptions {
     role: CaseTableRole;
@@ -266,17 +266,18 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
     })();
 
     state.rows = outcome.rows;
+    const validateProposedRows = async (proposed: CaseRow[]) => {
+        if (!proposed.length) { return []; }
+        const request = buildCaseRowValidationRequest(proposed, { source, target: options.funcName,
+            dependencies: facts.dependencies.map(dependency => dependency.name) });
+        const result = await runTool(pythonToolPath('caseRowValidator'), [], JSON.stringify(request));
+        try { return applyCaseRowValidation(proposed, JSON.parse(result.stdout)).rows; } catch {
+            throw new AnalysisStageError('tool', 'case-row-validation', 'Reviewer row validator returned malformed output.');
+        }
+    };
     const reviewedRows = options.caseTableReview === 'off' ? outcome.rows : await reviewCaseTable({
         directory, rows: outcome.rows, source: facts.source, requirements, ask,
-        validate: async proposed => {
-            if (!proposed.length) { return []; }
-            const request = buildCaseRowValidationRequest(proposed, { source, target: options.funcName,
-                dependencies: facts.dependencies.map(dependency => dependency.name) });
-            const result = await runTool(pythonToolPath('caseRowValidator'), [], JSON.stringify(request));
-            try { return applyCaseRowValidation(proposed, JSON.parse(result.stdout)).rows; } catch {
-                throw new AnalysisStageError('tool', 'case-row-validation', 'Reviewer row validator returned malformed output.');
-            }
-        }
+        validate: validateProposedRows
     });
     let finalRows = reviewedRows;
     state.rows = finalRows;
@@ -300,6 +301,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
             mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
             qualityAnalyst: qualityAnalystEnabled,
             testFocus,
+            validateRows: validateProposedRows,
             ...(decideExpected ? { decideExpected } : {})
         });
         finalRows = stage.rows;
@@ -344,6 +346,7 @@ async function runCaseTableStages(options: CaseTablePipelineOptions, directory: 
                                 mutation: options.mutation ?? { engine: 'builtin', workers: 2, stageSeconds: 120 },
                                 qualityAnalyst: qualityAnalystEnabled,
                                 testFocus,
+                                validateRows: validateProposedRows,
                                 fileSuffix: '_followup',
                                 initialPassing: stage.passing,
                                 initialSetups: stage.setups,

@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { test } from 'node:test';
 import { ROW_RUN_DIRECTORY, CASE_TABLE_TEST_FILE, INVOCATION_SUFFIX, ISOLATION_SUFFIX, RUNNER_RESULT_SUFFIX,
     rowTestModule, candidateTestModule, mergedTestModule, coverageTestModule } from '../pipeline/caseTable/artifactNames';
-import { estimateBatchOutputPath, preflightBatchOutputPath } from '../pipeline/batchOutputPath';
+import { estimateBatchOutputPath, preflightBatchOutputPath, LONGEST_V1_ARTIFACT } from '../pipeline/batchOutputPath';
 import { checkOutputPath } from '../pipeline/artifactPaths';
 import { runTestFile } from '../pipeline/caseTable/rowExecution';
 import { runCaseTablePipeline } from '../pipeline/caseTable/runCaseTablePipeline';
@@ -53,6 +53,18 @@ test('250 characters passes while 251 stops before dispatch', () => {
     assert.equal(estimateBatchOutputPath({ ...options, batchDirectory: directory }).estimatedLength, 250);
     assert.doesNotThrow(() => preflightBatchOutputPath({ ...options, batchDirectory: directory }, () => {}));
     assert.throws(() => preflightBatchOutputPath({ ...options, batchDirectory: directory + 'x' }, () => {}), /251/);
+});
+
+test('an empty discovered target list is estimated as discovered, while an unknown list keeps the worst-case names', () => {
+    const batchDirectory = 'C:/Users/someone/AppData/Local/Temp/batch-lifecycle-AbC123/results/batch-lifecycle-_2026_11_16_14_55';
+    const discovered = estimateBatchOutputPath({ batchDirectory, targets: [], platform: 'win32' });
+    assert.equal(discovered.longestTargetLength, 0);
+    assert.equal(discovered.estimatedLength, path.win32.resolve(batchDirectory, LONGEST_V1_ARTIFACT).length + 60);
+    assert.equal(discovered.blocked, false);
+    const unknown = estimateBatchOutputPath({ batchDirectory, platform: 'win32' });
+    assert.equal(unknown.longestTargetLength, path.win32.join('s'.repeat(25), 't'.repeat(29)).length);
+    assert.ok(unknown.estimatedLength > discovered.estimatedLength);
+    assert.equal(unknown.blocked, true, 'the reservation preflight still assumes the longest names before inventory');
 });
 
 test('short row files execute with invocation/result/isolation evidence and preserve wx protection', async () => {

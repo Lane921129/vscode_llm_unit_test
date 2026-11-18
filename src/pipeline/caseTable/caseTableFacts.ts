@@ -38,6 +38,10 @@ export interface CaseTableFacts {
     raises: string[];
     dependencies: CaseTableDependency[];
     source: string;
+    /** File line number of the def line; `source` starts there. */
+    startLine?: number;
+    /** Owner class header plus __init__ (or field declarations); row-setup prompt only, never the spec prompt. */
+    classContext?: string | null;
 }
 
 /** Parse tool stdout; a tool error or malformed shape throws (tool failure, not a model failure). */
@@ -53,6 +57,12 @@ export function readCaseTableFacts(stdout: string): CaseTableFacts {
         || !isList('parameters') || !isList('branches') || !isList('raises') || !isList('dependencies')
         || !['module', 'instance', 'static', 'class'].includes(facts.methodKind as string)) {
         throw new Error('case-table-facts-malformed: fields');
+    }
+    if (facts.startLine !== undefined && !(Number.isInteger(facts.startLine) && (facts.startLine as number) >= 1)) {
+        throw new Error('case-table-facts-malformed: startLine');
+    }
+    if (facts.classContext !== undefined && facts.classContext !== null && typeof facts.classContext !== 'string') {
+        throw new Error('case-table-facts-malformed: classContext');
     }
     for (const dependency of facts.dependencies as unknown[]) {
         const item = dependency as Record<string, unknown>;

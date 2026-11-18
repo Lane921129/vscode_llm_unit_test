@@ -90,7 +90,7 @@ function specLines(spec: SpecSources, row: CaseRow, functionName: string): strin
 const FORMAT = [
     'Answer with one JSON object on one line:',
     '- "expect": "return <Python literal>" or "raise <ExceptionName>"',
-    '- "basis": the exact sentence from the docstring or a requirement that decides the answer',
+    '- "basis": copy word for word one passage from the docstring or from a single requirement that decides the answer; do not reword or combine sentences',
     'Example:',
     '{"expect":"return 10","basis":"Values above high are clamped to high."}'
 ];
@@ -99,11 +99,32 @@ export function getSpecPredictionPrompt(spec: SpecSources, row: CaseRow, functio
     return { system: SYSTEM, user: [...specLines(spec, row, functionName), '', ...FORMAT, 'Output only that one JSON line.'].join('\n') };
 }
 
-/** Single format correction for an unusable prediction line. */
-export function getSpecPredictionCorrectionPrompt(spec: SpecSources, row: CaseRow, functionName: string, previous: string): { system: string; user: string } {
+export type SpecPredictionProblem = 'invalid-json' | 'expect-format' | 'basis-empty';
+
+const SPEC_PROBLEMS: Record<SpecPredictionProblem, string> = {
+    'invalid-json': 'it is not one valid JSON object',
+    'expect-format': '"expect" does not start with "return" or "raise"',
+    'basis-empty': '"basis" is empty'
+};
+
+/** Single format correction for an unusable prediction line; the Problem line says why, like the scenario correction. */
+export function getSpecPredictionCorrectionPrompt(spec: SpecSources, row: CaseRow, functionName: string, previous: string,
+    problem: SpecPredictionProblem = diagnoseSpecPrediction(previous) ?? 'invalid-json'): { system: string; user: string } {
     const shown = previous.length > 300 ? previous.slice(0, 300) : previous;
     return { system: SYSTEM, user: [...specLines(spec, row, functionName), '', `Your previous answer could not be used: ${shown}`,
-        ...FORMAT, 'Output only one corrected JSON line.'].join('\n') };
+        `Problem: ${SPEC_PROBLEMS[problem]}.`, ...FORMAT, 'Output only one corrected JSON line.'].join('\n') };
+}
+
+/** Why parseSpecPrediction rejected a reply; null when the reply is usable. */
+export function diagnoseSpecPrediction(response: string): SpecPredictionProblem | null {
+    if (parseSpecPrediction(response)) { return null; }
+    const line = response.split(/\r?\n/).map(item => item.trim()).find(item => item.startsWith('{'));
+    let value: unknown;
+    try { value = line ? JSON.parse(line) : undefined; } catch { value = undefined; }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) { return 'invalid-json'; }
+    const { expect, basis } = value as Record<string, unknown>;
+    if (typeof expect !== 'string' || !(RAISE.test(expect.trim()) || RETURN.test(expect.trim()))) { return 'expect-format'; }
+    return typeof basis === 'string' && basis.trim() ? 'expect-format' : 'basis-empty';
 }
 
 const RETURN = /^return\s+([\s\S]+)$/;
