@@ -140,12 +140,54 @@ PR #11／#9／#14 的既有成果仍各在 `87c18ea`／`e90c1e5`／`9b65391`，�
 | 16 | v2 短檔名、批次路徑診斷、對照組預檢 | 已合併至本次基底 2581ec6（Git 祖先核對） | `lane_edition` | 2026-11-16 Codex |
 | 17 | 移植 #11／#9／#14 與 v2 高品質層 | 已驗收合併主線（06e3e85） | `lane_edition` | 2026-11-17 核對 Git |
 | 18 | 修主線 7 個未列管整合失敗、v2 單列修正、存活突變與 setup 提示補強、已核准提示詞措辭修訂 | **可送驗收**：11/18 過夜 Windows 驗證 golden v1 11/11、v2 5/5（A/B 各 3 次全過），integration 只剩既有 14 個（＋3 父）、HEAD 專屬失敗 0、階段 0 的 7 個全過；未合併、未 push | `pr/18-v2-prompt-fixes`（基底 06e3e85） | 2026-11-17 Claude Code |
+| 19 | 目標清單匯入路徑、開始測試不再隱性跑整個資料夾、單檔勾選、全部清空 | 實作完成；VM 非正式驗證通過，**待使用者 Windows 執行 `log\pr19-windows-verify.cmd`**；未合併、未 push | `pr/19-target-selection`（基底 a16a925） | 2026-11-18 Claude Code |
 
 評估集以架構文件 6.1 節為準：BMI、add、markupsafe、validators、learn-python、bottle、車輛管理主程式（排除副本與 `old backup/`）。
 
 ---
 
-## 2. PR #18 主線既有失敗、v2 單列修正與提示詞修訂（最新）
+## 2. PR #19 目標清單與開始測試的選取修正（最新）
+
+- Agent：Claude Code。shell 是使用者筆電上的 Linux VM（Python 3.10），以下驗證為 VM 非正式結果。沒有 AOCI MCP，待辦見第 4 節。分支 `pr/19-target-selection` 從 `lane_edition` a16a925 開立；未合併、未 push；未改 v1／v2 管線、提示詞、golden、orchestrator；未動 `.codex/`、`.aoci/`、計畫文件。中英文提示需求要求新增 3 個 i18n 鍵，所以另改了 `src/i18n/{en,zh-tw}.ts`。
+- 修改檔：`src/pipeline/targetList.ts`、`src/ui/SidebarProvider.ts`、`src/ui/webviewContent.ts`、`src/i18n/{en,zh-tw}.ts`；測試 `src/test/{targetList,sidebarDashboardReplay,sidebarPreferences}.test.ts`。
+
+### 做法
+
+1. **匯入路徑**：`importTargetListFromJson` 新增 `{ sourceFile }`。每個項目先照舊以專案根目錄解析，檔案存在就沿用舊結果（舊清單結果完全相同）；不存在且有檔案位置時，改以 JSON 檔所在資料夾解析（允許 `..`），換算成相對專案根目錄的路徑；換算後在根目錄外為 invalid-path。`SidebarProvider` 從檔案匯入時傳入檔案位置，`rawJson` 不傳（維持相對根目錄）。
+2. **開始測試**（只改 Webview，orchestrator 不動）：
+   - 有清單：照清單跑（不變）。
+   - 沒清單、選了單檔：全部勾選維持原單檔流程；部分勾選送 `startBatchAnalysis`（batchPath＝專案根目錄、targets＝勾選的函式）；一個都沒勾只提示。
+   - 沒清單、沒選檔：不再送出不帶 targets 的批次請求（原本會觸發 orchestrator 的第二次範圍選擇並跑整個資料夾），改為提示先選檔、用「選擇批次測試來源」選範圍或載入清單。選範圍後清單即為明確目標，所以不需要另外的確認對話框。
+   - 匯入結果為 0 個或有找不到的項目：開始按鈕下方新增 `run-block-reason` 顯示原因，按鈕 title 同步；按下只提示、不送出。手動加入、移除、重選範圍、全部清空或換專案時解除。
+3. **全部清空**：清單、範圍候選、函式勾選、狀態文字或阻擋原因任一有內容就可按；按下清空清單、候選（離開範圍模式）、勾選、狀態文字、警告與阻擋原因，範圍說明恢復預設，並送出空的 `saveTargetList`。
+4. 新增 i18n 鍵 `runBlockedImportIssue`、`runNeedsScope`、`runNoCheckedFunctions`（中英文）。
+
+### 驗收對照（VM）
+
+| 驗收 | 測試 | 結果 |
+| --- | --- | --- |
+| 子資料夾 targets.json 匯入數量 | targetList「PR19 a target list file in a subfolder resolves its paths from its own folder (hist/clean and hist/bugs)」：以 `eval_seeded_bugs.py prepare` 實際產生 hist；`clean/targets.json` **8 個**、`bugs/targets.json` **10 個**；rawJson 仍相對根目錄（0 個）；舊的根目錄相對清單結果相同；`..` 在根目錄內可用、根目錄外為 invalid-path。另在 SidebarProvider 既有測試加第 6 步（`filePath` 匯入子資料夾清單） | 通過 |
+| 清單為 0 按開始不送出 | sidebarDashboardReplay「PR19: an empty or partly missing list, or no scope at all, never starts and the Start button shows why」 | 通過 |
+| 單檔勾選 2 個函式 | 「PR19: a single file with two checked functions sends exactly those two targets; none checked does not start」 | 通過 |
+| 全部清空 | 「PR19: Clear all is available while anything is shown and clears list, scope, checks, status and warnings」 | 通過 |
+
+- **說明**：監督預期 hist\clean 為 10 個，但實際產生的 `clean/targets.json` 只有 8 個函式（hist_01／02 都是 `mac_address`、hist_04／05 都是 `iban`）；10 個的是 `bugs/targets.json`。兩者都已驗證。
+- **既有測試的前提更新**：sidebarDashboardReplay 5 個測試與 sidebarPreferences 1 個測試原本以「只有專案路徑就按開始」觸發整個資料夾批次，這正是本 PR 要移除的隱性行為。改為先送一則明確範圍（`batchScopeSelected`），或在單檔那一輪先按全部清空；原有斷言一行未改。
+
+### 驗證（VM 非正式）
+
+| 項目 | 結果 | log |
+| --- | --- | --- |
+| check-types／lint／test:webview | exit 0 | `log/pr19-{types,lint,webview}-vm.log` |
+| test:related（targetList、batchScope、batchScopeIntegration、sidebar* 9 檔、webviewContent、localization） | 101/102；唯一失敗是 targetList 的「batch execution with explicit target list…」，VM 的 Python 3.10 使同一目標重試 5 次，基底在 VM 也一樣（PR #18 已在 Windows 證實此測試通過） | `log/pr19-related-vm.log` |
+| test:fast | Node 762/768，6 個失敗與 PR #18 記錄的 VM 平台項相同 | `log/pr19-fast-vm.log` |
+| compile、完整 integration | 未跑（compile 需 Windows 版 esbuild；integration 依指示本次不跑） | — |
+
+- **待使用者在 Windows 執行**：倉庫根目錄 `.\log\pr19-windows-verify.cmd`（check-types、lint、test:fast、上述 test:related、test:webview、compile），狀態在 `log/pr19-windows-status.txt`。
+
+---
+
+## 2. PR #18 主線既有失敗、v2 單列修正與提示詞修訂（歷史）
 
 - Agent：Claude Code。本次 shell 是使用者筆電上的 **Linux VM（Python 3.10），不是 Windows 原生**；以下驗證都是 VM 非正式結果。沒有 AOCI MCP，未呼叫，待辦見第 4 節。分支 `pr/18-v2-prompt-fixes` 從 `lane_edition` 06e3e85 開立；未合併、未 push、未碰 main；未修改 `.codex/`、`.aoci/`、計畫文件、`eval/historical_bugs/`、`eval/seeded_bugs/`、`eval/eval_screening/`；v1 提示詞、預算、重試、停止條件、通過標準、預設值零變更；任何 golden 快照都沒有更新。
 - 提交：階段 0 `a0e13a3`、階段 1 `b9e4369`、階段 2 `e1102eb`、階段 3 `daa43ed`、階段 4 `0663cbe`、階段 5 為本筆 docs commit（另含存活突變範例 args 改回原值的補正，見下）。
@@ -1131,6 +1173,8 @@ PROJECT_RULES／CHANGELOG 頂端仍是舊兩模式文字，第 4.5 步尚未執�
 
 ## 4. AOCI 待辦（由具工具能力的 agent 處理）
 
+- 2026-11-18（Claude Code／PR #19）：本輪無 AOCI MCP，未呼叫；請具工具能力的 agent 在穩定後依 `git diff a16a925..pr/19-target-selection --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
+
 - 2026-11-17（Claude Code／PR #18）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後依 `git diff 06e3e85..pr/18-v2-prompt-fixes --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
 
 - 2026-11-16（Codex／Antigravity／PR #17）：本輪無 AOCI MCP，未呼叫 rules／overview／maintain；請具工具能力的 agent 在最終穩定後，依 `git diff 2581ec6..pr/17-port-11-9-14 --name-only` 維護一次。未修改 `.codex/`／`.aoci/`。
@@ -1241,6 +1285,8 @@ Windows `npm run test:python`：973 項、1 failure、4 skipped，exit 1。唯�
 ---
 
 ## 6. 工作階段紀錄（最新的放最上面）
+
+- 2026-11-18（Claude Code／PR #19，VM 非正式）：匯入路徑改以 JSON 檔所在資料夾為基準（舊清單結果不變）；開始測試不再隱性跑整個資料夾、單檔部分勾選送 targets、0 個／missing 時阻擋並顯示原因；全部清空範圍擴大。新增 4 組驗收測試全過；related 101/102（1 個 VM 環境項）；fast 同 VM 基準。待 Windows 執行 `log\pr19-windows-verify.cmd`。
 
 - 2026-11-18 03:25（Claude Code／PR #18 過夜驗證分析）：A/B v1 golden HEAD 3/3、基底 3/3；完整 golden v1 11/11、v2 5/5；integration HEAD 1120/1137（14 既有＋3 父）、基底 1104/1129，HEAD 專屬失敗 0、階段 0 的 7 個全過。判定 PR #18 可送驗收。
 

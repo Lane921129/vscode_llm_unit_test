@@ -201,19 +201,46 @@ export function defaultFunctionInventoryResolver(pythonExecutable?: string): Fun
     };
 }
 
+export interface TargetListImportOptions {
+    /** The JSON file the list was read from. Its folder is the base for paths that do not resolve from the project root. */
+    sourceFile?: string;
+}
+
+const isExistingFile = (file: string): boolean => fs.existsSync(file) && fs.statSync(file).isFile();
+
+/**
+ * Resolve one list entry to a project-root-relative path. A path that resolves from the project root keeps the
+ * previous result; otherwise a list read from a file resolves it from the JSON file's folder, then re-expresses it
+ * relative to the project root. undefined means invalid-path (absolute, not .py, or outside the project root).
+ */
+function resolveTargetEntryFile(root: string, file: string, baseDirectory: string | undefined): string | undefined {
+    const fromRoot = normalizeRelativeTargetFile(file);
+    if (fromRoot && isExistingFile(path.resolve(root, fromRoot))) { return fromRoot; }
+    if (!baseDirectory || path.resolve(baseDirectory) === path.resolve(root) || typeof file !== 'string') { return fromRoot; }
+    const raw = file.trim().replace(/\\/g, '/');
+    if (!raw || raw.startsWith('/') || /^[a-zA-Z]:/.test(raw) || !raw.endsWith('.py') || raw.split('/').some(part => !part || part === '.')) {
+        return undefined;
+    }
+    const relative = path.relative(path.resolve(root), path.resolve(baseDirectory, raw));
+    if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) { return undefined; }
+    return normalizeRelativeTargetFile(relative.replace(/\\/g, '/'));
+}
+
 /** R4: Import and validate a target list JSON against actual files and functions under root. */
 export async function importTargetListFromJson(
     root: string,
     raw: string | unknown,
-    discoverFunctions: FunctionInventoryResolver = defaultFunctionInventoryResolver()
+    discoverFunctions: FunctionInventoryResolver = defaultFunctionInventoryResolver(),
+    options: TargetListImportOptions = {}
 ): Promise<TargetListImportResult> {
     const canonicalRoot = canonicalScopeRoot(root);
     const entries = parseTargetListDocument(raw);
     const valid: TargetListItem[] = [];
     const missing: MissingTargetItem[] = [];
+    const baseDirectory = options.sourceFile ? path.dirname(path.resolve(options.sourceFile)) : undefined;
 
     for (const entry of entries) {
-        const normalizedFile = normalizeRelativeTargetFile(entry.file);
+        const normalizedFile = resolveTargetEntryFile(root, entry.file, baseDirectory);
         if (!normalizedFile) {
             if (entry.targets.length === 0) {
                 missing.push({ file: entry.file, reason: 'invalid-path' });

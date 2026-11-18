@@ -240,6 +240,10 @@ test('rendered Webview sends 5 loops and 60 seconds for both run modes, includin
         assert.equal(elements.get('mutation-workers').disabled, mode === 'execution');
         if (empty) { elements.get('max-loop').value = ''; elements.get('mutpy-timeout').value = ''; }
         for (const file of ['/project/target.py', '']) {
+            // PR19: a folder run needs an explicit scope choice first; a single-file run starts from an empty list.
+            if (file) { elements.get('btn-clear-targets').onclick(); }
+            else { receive({ data: { command: 'batchScopeSelected', projectRoot: '/project', text: 'scope',
+                targets: [{ file: 'target.py', target: 'target', selected: true }] } }); }
             elements.get('file-select').value = file;
             elements.get('file-select').onchange({ target: { value: file } });
             elements.get('btn-run').onclick();

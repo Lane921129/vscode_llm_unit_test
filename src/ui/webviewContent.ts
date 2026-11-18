@@ -491,6 +491,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             <button id="btn-run" style="flex:1;">${t('ui.runBtn')}</button>
             <button id="btn-abort" style="flex:1; background:#a82a2a; color:white; display:none;">${t('ui.abortBtn')}</button>
         </div>
+        <p id="run-block-reason" role="status" aria-live="polite" style="display:none; margin-top:6px; color:var(--vscode-editorWarning-foreground);"></p>
     </div>
 
     <details id="coverage-dashboard-details" open style="margin-bottom:12px;">
@@ -646,7 +647,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         }
         updateExecutionTimingStatus();
 
-        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode","caseTableRows","caseTableSpecMismatch","caseTableTitle","checkAllFunctionsInFile","uncheckAll","selectedFunctionsCount","advancedSettings","roleQualificationTitle","roleQualificationPassed","roleQualificationFailed","sectionEnv","sectionTestData","sectionTestMethod","sectionBasicSettings","pipelineV1Summary","pipelineV2Summary","pipelineSuggestion","pipelineHelpTitle","applyDemoSettings","demoConfirmMessage","specMismatchBadge","specMismatchTableTitle","needsReviewTableTitle","colInput","colSpecExpected","colActual","colBasis","focusMutationQualityAnalystOff"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
+        const i18n = ${JSON.stringify(Object.fromEntries(["pendingOutcome","runningStatus","failedStatus","measurementPrefix","measurementSuffix","coveragePrefix","coverageSuffix","openReport","targetFile","targetFunction","other","resultCount","functionCount","testing","failed","fullScopeHint","executionScopeHint","selectProject","currentPython","noCoverageData","runBtn","abortBtn","allFiles","selectSetting","batchScopeGuide","runtimeContextSavedValue","runtimeContextAllocated","runtimeContextRecent","runtimeContextDefault","runtimeContextLimit","runtimeContextRequest","runtimeContextGlobal","runtimeContextUnknown","runtimeContextUnavailable","runtimeContextInvalid","runtimeContextOverride","selectAll","deselectAll","addTargets","targetListTitle","targetListCount","targetListEmpty","clearTargets","removeTarget","exportTargets","importTargets","batchScopeTargetsHint","exitBatchScopeMode","caseTableRows","caseTableSpecMismatch","caseTableTitle","checkAllFunctionsInFile","uncheckAll","selectedFunctionsCount","advancedSettings","roleQualificationTitle","roleQualificationPassed","roleQualificationFailed","sectionEnv","sectionTestData","sectionTestMethod","sectionBasicSettings","pipelineV1Summary","pipelineV2Summary","pipelineSuggestion","pipelineHelpTitle","applyDemoSettings","demoConfirmMessage","specMismatchBadge","specMismatchTableTitle","needsReviewTableTitle","colInput","colSpecExpected","colActual","colBasis","focusMutationQualityAnalystOff","runBlockedImportIssue","runNeedsScope","runNoCheckedFunctions"].map(key => [key, t('ui.' + key)]))).replace(/</g, '\\u003c')};
         const message = (key, value) => i18n[key].replace('{0}', String(value));
 
         const fileRelativeNameByPath = new Map();
@@ -656,6 +657,38 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         let batchScopeMode = false;
         let batchScopeCandidates = [];
         let targetList = [];
+        // A loaded list with no usable target or with missing entries blocks Start until the list is fixed or cleared.
+        let targetListImportIssue = null;
+
+        function runBlockText() {
+            if (!targetListImportIssue) return '';
+            return i18n.runBlockedImportIssue.replace('{0}', String(targetListImportIssue.valid)).replace('{1}', String(targetListImportIssue.missing));
+        }
+
+        function renderRunBlockReason() {
+            const reasonEl = document.getElementById('run-block-reason');
+            const runBtn = document.getElementById('btn-run');
+            const text = runBlockText();
+            if (reasonEl) {
+                reasonEl.textContent = text;
+                reasonEl.style.display = text ? 'block' : 'none';
+            }
+            if (runBtn) runBtn.title = text;
+        }
+
+        function showRunHint(text) {
+            const reasonEl = document.getElementById('run-block-reason');
+            if (reasonEl) {
+                reasonEl.textContent = text;
+                reasonEl.style.display = 'block';
+            }
+            vscode.postMessage({ command: 'appendLog', text });
+        }
+
+        function clearTargetListImportIssue() {
+            targetListImportIssue = null;
+            renderRunBlockReason();
+        }
 
         function updateFuncSelectedCounter() {
             const counterEl = document.getElementById('func-selected-counter');
@@ -724,10 +757,13 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 const btn = document.getElementById(id);
                 if (btn) btn.disabled = frozen;
             }
-            for (const id of ['btn-clear-targets', 'btn-export-targets']) {
-                const btn = document.getElementById(id);
-                if (btn) btn.disabled = frozen || targetList.length === 0;
-            }
+            const exportBtn = document.getElementById('btn-export-targets');
+            if (exportBtn) exportBtn.disabled = frozen || targetList.length === 0;
+            const statusEl = document.getElementById('target-list-status');
+            const hasStatus = !!(statusEl && String(statusEl.textContent || '').trim());
+            const clearBtn = document.getElementById('btn-clear-targets');
+            if (clearBtn) clearBtn.disabled = frozen || !(targetList.length > 0 || batchScopeCandidates.length > 0
+                || checkedFileFunctions.size > 0 || hasStatus || targetListImportIssue);
         }
 
         function renderFunctionCheckboxes() {
@@ -759,6 +795,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     if (cb.checked) checkedFileFunctions.add(fn);
                     else checkedFileFunctions.delete(fn);
                     updateFuncSelectedCounter();
+                    updateTargetSelectionControlStates();
                 };
                 const span = document.createElement('span');
                 span.textContent = fn + '()';
@@ -796,6 +833,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 cb.style.margin = '0';
                 cb.onchange = () => {
                     candidate.selected = cb.checked;
+                    clearTargetListImportIssue();
                     targetList = batchScopeCandidates
                         .filter(item => item.selected)
                         .map(item => ({ file: item.file, target: item.target }));
@@ -814,6 +852,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
             if (analysisRunning || environmentBusy || index < 0 || index >= targetList.length) return;
             const removed = targetList[index];
             targetList.splice(index, 1);
+            clearTargetListImportIssue();
             if (batchScopeMode && removed) {
                 const key = targetIdentityKey(removed.file, removed.target);
                 for (const candidate of batchScopeCandidates) {
@@ -1292,6 +1331,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     batchScopeMode = false;
                     batchScopeCandidates = [];
                     targetList = [];
+                    clearTargetListImportIssue();
                     renderBatchScopeCandidates();
                     resetFunctionSelection();
                     renderTargetList();
@@ -1372,6 +1412,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                                 .sort(compareTargetItems);
                             document.getElementById('file-select').value = '';
                             resetFunctionSelection();
+                            clearTargetListImportIssue();
                             targetList = batchScopeCandidates
                                 .filter(item => item.selected)
                                 .map(item => ({ file: item.file, target: item.target }));
@@ -1398,6 +1439,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                         if (statusEl && msg.statusText !== undefined) {
                             statusEl.textContent = msg.statusText;
                         }
+                        const missingCount = Array.isArray(msg.missing) ? msg.missing.length : 0;
+                        targetListImportIssue = Array.isArray(msg.missing) && (targetList.length === 0 || missingCount > 0)
+                            ? { valid: targetList.length, missing: missingCount } : null;
+                        renderRunBlockReason();
                         renderTargetList();
                     }
                     break;
@@ -1407,6 +1452,7 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     if (statusEl && msg.statusText !== undefined) {
                         statusEl.textContent = msg.statusText;
                     }
+                    updateTargetSelectionControlStates();
                     break;
                 }
                 case 'environmentPreparation':
@@ -1753,12 +1799,14 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                     targetList.push({ file: currentFileRelative, target: fn });
                 }
             }
+            clearTargetListImportIssue();
             renderTargetList();
             persistTargetList();
         };
         document.getElementById('btn-batch-func-select-all').onclick = () => {
             if (analysisRunning || environmentBusy || !batchScopeMode) return;
             for (const candidate of batchScopeCandidates) candidate.selected = true;
+            clearTargetListImportIssue();
             targetList = batchScopeCandidates.map(item => ({ file: item.file, target: item.target }));
             renderBatchScopeCandidates();
             renderTargetList();
@@ -1780,11 +1828,16 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
         };
         document.getElementById('btn-clear-targets').onclick = () => {
             if (analysisRunning || environmentBusy) return;
+            // Clear everything a user could read as "still selected": list, scope candidates, checks, status and warnings.
             targetList = [];
-            if (batchScopeMode) {
-                for (const candidate of batchScopeCandidates) candidate.selected = false;
-                renderBatchScopeCandidates();
-            }
+            batchScopeMode = false;
+            batchScopeCandidates = [];
+            renderBatchScopeCandidates();
+            checkedFileFunctions.clear();
+            renderFunctionCheckboxes();
+            document.getElementById('target-list-status').textContent = '';
+            document.getElementById('batch-scope-status').textContent = i18n.batchScopeGuide;
+            clearTargetListImportIssue();
             renderTargetList();
             persistTargetList();
         };
@@ -1959,6 +2012,10 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 vscode.postMessage({ command: 'appendLog', text: ${JSON.stringify(localize('停止政策必須是有效整數；單目標失敗上限至少 1，其餘至少 0。'))} });
                 return;
             }
+            if (targetListImportIssue) {
+                showRunHint(runBlockText());
+                return;
+            }
             const hasTargetList = targetList.length > 0;
             if (batchScopeMode && !hasTargetList) {
                 vscode.postMessage({ command: 'appendLog', text: 'Please select at least one target function.' });
@@ -1968,8 +2025,24 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 vscode.postMessage({ command: 'appendLog', text: 'Please select Env, Model, and Project or File.' });
                 return;
             }
+            // Never fall back to a whole-folder run silently: that needs an explicit scope choice or a loaded list first.
+            if (!hasTargetList && !filePath) {
+                showRunHint(i18n.runNeedsScope);
+                return;
+            }
+            let singleFileTargets = null;
+            if (!hasTargetList && filePath && currentFileFunctions.length > 0) {
+                if (checkedFileFunctions.size === 0) {
+                    showRunHint(i18n.runNoCheckedFunctions);
+                    return;
+                }
+                if (checkedFileFunctions.size < currentFileFunctions.length && batchPath && currentFileRelative) {
+                    singleFileTargets = currentFileFunctions.filter(fn => checkedFileFunctions.has(fn))
+                        .map(fn => ({ file: currentFileRelative, target: fn }));
+                }
+            }
 
-            setRunningState(hasTargetList || !filePath);
+            setRunningState(hasTargetList || !!singleFileTargets);
 
             const currentProj = document.getElementById('project-path').value;
             if (lastTestedProjectPath && lastTestedProjectPath !== currentProj) {
@@ -1990,10 +2063,11 @@ export function getWebviewContent(t: (key: string, ...args: any[]) => string, cu
                 return;
             }
 
-            if (!filePath) {
+            if (singleFileTargets) {
                 vscode.postMessage({
                     command: 'startBatchAnalysis',
                     envType, modelName, cloudKeyName, batchPath,
+                    targets: singleFileTargets,
                     ...getCommonExecutionOptions()
                 });
                 return;

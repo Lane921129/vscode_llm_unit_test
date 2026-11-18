@@ -550,10 +550,11 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                         break;
                     }
                     let rawContent: string | undefined;
+                    let importFile: string | undefined;
                     if (typeof message.rawJson === 'string') {
                         rawContent = message.rawJson;
                     } else {
-                        let importFile = typeof message.filePath === 'string' && message.filePath.trim() ? message.filePath.trim() : undefined;
+                        importFile = typeof message.filePath === 'string' && message.filePath.trim() ? message.filePath.trim() : undefined;
                         if (!importFile) {
                             const picked = await vscode.window.showOpenDialog({
                                 canSelectFiles: true,
@@ -570,7 +571,9 @@ export class MutationViewProvider implements vscode.WebviewViewProvider {
                     }
                     try {
                         const python = configuredPythonForResource(root, root);
-                        const result = await importTargetListFromJson(root, rawContent, defaultFunctionInventoryResolver(python));
+                        // Paths in a list file resolve from that file's folder; rawJson has no location and stays root-relative.
+                        const result = await importTargetListFromJson(root, rawContent, defaultFunctionInventoryResolver(python),
+                            importFile ? { sourceFile: importFile } : {});
                         await this.saveTargetListForRoot(root, result.targets);
                         const missingLabels = result.missing.map(item => item.target ? `${item.file}:${item.target}` : item.file);
                         const statusText = missingLabels.length > 0

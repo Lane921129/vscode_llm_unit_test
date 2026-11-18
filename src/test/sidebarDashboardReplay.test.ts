@@ -88,10 +88,18 @@ function replay(language: string, initialState: Record<string, unknown> = {}) {
     return { html, element, groups, messages, send, run, coverage, persistedState };
 }
 
+/** PR #19: Start never falls back to a whole-folder run, so tests that start a batch first make an explicit scope choice,
+ * exactly as "Choose batch sources" reports it to the Webview. */
+function chooseExplicitScope(ui: ReturnType<typeof replay>, projectRoot = '/fixture') {
+    ui.send({ command: 'batchScopeSelected', projectRoot, text: 'scope', selectedFiles: ['scope.py'],
+        targets: [{ file: 'scope.py', target: 'first', selected: true }] });
+}
+
 test('grouped dashboard preserves live collapsed folders through running updates, mode switches and delayed toggles', () => {
     try {
         for (const language of ['zh-tw', 'en']) {
             const ui = replay(language);
+            chooseExplicitScope(ui);
             ui.coverage('database.py');
             ui.coverage('config.py');
             ui.run("setViewMode('grouped')");
@@ -165,6 +173,7 @@ test('abort reaches the Host and keeps the sidebar locked until cleanup actually
     try {
         for (const language of ['zh-tw', 'en']) {
             const ui = replay(language);
+            chooseExplicitScope(ui);
             ui.element('btn-run').onclick!();
             assert.equal(ui.messages.at(-1).command, 'startBatchAnalysis');
             assert.equal(ui.element('prompt-strategy').disabled, true);
@@ -206,6 +215,7 @@ test('timing controls distinguish long API waits from each function total and fr
     try {
         for (const language of ['zh-tw', 'en']) {
             const ui = replay(language);
+            chooseExplicitScope(ui);
             ui.send({ command: 'executionTimingSettings', timeoutSeconds: 1800, targetTimeoutSeconds: 3600 });
             assert.equal(Number(ui.element('timeout-sec').value), 1800);
             assert.equal(Number(ui.element('target-timeout-sec').value), 3600);
@@ -228,6 +238,7 @@ test('timing controls distinguish long API waits from each function total and fr
 
 test('invalid timing blocks start and delayed initial settings cannot erase edited timing', () => {
     const ui = replay('zh-tw');
+    chooseExplicitScope(ui);
     ui.element('timeout-sec').value = '60000000';
     ui.element('timeout-sec').dispatch('input');
     ui.send({ command: 'executionTimingSettings', timeoutSeconds: 60, targetTimeoutSeconds: 600 });
@@ -261,6 +272,7 @@ test('Custom selection survives Webview rebuild and repeated menus preserve live
                 second: { url: 'https://second.example.invalid/v1', model: 'second-model', key: 'fixture-second-secret' }
             };
             const ui = replay(language, { envType: 'custom', customKeyName: 'second' });
+            chooseExplicitScope(ui);
             assert.equal(ui.element('env-type').value, 'custom');
             ui.send({ command: 'setCustomKeys', keys });
             assert.equal(ui.element('custom-api-select').value, 'second');
@@ -358,6 +370,111 @@ test('v2 quality-passed cards retain their tier and row count in both languages'
                     assert.match(metrics.innerHTML, /#16803c/);
                 }
             }
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+// Messages come from the vm realm; compare them as plain JSON values.
+const plain = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+const startMessages = (ui: ReturnType<typeof replay>) => plain(ui.messages.filter(item => item.command === 'startBatchAnalysis' || item.command === 'startAnalysis'));
+
+test('PR19: an empty or partly missing list, or no scope at all, never starts and the Start button shows why', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const fresh = replay(language);
+            fresh.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(fresh), [], 'no list, no file: no implicit whole-folder run');
+            assert.equal(fresh.messages.at(-1).command, 'appendLog');
+            assert.equal(fresh.messages.at(-1).text, t('ui.runNeedsScope'));
+            assert.equal(fresh.element('run-block-reason').textContent, t('ui.runNeedsScope'));
+            assert.equal(fresh.element('btn-run').disabled, false, 'pressing only shows the hint');
+
+            const empty = replay(language);
+            empty.send({ command: 'targetListUpdated', projectRoot: '/fixture', targets: [],
+                missing: [{ file: 'hist/bottle_utils.py', target: 'tob', reason: 'missing-file' }], statusText: 'imported 0' });
+            const reason = t('ui.runBlockedImportIssue', 0, 1);
+            assert.equal(empty.element('run-block-reason').textContent, reason);
+            assert.equal(empty.element('run-block-reason').style.display, 'block');
+            assert.equal(empty.element('btn-run').title, reason, 'the Start button itself carries the reason');
+            empty.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(empty), [], 'a list that loaded 0 targets sends no start request');
+            assert.equal(empty.messages.at(-1).text, reason);
+
+            const partial = replay(language);
+            partial.send({ command: 'targetListUpdated', projectRoot: '/fixture', targets: [{ file: 'a.py', target: 'f' }],
+                missing: [{ file: 'b.py', target: 'g', reason: 'missing-function' }], statusText: 'imported 1' });
+            partial.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(partial), [], 'missing entries also block until the list is fixed or cleared');
+            assert.equal(partial.element('btn-run').title, t('ui.runBlockedImportIssue', 1, 1));
+
+            const clean = replay(language);
+            clean.send({ command: 'targetListUpdated', projectRoot: '/fixture', targets: [{ file: 'a.py', target: 'f' }], missing: [], statusText: 'ok' });
+            assert.equal(clean.element('run-block-reason').style.display, 'none');
+            clean.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(clean).map(item => item.targets), [[{ file: 'a.py', target: 'f' }]], 'a complete list still runs');
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('PR19: a single file with two checked functions sends exactly those two targets; none checked does not start', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const select = (ui: ReturnType<typeof replay>) => {
+                ui.element('file-select').value = '/fixture/pkg/calc.py';
+                ui.send({ command: 'setFunctions', filePath: '/fixture/pkg/calc.py', relativeFile: 'pkg/calc.py', funcs: ['sub', 'add', 'mul', 'div'] });
+                return ui.element('func-checkbox-list').descendants().filter(item => item.className === 'func-check');
+            };
+            const ui = replay(language);
+            const boxes = select(ui);
+            assert.deepEqual(boxes.map(box => [box.value, box.checked]), [['add', true], ['div', true], ['mul', true], ['sub', true]]);
+            for (const box of boxes.filter(item => item.value === 'div' || item.value === 'sub')) { box.checked = false; box.onchange!(); }
+            ui.element('btn-run').onclick!();
+            const sent = startMessages(ui);
+            assert.equal(sent.length, 1);
+            assert.equal(sent[0].command, 'startBatchAnalysis');
+            assert.equal(sent[0].batchPath, '/fixture');
+            assert.deepEqual(sent[0].targets, [{ file: 'pkg/calc.py', target: 'add' }, { file: 'pkg/calc.py', target: 'mul' }]);
+
+            const all = replay(language);
+            select(all);
+            all.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(all).map(item => [item.command, item.filePath, item.funcName]),
+                [['startAnalysis', '/fixture/pkg/calc.py', '']], 'all checked keeps the single-file flow');
+
+            const none = replay(language);
+            select(none);
+            none.element('btn-func-deselect-all').onclick!();
+            none.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(none), []);
+            assert.equal(none.messages.at(-1).text, t('ui.runNoCheckedFunctions'));
+        }
+    } finally { setLanguage('zh-tw'); }
+});
+
+test('PR19: Clear all is available while anything is shown and clears list, scope, checks, status and warnings', () => {
+    try {
+        for (const language of ['zh-tw', 'en']) {
+            const ui = replay(language);
+            ui.send({ command: 'targetListUpdated', projectRoot: '/fixture', targets: [],
+                missing: [{ file: 'x.py', reason: 'missing-file' }], statusText: 'loaded 0, 1 missing' });
+            assert.equal(ui.element('btn-clear-targets').disabled, false, 'an empty list with a status or warning can still be cleared');
+            chooseExplicitScope(ui);
+            ui.element('file-select').value = '';
+            assert.ok(ui.element('batch-scope-targets-list').descendants().length > 0);
+            ui.element('btn-clear-targets').onclick!();
+            assert.equal(ui.element('target-list-count').textContent, t('ui.targetListCount', 0));
+            assert.equal(ui.element('target-list-status').textContent, '');
+            assert.equal(ui.element('run-block-reason').style.display, 'none');
+            assert.equal(ui.element('run-block-reason').textContent, '');
+            assert.equal(ui.element('btn-run').title, '');
+            assert.equal(ui.element('batch-scope-status').textContent, t('ui.batchScopeGuide'));
+            assert.equal(ui.element('batch-scope-targets-panel').style.display, 'none', 'scope candidates are gone');
+            assert.equal(ui.element('btn-clear-targets').disabled, true, 'nothing left to clear');
+            assert.equal(ui.element('btn-export-targets').disabled, true);
+            const saved = plain(ui.messages.filter(item => item.command === 'saveTargetList').at(-1));
+            assert.deepEqual([saved.projectRoot, saved.targets], ['/fixture', []]);
+            ui.element('btn-run').onclick!();
+            assert.deepEqual(startMessages(ui), [], 'after clearing, Start asks for a scope again');
         }
     } finally { setLanguage('zh-tw'); }
 });
