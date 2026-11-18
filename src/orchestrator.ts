@@ -1253,7 +1253,7 @@ async function requestLlmApiUnlocked(
         apiUrl = `${baseUrl.replace(/\/$/, '')}/api/generate`;
         bodyData = {
             model: params.modelName,
-            ...localThinkingOptions(params.localThinkingMode),
+            ...localThinkingOptions(params.localThinkingMode, params.modelName),
             ...(params.requestSeedCompletion ? { prompt: userPrompt, raw: true }
                 : buildOllamaPromptEnvelope(contractedSystemPrompt, userPrompt)),
             stream: true,

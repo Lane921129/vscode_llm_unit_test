@@ -18,13 +18,13 @@ export function buildOllamaRoleQualificationProbe(model: string, prompt: string,
     thinkingMode?: LocalThinkingMode): {
     model: string; system: string; prompt: string; stream: boolean;
     format?: string | Record<string, unknown>;
-    think?: false;
+    think?: false | 'low';
     options: { temperature: number; num_ctx: number; num_predict?: number };
 } {
     if (!Number.isSafeInteger(numCtx) || numCtx <= 0) { throw new Error('invalid-runtime-context'); }
     return {
         model,
-        ...localThinkingOptions(thinkingMode),
+        ...localThinkingOptions(thinkingMode, model),
         ...buildOllamaPromptEnvelope(format === 'review-json' ? addOutputContract('', format) : '', prompt),
         stream: true,
         ...(format === 'json' ? { format: 'json' } : format === 'review-json' ? { format: responseSchemaForOutputFormat(format) } : {}),

@@ -5,6 +5,17 @@ import { CaseRow, nextCaseRowIndex } from './caseTable';
 import { RequirementEntry } from './requirements';
 import { getCaseTableReviewPrompt, getCaseTableReviewCorrectionPrompt, parseCaseTableReview, CaseTableReviewAction } from '../../roles/caseTableReviewer';
 import { reportCell } from './coverageReports';
+import { AnalysisStageError } from '../../utils/executionFailureCategory';
+import { isExecutionCancelled } from '../executionContext';
+
+/** The review is optional: a failed model answer (e.g. output-token-limit, model API error) leaves the
+ * table as it was and only blocks quality-passed. Cancellation, budget and every non-model failure still propagate. */
+function reviewRequestFailure(error: unknown): string | undefined {
+    if (isExecutionCancelled() || !(error instanceof AnalysisStageError)) { return undefined; }
+    if (error.category !== 'model-api' && error.category !== 'model-format' && error.category !== 'timeout') { return undefined; }
+    const reasonCode = (error.diagnostic as { reasonCode?: unknown } | undefined)?.reasonCode;
+    return typeof reasonCode === 'string' && reasonCode ? reasonCode : error.category;
+}
 
 export async function reviewCaseTable(input: {
     directory: string; rows: CaseRow[]; source: string; requirements: RequirementEntry[];
@@ -17,14 +28,28 @@ export async function reviewCaseTable(input: {
             ...input.rows.map(row => `| ${row.id} | ${reportCell(row.scenario)} | ${row.category} | ${'args' in row.call ? row.call.args : row.call.needsSetup} | ${'kwargs' in row.call ? row.call.kwargs : ''} | ${JSON.stringify(row.mocks)} | ${row.requirementId ?? ''} | ${row.status} |`)].join('\n') };
     const prompt = getCaseTableReviewPrompt(promptInput);
     const ids = input.requirements.map(item => item.id);
-    const parsed = parseCaseTableReview(await input.ask(prompt.system, prompt.user, { role: 'case-table-review' }), input.rows, ids);
+    let reply: string;
+    try { reply = await input.ask(prompt.system, prompt.user, { role: 'case-table-review' }); } catch (error) {
+        const failure = reviewRequestFailure(error);
+        if (!failure) { throw error; }
+        fs.writeFileSync(path.join(input.directory, CASE_TABLE_REVIEW_JSON), JSON.stringify({ version: 'case-table-review-v1', completed: false,
+            failure, addedRowIds: [], flags: [], rejected: [] }, null, 2) + '\n', 'utf8');
+        return input.rows;
+    }
+    const parsed = parseCaseTableReview(reply, input.rows, ids);
     const actions: CaseTableReviewAction[] = [...parsed.actions];
     const rejected = [...parsed.rejected];
     let unresolved = 0;
     for (const item of parsed.rejected) {
         if (item.reason === 'review-limit' || actions.length >= 3) { unresolved++; continue; }
         const correction = getCaseTableReviewCorrectionPrompt(promptInput, item.raw, item.reason);
-        const result = parseCaseTableReview(await input.ask(correction.system, correction.user, { role: 'case-table-review-correction' }),
+        let correctionReply: string;
+        try { correctionReply = await input.ask(correction.system, correction.user, { role: 'case-table-review-correction' }); } catch (error) {
+            if (!reviewRequestFailure(error)) { throw error; }
+            unresolved++;
+            continue;
+        }
+        const result = parseCaseTableReview(correctionReply,
             input.rows, ids, nextCaseRowIndex([...input.rows, ...actions.flatMap(action => action.row ? [action.row] : [])]));
         if (result.actions.length) { actions.push(result.actions[0]); }
         else { rejected.push(...result.rejected); }
