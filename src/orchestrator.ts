@@ -1909,6 +1909,12 @@ async function executeSingleFileAnalysis(params: AnalysisParams, log: (text: str
     const targetBudget = currentTargetBudget() || new TargetBudget(budget);
     // pipelineVersion routing only; every v2 step lives in src/pipeline/caseTable.
     if (readPipelineVersion(config.get('pipelineVersion', 'v1')) === 'v2-case-table') {
+        // v2 must send the same resolved local num_ctx as v1; without it Ollama falls back to its own default (4096).
+        const v2Snapshot = currentExecution<ModelSnapshot>()?.snapshot
+            ?? { current: currentModelProfile, stored: storedModelProfiles, runtimeContextTokens: 0, runtimeContextPreferences: [] };
+        const v2ContextTokens = params.requestContextTokens
+            ?? (params.envType === 'local' ? initialAnalysisModel(params, v2Snapshot).requestContextWindow : undefined);
+        params = v2ContextTokens ? { ...params, requestContextTokens: v2ContextTokens } : params;
         return withImportFixtures(fixtures, () => runWithTargetBudget(targetBudget, async () => { await runCaseTablePipeline({
             filePath: params.filePath, funcName: params.funcName, projectRoot: root, outputPath: params.outputPath,
             sessionDate: params.sessionDate || formatSessionDate(), projectName: params.projectName,
