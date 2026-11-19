@@ -72,7 +72,8 @@ def ollama_request(prompt, settings):
     body = {'model': settings['model'], 'prompt': prompt, 'stream': False,
             'options': {'temperature': 0, 'num_ctx': settings['numCtx']}}
     if settings['localThinkingMode'] == 'disabled':
-        body['think'] = False
+        # Same rule as src/llm/localThinking.ts: gpt-oss ignores think=False and only takes levels.
+        body['think'] = 'low' if re.match(r'^gpt-oss(?::|$)', settings['model'].strip(), re.IGNORECASE) else False
     request = urllib.request.Request(settings['ollamaUrl'].rstrip('/') + '/api/generate',
                                      data=json.dumps(body).encode('utf-8'), headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(request, timeout=settings['requestTimeoutSeconds']) as response:

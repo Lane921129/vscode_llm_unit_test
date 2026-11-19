@@ -230,5 +230,27 @@ class BaselinePreflightTests(unittest.TestCase):
             self.assertIn('檔案', manifest['settings']['prompt'])
 
 
+class ThinkingSettingTests(unittest.TestCase):
+    def _body(self, model, mode):
+        from unittest.mock import patch, MagicMock
+        import eval_baseline_plain_llm as baseline
+        captured = {}
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({'response': '', 'done_reason': 'stop'}).encode('utf-8')
+        def fake(request, timeout=None):
+            captured['body'] = json.loads(request.data.decode('utf-8'))
+            return response
+        with patch('urllib.request.urlopen', side_effect=fake):
+            baseline.ollama_request('p', {'model': model, 'ollamaUrl': 'http://fixture:11434', 'numCtx': 8192,
+                                          'localThinkingMode': mode, 'requestTimeoutSeconds': 5})
+        return captured['body']
+
+    def test_disabled_thinking_matches_the_extension_rule(self):
+        self.assertEqual(self._body('gpt-oss:20b', 'disabled')['think'], 'low')
+        self.assertIs(self._body('ministral-3:14b', 'disabled')['think'], False)
+        self.assertNotIn('think', self._body('gpt-oss:20b', 'provider-default'))
+        self.assertEqual(self._body('gpt-oss:20b', 'disabled')['options']['num_ctx'], 8192)
+
+
 if __name__ == '__main__':
     unittest.main()
